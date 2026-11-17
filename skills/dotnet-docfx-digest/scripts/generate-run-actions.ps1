@@ -35,10 +35,13 @@ function Write-Page([string] $Path, [string] $Original, [string] $Updated) {
         [Convert]::ToBase64String($bytes[0..($preamble.Length-1)]) -ceq [Convert]::ToBase64String($preamble)) { $output = [byte[]]($preamble + $output) }
     [IO.File]::WriteAllBytes($Path, $output)
 }
-$root = [IO.Path]::GetFullPath($RepoRoot)
+$root = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($RepoRoot))
+$rootPrefix = $root
+if (-not [IO.Path]::EndsInDirectorySeparator($rootPrefix)) { $rootPrefix += [IO.Path]::DirectorySeparatorChar }
 function Assert-RepositoryPath([string] $Path) {
     $full = [IO.Path]::GetFullPath($Path)
-    if (-not $full.StartsWith($root.TrimEnd('/','\') + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw "Path outside requested repository: $Path" }
+    # Require exact casing even on filesystems that accept aliases for the same path.
+    if (-not $full.StartsWith($rootPrefix, [StringComparison]::Ordinal)) { throw "Path outside requested repository: $Path" }
     for ($current = $full; $current.Length -gt $root.Length; $current = Split-Path $current -Parent) {
         if ((Test-Path -LiteralPath $current) -and ((Get-Item -LiteralPath $current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Linked output path: $current" }
     }
@@ -62,7 +65,9 @@ if (-not $Settings) { $Settings = Join-Path $workspace 'run-actions.settings.jso
 if (Test-Path $Settings) { $recipes = @((Get-Content $Settings -Raw | ConvertFrom-Json).examples) }
 $toolHash = Hash ((Get-Content $PSCommandPath -Raw) + (Get-Content (Join-Path $PSScriptRoot 'integration-example.ps1') -Raw) + (Get-Content $helpers -Raw))
 $results = [Collections.Generic.List[object]]::new()
-$associations = @{}
+$associations = [hashtable]::new([StringComparer]::Ordinal)
+$pages = @(@($inventory.examples.file) + @($old.file) | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
+foreach ($page in $pages) { Assert-RepositoryPath $page }
 $oldByFingerprint = @{}
 foreach ($entry in $old) {
     if ($entry.fingerprint) { $oldByFingerprint["$($entry.id)|$($entry.fingerprint)"] = $entry }
@@ -130,7 +135,7 @@ foreach ($example in $inventory.examples) {
             $manifest = if ($recipe) { $recipe.manifest } else { [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) } }
             if ($manifest.PSObject.Properties['source'] -and (Normalize $manifest.source) -cne $source) { throw 'Manifest source differs from displayed C#.' }
             $manifest | Add-Member -NotePropertyName source -NotePropertyValue $source -Force
-            $pair = New-CsrunExecutionPair -ManifestJson ($manifest | ConvertTo-Json -Depth 30) -Image $CsrunImage
+            $pair = New-CsrunExecutionPair -ManifestJson ($manifest | ConvertTo-Json -Depth 30) -Image $CsrunImage -RequirePassingTests
         }
         $changed = $false
         foreach ($transport in $transports) {
@@ -156,30 +161,39 @@ foreach ($example in $inventory.examples) {
         })
         $link = '<div class="docfx-run-actions" data-example-id="' + $id + '">' + ($links -join ' · ') + '</div>'
         if (-not $associations.ContainsKey($example.file)) { $associations[$example.file] = @{} }
-        $associations[$example.file][[int]$example.startLine] = "<!-- docfx-run-actions:new -->`n$link`n<!-- docfx-run-actions:new-end -->"
+        $associations[$example.file][[int]$example.startLine] = "<!-- docfx-run-actions:start -->`n$link`n<!-- docfx-run-actions:end -->"
     } catch { $result.status='failed'; $result.reason=$_.Exception.Message }
     finally { $results.Add([pscustomobject]$result) }
 }
-# Apply localized insertions after fences. Existing associations are removed first; C# bytes are untouched.
-$pages = @(@($inventory.examples.file) + @($old.file) | Sort-Object -Unique)
+# Apply edits by offset in the original text so each existing line ending is preserved.
 foreach ($page in $pages) {
     if (-not (Test-Path -LiteralPath $page)) { continue }
-    Assert-RepositoryPath $page
     $original = [IO.File]::ReadAllText($page)
-    $newline = if ($original.Contains("`r`n")) { "`r`n" } else { "`n" }
-    $lines = $original -split '\r?\n'
-    # Work backwards using original inventory line numbers, so inserted lines do not shift later fences.
+    $edits = [Collections.Generic.List[object]]::new()
+    foreach ($block in [regex]::Matches($original, '(?s)(?:\r\n|\n|\r){2}<!-- docfx-run-actions:start -->.*?<!-- docfx-run-actions:end -->')) {
+        $edits.Add(@{ Offset = $block.Index; Length = $block.Length; Text = '' })
+    }
     if ($associations.ContainsKey($page)) {
-        foreach ($line in @($associations[$page].Keys | Sort-Object -Descending)) {
+        $lines = [regex]::Matches($original, '(?<text>[^\r\n]*)(?<ending>\r\n|\n|\r|$)')
+        foreach ($line in $associations[$page].Keys) {
             $end = $line
-            while ($end -lt $lines.Length -and $lines[$end] -notmatch '^\s*```') { $end++ }
-            if ($end -ge $lines.Length) { throw "Unclosed fence in $page" }
-            $lines[$end] += $newline + $newline + $associations[$page][$line].Replace("`n", $newline)
+            while ($end -lt $lines.Count -and $lines[$end].Groups['text'].Value -notmatch '^\s*```') { $end++ }
+            if ($end -ge $lines.Count) { throw "Unclosed fence in $page" }
+            $fence = $lines[$end]
+            $newline = $fence.Groups['ending'].Value
+            if (-not $newline) { $newline = $lines[$end - 1].Groups['ending'].Value }
+            $edits.Add(@{
+                Offset = $fence.Index + $fence.Groups['text'].Length
+                Length = 0
+                Text = $newline + $newline + $associations[$page][$line].Replace("`n", $newline)
+            })
         }
     }
-    $updated = $lines -join $newline
-    $updated = [regex]::Replace($updated, '(?:\r?\n){2}<!-- docfx-run-actions:start -->.*?<!-- docfx-run-actions:end -->', '', 'Singleline')
-    $updated = $updated.Replace('<!-- docfx-run-actions:new -->','<!-- docfx-run-actions:start -->').Replace('<!-- docfx-run-actions:new-end -->','<!-- docfx-run-actions:end -->')
+    $updated = $original
+    # At a shared offset remove the previous association before inserting its replacement.
+    foreach ($edit in $edits | Sort-Object -Property Offset, Length -Descending) {
+        $updated = $updated.Remove($edit.Offset, $edit.Length).Insert($edit.Offset, $edit.Text)
+    }
     Write-Page $page $original $updated
 }
 # Remove only assets owned by the previous index. Never recursively delete user directories.

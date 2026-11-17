@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../../../scripts/file-based-app.ps1')
 $app = Get-FileBasedAppCommand -SourcePath (Join-Path $PSScriptRoot 'docfx.cs')
 function dotnet {
+    if ($inventoryOverride) { $global:LASTEXITCODE = 0; return $inventoryOverride }
     # Cache the file-based inventory build once; every inventory assertion still executes.
     & (Get-Command $app.Executable -CommandType Application).Source @($app.ArgumentPrefix + @($args | Select-Object -Skip ([Array]::IndexOf($args, '--repo-root'))))
     $global:LASTEXITCODE = $LASTEXITCODE
@@ -38,8 +39,10 @@ foreach ($scriptText in @($nativeScript.Groups['script'].Value, $dockerScript.Gr
 $source = [regex]::Match($reference, '(?s)```csharp\r?\n(.*?)\r?\n```').Groups[1].Value
 $page = "---`nuid: Codebelt.Extensions.Xunit.Hosting.ManagedApplicationFixture``1`n---`n# Actual worker startup`n`nMaintained functional test and [entry point](https://github.com/codebeltnet/xunit/blob/84b13767cb9484f8f3a36a71875662edfdb3e511/app/Codebelt.Extensions.Xunit.Hosting.BootstrapperMinimalWorker.App/Program.cs).`n`n``````csharp`n$source`n```````n"
 [IO.File]::WriteAllText("$work/docs/integration.md", $page)
-[IO.File]::WriteAllText("$work/docs/console.md", "# Console`n`n``````csharp`n// Program.cs`nSystem.Console.WriteLine(42);`n```````n")
-[IO.File]::WriteAllText("$work/docs/partial.md", "# Partial`n`n``````csharp`nvar fixture = new ManagedApplicationFixture<Program>();`n```````n")
+$console = "# Console`r`n`n``````csharp`n// Program.cs`r`nSystem.Console.WriteLine(42);`n``````"
+$partial = "# Partial`r`n`n``````csharp`nvar fixture = new ManagedApplicationFixture<Program>();`r`n```````n"
+[IO.File]::WriteAllText("$work/docs/console.md", $console)
+[IO.File]::WriteAllText("$work/docs/partial.md", $partial)
 $null = New-Item -ItemType Directory "$work/template/public" -Force
 [IO.File]::WriteAllText("$work/template/public/main.js", "// Context7 customization`nexport default { start() { window.context7 = true; } };`n")
 [IO.File]::WriteAllText("$work/docfx.json", '{"build":{"content":[{"files":["docs/*.md"]}],"template":["default","modern","template"],"dest":"_site"}}')
@@ -57,6 +60,11 @@ $config.build.overwrite = @(@{ files=@('api/types/*.md') })
 $generator = Join-Path $PSScriptRoot 'generate-run-actions.ps1'
 $first = (& $generator -RepoRoot $work) | ConvertFrom-Json
 if (@($first | Where-Object status -eq 'generated').Count -ne 4 -or @($first | Where-Object status -eq 'unsupported').Count -ne 1) { throw "Unexpected generation: $($first | ConvertTo-Json -Depth 10)" }
+if ([IO.File]::ReadAllText("$work/docs/partial.md") -cne $partial) { throw 'An unsupported page with mixed line endings changed.' }
+$consoleWithAssociation = [IO.File]::ReadAllText("$work/docs/console.md")
+if (-not $consoleWithAssociation.StartsWith($console + "`n`n<!-- docfx-run-actions:start -->", [StringComparison]::Ordinal)) {
+    throw 'An association changed existing mixed line endings or did not follow the final fence.'
+}
 $entry = $first | Where-Object { $_.uid -like '*ManagedApplicationFixture*' -and $_.file -match '[\\/]docs[\\/]integration.md$' }
 foreach ($transport in @('native','docker')) {
     $script = Get-Content "$work/run-actions/$($entry.id)/$transport.ps1" -Raw
@@ -127,4 +135,27 @@ if (($limitedAgain | Where-Object id -eq $entry.id).status -ne 'unchanged') { th
 [IO.File]::WriteAllText("$work/docs/integration.md", $updated.Replace('Bootstrapper Minimal Worker', 'Changed assertion'))
 $third = (& $generator -RepoRoot $work) | ConvertFrom-Json
 if ((Test-Path "$work/run-actions/$($entry.id)/native.ps1") -or (Get-Content "$work/docs/integration.md" -Raw).Contains('data-example-id')) { throw 'Stale recipe/assets survived source change.' }
+
+# Model discovery through an external DocFX source mapping, with a case-only sibling path.
+$guardRoot = Join-Path $work 'repo'
+$otherRoot = Join-Path $work 'Repo'
+$null = [IO.Directory]::CreateDirectory($guardRoot)
+$null = [IO.Directory]::CreateDirectory($otherRoot)
+$guardConfig = Join-Path $guardRoot 'docfx.json'
+$externalPage = Join-Path $otherRoot 'external.md'
+[IO.File]::WriteAllText($guardConfig, '{"build":{"template":["default","modern"]}}')
+[IO.File]::WriteAllText($externalPage, $console)
+$inventoryOverride = @{
+    config = $guardConfig
+    examples = @(@{ file = $externalPage; code = 'System.Console.WriteLine(42);'; startLine = 3; standalone = $true; eligible = $true })
+} | ConvertTo-Json -Depth 5
+try {
+    try {
+        $null = & $generator -RepoRoot $guardRoot
+        throw 'The case-mismatched inventory path was accepted.'
+    } catch {
+        if ($_.Exception.Message -cne "Path outside requested repository: $externalPage") { throw }
+    }
+    if ([IO.File]::ReadAllText($externalPage) -cne $console) { throw 'Rejected inventory changed the external page.' }
+} finally { $inventoryOverride = $null }
 Write-Host "Run-action delivery passed: direct paired-script contract, same-sample Native/Docker association, independent verification state, unsupported handling, incremental bytes/timestamps, stale cleanup, DocFX render, resources and template composition. Fixture: $work"
