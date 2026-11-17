@@ -57,7 +57,16 @@ Push-Location "$work/repo"
         finally { Pop-Location }
 '@
     $docker = @'
-docker run --rm --mount "type=bind,source=$work,target=/work" --workdir /work/repo mcr.microsoft.com/dotnet/sdk:11.0 dotnet run --project $project --framework net11.0 -p:SkipSignAssembly=true -- --filter-method $test --report-xunit-xml --report-xunit-xml-filename result.xml --results-directory /work/results 2>&1 | Tee-Object -FilePath "$work/run.log"
+$dockerUser = @()
+        if ($IsLinux) {
+            # Keep bind-mounted build output removable by the host user.
+            $hostUid = id -u
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve host UID.' }
+            $hostGid = id -g
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve host GID.' }
+            $dockerUser = @('--user', "${hostUid}:${hostGid}")
+        }
+        docker run --rm @dockerUser --env HOME=/tmp --env DOTNET_CLI_HOME=/tmp --mount "type=bind,source=$work,target=/work" --workdir /work/repo mcr.microsoft.com/dotnet/sdk:11.0 dotnet run --project $project --framework net11.0 -p:SkipSignAssembly=true -- --filter-method $test --report-xunit-xml --report-xunit-xml-filename result.xml --results-directory /work/results 2>&1 | Tee-Object -FilePath "$work/run.log"
 '@
     [pscustomobject]@{
         Native = $template.Replace('__PREREQUISITE__', "`$null = Get-Command dotnet -ErrorAction Stop").Replace('__EXECUTE__', $native)

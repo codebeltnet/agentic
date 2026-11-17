@@ -107,7 +107,7 @@ Failure throws and retains logs/results under the printed OS-temporary diagnosti
 
 ## Docker: PowerShell 7 and Docker with Linux containers
 
-No host .NET SDK is required. The official SDK image supplies it; first use pulls the image.
+No host .NET SDK is required. The official SDK image supplies it; first use pulls the image. On Linux, the container runs with the host UID and GID so build and test outputs remain removable during cleanup. Its home and .NET CLI state use container-local `/tmp`, which is writable by that identity.
 
 ```powershell
 #requires -Version 7.0
@@ -128,7 +128,16 @@ No host .NET SDK is required. The official SDK image supplies it; first use pull
         Move-Item -LiteralPath "$work/extracted/xunit-$commit" -Destination "$work/repo"
         $project = 'test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/Codebelt.Extensions.Xunit.Hosting.FunctionalTests.csproj'
         $test = 'Codebelt.Extensions.Xunit.Hosting.BootstrapperMinimalWorkerApplicationTestTest.ShouldBootstrapMinimalWorkerProgram'
-        docker run --rm --mount "type=bind,source=$work,target=/work" --workdir /work/repo mcr.microsoft.com/dotnet/sdk:11.0 dotnet run --project $project --framework net11.0 -p:SkipSignAssembly=true -- --filter-method $test --report-xunit-xml --report-xunit-xml-filename result.xml --results-directory /work/results 2>&1 | Tee-Object -FilePath "$work/run.log"
+        $dockerUser = @()
+        if ($IsLinux) {
+            # Keep bind-mounted build output removable by the host user.
+            $hostUid = id -u
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve host UID.' }
+            $hostGid = id -g
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve host GID.' }
+            $dockerUser = @('--user', "${hostUid}:${hostGid}")
+        }
+        docker run --rm @dockerUser --env HOME=/tmp --env DOTNET_CLI_HOME=/tmp --mount "type=bind,source=$work,target=/work" --workdir /work/repo mcr.microsoft.com/dotnet/sdk:11.0 dotnet run --project $project --framework net11.0 -p:SkipSignAssembly=true -- --filter-method $test --report-xunit-xml --report-xunit-xml-filename result.xml --results-directory /work/results 2>&1 | Tee-Object -FilePath "$work/run.log"
         $code = $LASTEXITCODE
         if ($code -ne 0) { throw "Repository test failed with exit code $code. See $work/run.log" }
         # Require exactly the original test, executed and passing, with no runner errors.
@@ -170,8 +179,10 @@ Maintainers generate both blocks with [integration-example.ps1](../scripts/integ
 
 ## Observed verification, 2026-11-17
 
-Both complete blocks above were executed in fresh PowerShell processes from fresh archive downloads. Native Windows x64 used SDK 11.0.100/runtime 11.0.0. Linux Docker used official SDK 11.0.100/runtime 11.0.0, observed image digest `mcr.microsoft.com/dotnet/sdk@sha256:65f3c7c6a25a239ab3e6719f2896147e7b68242ff2d8818dd70498bde6ef8bea`. Each exited 0 after checking the XML report for exactly the named test passing: total 1, succeeded 1, failed/skipped 0. The image tag remains mutable; this is evidence of the tested image, not future tag contents.
+Before the UID/GID cleanup fix, both execution blocks were executed in fresh PowerShell processes from fresh archive downloads. Native Windows x64 used SDK 11.0.100/runtime 11.0.0. Linux Docker used official SDK 11.0.100/runtime 11.0.0, observed image digest `mcr.microsoft.com/dotnet/sdk@sha256:65f3c7c6a25a239ab3e6719f2896147e7b68242ff2d8818dd70498bde6ef8bea`. Each exited 0 after checking the XML report for exactly the named test passing: total 1, succeeded 1, failed/skipped 0. The image tag remains mutable; this is evidence of the tested image, not future tag contents.
 
 A separate native negative run replaced only the filter with `DoesNotExist.NoSuchTest`: MTP reported zero tests and exit 8; the block threw (PowerShell exit 1), retained log/XML diagnostics outside the repository, and removed the downloaded workspace. The initial long-path launch failed before execution on Windows; the published blocks use a short temporary root and rename the archive root before building. No application source or assertion was changed.
 
-Focused deterministic checks: `pwsh -NoProfile -File skills/dotnet-docfx-digest/scripts/test-integration-example.ps1` checks published parity, PowerShell parsing and 17 offline cases covering exact passing identity, wrong identity, zero tests, skips, runner errors, missing reports, missing dependencies, missing commands and unavailable Docker daemon. Offline doubles prove wrapper checks, not integration behavior. Existing `test-quality.ps1` retains source-backed compilation, architecture diagnostics and real application/standalone/middleware controls. These checks do not replace `agents.cs` or the build-backed DocFX completion gates when editing a target documentation repository. This change does not modify codebeltnet/xunit or claim the published API page was repaired.
+The UID/GID fix was checked with a Linux Docker volume shared by SDK containers running as numeric UID:GID `1234:5678`: a console build ran successfully, and a separate non-root PowerShell process confirmed `bin` and `obj` ownership and removed the workspace. Both that build command and a full Docker-block retest remained running after printing their successful application/test output, even after explicit build-server shutdown, and were stopped. The full retest reported one passing integration test but ended with container exit 137; the wrapper retained diagnostics and removed its downloaded source. This confirms the focused ownership/cleanup smoke check, not a successful end-to-end rerun of the published block.
+
+Focused deterministic checks: `pwsh -NoProfile -File skills/dotnet-docfx-digest/scripts/test-integration-example.ps1` checks published parity, PowerShell parsing and 28 offline cases covering exact passing test identity, wrong identity, zero tests, skips, runner errors, missing reports, missing dependencies, missing commands, unavailable Docker daemon, Linux UID/GID forwarding, writable container home settings and identity lookup failures. Both Linux and non-Linux Docker branches are exercised on every host. Offline doubles prove wrapper checks, not integration behavior. Existing `test-quality.ps1` retains source-backed compilation, architecture diagnostics and real application/standalone/middleware controls. These checks do not replace `agents.cs` or the build-backed DocFX completion gates when editing a target documentation repository. This change does not modify codebeltnet/xunit or claim the published API page was repaired.
