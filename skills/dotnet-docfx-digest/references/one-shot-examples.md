@@ -1,6 +1,6 @@
 # One-shot documentation examples
 
-Lead with the developer task, the smallest informative C# example, how to run it, the expected outcome, and a maintained source link. Keep the API page understandable without execution. Put long execution blocks in an immediately linked conceptual page or disclosure when needed; no manual project assembly, helper installation, repository-layout knowledge or full project dumps.
+Lead with the developer task, the smallest informative C# example, expected outcome, reproduction and optional further exploration. Keep the API page understandable without execution or external source reading. Follow [contextual source references](contextual-source-references.md): explain what selected links teach beyond the example, even when execution succeeds, and omit references that add no useful depth. Put long execution blocks in an immediately linked conceptual page or disclosure when needed; no manual project assembly, helper installation, repository-layout knowledge or full project dumps.
 
 ## Select and verify
 
@@ -13,7 +13,7 @@ Lead with the developer task, the smallest informative C# example, how to run it
 
 ## ManagedApplicationFixture: actual worker startup
 
-The maintained test demonstrates resolving the marker registered by the application's original entry point. It also asserts the Development environment and the availability of IHostApplicationLifetime. The fixture selects `typeof(TEntryPoint).Assembly`, so its application and executable xUnit test runner must retain separate assemblies. This is **repository-backed integration execution**, not an isolated csrun manifest.
+Use `ManagedApplicationFixture<TEntryPoint>` with `ApplicationTest` to verify services registered by an application's real entry point. Here the application builds and runs the host and registers a marker; the test resolves that marker and asserts its value. It also asserts the Development environment and the availability of IHostApplicationLifetime. The fixture selects `typeof(TEntryPoint).Assembly`, so its application and executable xUnit test runner must retain separate assemblies. This is **repository-backed integration execution**, not an isolated csrun manifest.
 
 The maintained test below belongs to the linked repository test project; it is not standalone source. Fixture injection and the base constructor retain the real application lifecycle. Run either complete block below to execute this exact test without assembling files:
 
@@ -44,11 +44,11 @@ public class BootstrapperMinimalWorkerApplicationTestTest : ApplicationTest<Boot
 }
 ```
 
-Explore the [fixture implementation](https://github.com/codebeltnet/xunit/blob/84b13767cb9484f8f3a36a71875662edfdb3e511/src/Codebelt.Extensions.Xunit.Hosting/ManagedApplicationFixture.cs), [worker application](https://github.com/codebeltnet/xunit/blob/84b13767cb9484f8f3a36a71875662edfdb3e511/app/Codebelt.Extensions.Xunit.Hosting.BootstrapperMinimalWorker.App/Program.cs), [functional test](https://github.com/codebeltnet/xunit/blob/84b13767cb9484f8f3a36a71875662edfdb3e511/test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/BootstrapperMinimalWorkerApplicationTestTest.cs), and [referencing test project](https://github.com/codebeltnet/xunit/blob/84b13767cb9484f8f3a36a71875662edfdb3e511/test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/Codebelt.Extensions.Xunit.Hosting.FunctionalTests.csproj).
+Expected: exactly `ShouldBootstrapMinimalWorkerProgram` executes, with 1 passed, 0 failed and 0 skipped, followed by `Verified:`. These observations verify the application's registered marker value, Development environment and lifetime service through the fixture.
 
 Both blocks independently download commit `84b13767cb9484f8f3a36a71875662edfdb3e511` and run its original test on net11.0. The snapshot pins xunit.v3 4.0.3 and Codebelt.Bootstrapper.Worker 5.2.3; shared props supply further dependencies. Network access to GitHub and configured NuGet feeds is required. Archive builds may warn that MinVer has no Git history; they do not reproduce release version metadata. SkipSignAssembly avoids requiring the publisher's signing key. Neither block edits the application or the assertions. A short temporary path avoids Windows path-length failures; an unusually long configured temp root can still require a shorter OS temp setting.
 
-Expected: exactly `ShouldBootstrapMinimalWorkerProgram` executes, with 1 passed, 0 failed and 0 skipped, followed by `Verified:`. Failure throws and retains logs/results under the printed OS-temporary diagnostics path. Downloaded source and build output are removed in finally. Running repository build tasks and packages requires trust in that source and its dependencies; Docker mounts only the temporary workspace but is not a security sandbox.
+Failure throws and retains logs/results under the printed OS-temporary diagnostics path. Downloaded source and build output are removed in finally. Running repository build tasks and packages requires trust in that source and its dependencies; Docker mounts only the temporary workspace but is not a security sandbox.
 
 ## Native: PowerShell 7 and .NET 11 SDK
 
@@ -159,6 +159,12 @@ No host .NET SDK is required. The official SDK image supplies it; first use pull
     }
 }
 ```
+
+## Further exploration
+
+The [worker application entry point](https://github.com/codebeltnet/xunit/blob/84b13767cb9484f8f3a36a71875662edfdb3e511/app/Codebelt.Extensions.Xunit.Hosting.BootstrapperMinimalWorker.App/Program.cs) shows the setup omitted from the concise test: host construction, marker and hosted-service registration, and `RunAsync`. The [corresponding functional test](https://github.com/codebeltnet/xunit/blob/84b13767cb9484f8f3a36a71875662edfdb3e511/test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/BootstrapperMinimalWorkerApplicationTestTest.cs) places the displayed fixture usage and assertions in their maintained source context. To understand the separate application/test assemblies and supported frameworks, inspect the [referencing test project](https://github.com/codebeltnet/xunit/blob/84b13767cb9484f8f3a36a71875662edfdb3e511/test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/Codebelt.Extensions.Xunit.Hosting.FunctionalTests.csproj) and its inherited build settings. For the lifecycle mechanism behind this usage, the [fixture implementation](https://github.com/codebeltnet/xunit/blob/84b13767cb9484f8f3a36a71875662edfdb3e511/src/Codebelt.Extensions.Xunit.Hosting/ManagedApplicationFixture.cs) shows how it selects the entry-point assembly and connects the deferred host.
+
+These links retain the exact revision executed by the blocks. For ongoing maintained branch exploration, see the [contextual reference example](contextual-source-references.md#principal-example-managedapplicationfixture); branch content can evolve independently of this verification. Following source links is optional and is not required to understand or run the example.
 
 Maintainers generate both blocks with [integration-example.ps1](../scripts/integration-example.ps1). It only produces artifacts and introduces no runner or manifest. Focused tests compare these published blocks byte-for-byte and exercise failure checks with offline doubles; those checks alone do not verify the actual integration test.
 

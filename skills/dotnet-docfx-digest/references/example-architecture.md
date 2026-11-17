@@ -13,6 +13,8 @@ Before source generation, establish these facts from public contracts, implement
 
 Use the sequence **Discover API → Understand consumer task → Determine execution topology → Find authoritative usage → Design example → Write source → Validate → Improve explanation → Publish**. The reader should understand why, what must exist, how to use it, what happens, and how to check it, without requiring five headings on every page.
 
+During that same discovery, consider optional [contextual source references](contextual-source-references.md) for useful integration or lifecycle depth. Explain the additional knowledge each link offers after the self-sufficient example, outcome and execution guidance. This applies to successfully runnable examples as well as partial illustrations; source browsing never replaces the primary learning experience.
+
 ## Choose the execution model
 
 | Classification | Presentation and verification |

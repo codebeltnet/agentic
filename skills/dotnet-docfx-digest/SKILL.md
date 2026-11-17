@@ -341,6 +341,8 @@ For managed reference pages, map type and extension-method examples to the `exam
 
 ## Example Verification
 
+Keep the principal example sufficient for learning on the page. Present purpose, essential C#, expected outcome, reproduction where applicable, then optional deeper exploration. Reuse already-discovered authoritative usage to select precise maintained source references, explaining what each adds about integration, configuration or lifecycle. Runnable examples can benefit too; simple APIs need no links without useful additional context. Read [contextual source references](references/contextual-source-references.md) before selecting further reading. Links never replace explanations, required C# usage, one-shot execution or compilation/completion gates.
+
 For compatible standalone runtime examples, compose with `dotnet-csrun create`, `verify`, or authorized `repair`; see [standalone execution composition](references/csrun-composition.md). Keep this skill's source discovery, placement, reference-aware compilation, and `--build-api-model --validate-samples --verify-docfx-build` completion gates. Published-package execution adds behavioral evidence; it does not verify unpublished project code. Do not force existing partial or project-dependent examples into standalone programs, and do not put two full execution blocks on every type page merely because csrun generates them.
 
 Verify added or changed C# before publishing. Unbound fences pass the following two gates. For explicitly project-bound files/excerpts, the validator checks source identity, evaluated Compile membership, and the maintained project build instead of compiling a fragment alone. See [example architecture](references/example-architecture.md) for the exact binding and its limits.

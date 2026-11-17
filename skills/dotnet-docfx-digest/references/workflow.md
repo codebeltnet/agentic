@@ -32,6 +32,7 @@ Before writing a type or extension-method example, choose the smallest real task
 10. Reject runtime-type-name substitutes such as `host.Services.GetType().Name` or `service.GetType().FullName`. These reveal implementation metadata rather than the application behavior the API enables.
 11. For entry-point factories and fixtures, never declare an empty local `Program` merely to satisfy compilation. Show a real entry point or name the application-project prerequisite, then make the example's result depend on a service, configuration value, endpoint, or lifecycle event supplied by that application.
 12. Preserve application-owned startup and service registration. Explain executable versus test-runner entry points, references, lifecycle and infrastructure. Use labelled source files bound to maintained projects for a coherent multi-file scenario; never concatenate unrelated fences or independently compile fragments to manufacture success. If a type page becomes unwieldy, keep its essential usage and link directly to a maintained integration test or conceptual walkthrough.
+13. Reuse this discovery to select optional further reading under [contextual source references](contextual-source-references.md). Inspect each new target and record its API relationship, revision and added learning value in the existing evidence cell. Keep purpose, essential example, outcome and execution understandable on the page before optional exploration. Explain what each link adds; runnable examples can benefit, while simple APIs need no arbitrary references. Preserve existing valid links and `Related:` sections.
 
 ## Key entry-point and upstream comparison pass
 
@@ -412,6 +413,7 @@ Before completing documentation work, verify:
 - [ ] Unbound C# examples include a namespace and type declaration, or are explicitly labelled `// Program.cs`; project-bound files/excerpts match maintained source and compile in their actual context.
 - [ ] Execution classification, prerequisites, assembly/host ownership, and intended observation were established before authoring. Partial excerpts explain their omitted setup and make no standalone claim.
 - [ ] Runtime claims have actual execution evidence; compilation-only evidence is labelled accordingly. Assertions and prose establish the same contract, including registration ownership and lifecycle/pipeline behavior.
+- [ ] Optional source references reuse discovered evidence, target inspected authoritative usage and explain the additional learning value. Simple pages remain concise; runnable examples may offer depth; partial examples state limitations. Links preserve existing valid references and `Related:` sections and never substitute for required C#, executable verification or completion gates.
 - [ ] No generated C# example derives from a generic base type without concrete type arguments.
 - [ ] No generated C# example calls members that are not confirmed on the public API surface.
 - [ ] Where no compile-valid example could be generated, the overwrite file contains the appropriate omission comment, and that comment is not being misused as a diagnostic suppressor or skip waiver.
