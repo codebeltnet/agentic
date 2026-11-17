@@ -6,17 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.13.0] - 2026-11-17
 
-This is a minor release that adds the `dotnet-csrun` skill for executable C# evidence and connects `dotnet-docfx-digest` to it for standalone runtime examples.
+This is a minor release that adds the `dotnet-csrun` skill for executable C# evidence, binds `dotnet-docfx-digest` samples to maintained project and source context, and connects standalone runtime examples to `dotnet-csrun`.
 
 ### Added
 
-- `dotnet-csrun` skill for creating small complete C# examples, verifying and repairing existing standalone source, and auditing examples, with paired native and Docker commands and honest verified, compiled-only, or unverified statuses,
-- `dotnet-csrun` assesses standalone feasibility before choosing a manifest and classifies failures before any repair, and runs isolated xUnit v3 tests through `csrun`,
-- `dotnet-csrun` deterministic validators and eval fixtures covering its lifecycle and feasibility contracts, plus a README entry and install example.
+- `dotnet-csrun` skill for creating small complete C# console examples and genuine xUnit v3 tests, running them through `csrun` with exact package pins, and reporting independent native and Docker statuses of verified, compiled only, or unverified,
+- `dotnet-csrun` verify, repair, and scoped audit lifecycle for existing standalone source, with feasibility assessed before manifest construction and failures classified before any repair,
+- `dotnet-docfx-digest` source-bound sample contexts that bind fences to a maintained project and source file, reject unresolvable bindings, revalidate pages whose bound source or project changes, including deleted or moved inputs, and skip `.bot` directories during source discovery,
+- `dotnet-docfx-digest` rejection of a `ManagedApplicationFixture` entry point collapsed into a test-owned source unit, and of displayed excerpts excluded by conditional compilation for the selected framework and configuration,
+- `dotnet-csrun` README entry, install example, deterministic validators, and eval fixtures, plus `dotnet-docfx-digest` regression coverage for source-bound samples.
 
 ### Changed
 
-- `dotnet-docfx-digest` example verification composes with `dotnet-csrun` for compatible standalone runtime examples, keeping its source discovery, placement, project-aware compilation, and DocFX build gates authoritative and leaving project-dependent examples in the existing workflow.
+- `dotnet-docfx-digest` composes with `dotnet-csrun` for compatible standalone runtime examples, keeping its source discovery, placement, project-aware compilation, and DocFX build gates authoritative and leaving project-dependent examples in the existing workflow.
+
+### Fixed
+
+- `dotnet-docfx-digest` attributes sample compile failures to each project from the native MSBuild binary log instead of the shared batch exit code, so a shared batch failure no longer marks unrelated projects as failed.
 
 ## [0.12.1] - 2026-11-15
 
