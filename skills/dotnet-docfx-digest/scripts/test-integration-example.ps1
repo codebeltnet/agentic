@@ -10,14 +10,17 @@ $source = [regex]::Match($document, '(?s)```csharp\r?\n(.*?)\r?\n```').Groups[1]
 $sourceHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($source)))
 if ($sourceHash -cne '47B0C1FBA94E7B43C8753D0A8242801B328E6B463B6EEDAEB640D4F8A262633E') { throw 'Displayed test differs from the original maintained source.' }
 $checks = 0
-foreach ($transport in @('Native', 'Docker')) {
+foreach ($transport in @('Native', 'Docker', 'DockerLinux')) {
+    $artifact = if ($transport -eq 'Native') { 'Native' } else { 'Docker' }
+    $simulateLinux = $transport -eq 'DockerLinux'
     $index = if ($transport -eq 'Native') { 0 } else { 1 }
-    if ($blocks[$index].Groups[1].Value.Replace("`r`n", "`n") -cne $pair.$transport.Replace("`r`n", "`n")) { throw "Published $transport block drifted." }
+    if ($blocks[$index].Groups[1].Value.Replace("`r`n", "`n") -cne $pair.$artifact.Replace("`r`n", "`n")) { throw "Published $artifact block drifted." }
     $tokens = $null; $errors = $null
-    $null = [Management.Automation.Language.Parser]::ParseInput($pair.$transport, [ref] $tokens, [ref] $errors)
+    $null = [Management.Automation.Language.Parser]::ParseInput($pair.$artifact, [ref] $tokens, [ref] $errors)
     if ($errors.Count) { throw "Invalid PowerShell: $errors" }
     $scenarios = @('pass', 'wrong-test', 'zero', 'skip', 'runner-error', 'missing-report', 'dependency', 'environment')
-    if ($transport -eq 'Docker') { $scenarios += 'daemon' }
+    if ($artifact -eq 'Docker') { $scenarios += 'daemon' }
+    if ($simulateLinux) { $scenarios += @('uid', 'gid') }
     foreach ($scenario in $scenarios) {
         & {
             # Offline doubles exercise the complete published block; never evidence of live tests.
@@ -48,18 +51,47 @@ foreach ($transport in @('Native', 'Docker')) {
                 if ($transport -ne 'Native') { throw 'Docker block required a host SDK.' }
                 Invoke-TestDouble
             }
+            function id {
+                $flag = $args[0]
+                if (-not $simulateLinux) { throw 'Non-Linux block required Unix identity lookup.' }
+                $global:LASTEXITCODE = 0
+                if ($flag -eq '-u') {
+                    if ($scenario -eq 'uid') { $global:LASTEXITCODE = 1; return }
+                    return '1234'
+                }
+                if ($flag -eq '-g') {
+                    if ($scenario -eq 'gid') { $global:LASTEXITCODE = 1; return }
+                    return '5678'
+                }
+                throw "Unexpected identity lookup: $flag"
+            }
             function docker {
-                if ($transport -ne 'Docker') { throw 'Native block required Docker.' }
+                if ($artifact -ne 'Docker') { throw 'Native block required Docker.' }
                 if ($args[0] -eq 'info') { $global:LASTEXITCODE = if ($scenario -eq 'daemon') { 1 } else { 0 }; return }
+                $dockerRuns.Add(@($args))
+                $imageIndex = [array]::IndexOf($args, 'mcr.microsoft.com/dotnet/sdk:11.0')
+                $options = @($args[0..($imageIndex - 1)])
+                $userIndex = [array]::IndexOf($options, '--user')
+                if ($simulateLinux) {
+                    if ($userIndex -lt 0 -or $options[$userIndex + 1] -cne '1234:5678') { throw 'Container must use the host UID:GID on Linux.' }
+                }
+                elseif ($userIndex -ge 0) { throw 'Non-Linux block should keep the Docker Desktop user default.' }
+                foreach ($value in @('HOME=/tmp', 'DOTNET_CLI_HOME=/tmp')) {
+                    $valueIndex = [array]::IndexOf($options, $value)
+                    if ($valueIndex -le 0 -or $options[$valueIndex - 1] -cne '--env') { throw "Missing writable container home: $value" }
+                }
                 Invoke-TestDouble
             }
             $failed = $false
             $warnings = [Collections.Generic.List[string]]::new()
             $workspaces = [Collections.Generic.List[string]]::new()
+            $dockerRuns = [Collections.Generic.List[object]]::new()
             function Write-Warning { param($Message) $warnings.Add($Message) }
-            try { & ([scriptblock]::Create($pair.$transport)) | Out-Null }
-            catch { $failed = $true }
+            # Exercise both OS branches on every host without changing its read-only $IsLinux.
+            try { & ([scriptblock]::Create($pair.$artifact.Replace('$IsLinux', '$simulateLinux'))) | Out-Null }
+            catch { if ($scenario -eq 'pass') { throw }; $failed = $true }
             if ($failed -ne ($scenario -ne 'pass')) { throw "$transport/$scenario did not enforce verification." }
+            if ($scenario -in @('uid', 'gid') -and $dockerRuns.Count -ne 0) { throw 'Identity lookup failure started a container.' }
             foreach ($workspace in $workspaces) {
                 if (Test-Path -LiteralPath $workspace) { throw 'Downloaded workspace leaked.' }
             }
