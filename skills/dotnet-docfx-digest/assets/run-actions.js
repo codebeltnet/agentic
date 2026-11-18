@@ -138,6 +138,8 @@ function attachToolbar(pre, links, assets) {
   pre.prepend(toolbar, status);
   pre.classList.add('docfx-runnable');
   links.dataset.enhanced = 'true';
+  // Keep the recipe explanation visible when the toolbar replaces the fallback links.
+  links.after(...links.querySelectorAll(':scope > p'));
   links.hidden = true;
 }
 

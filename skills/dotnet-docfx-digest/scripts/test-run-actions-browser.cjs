@@ -127,6 +127,13 @@ async function checkCopy(example, index, activate) {
   const browser = await chromium.launch({ headless: false });
   try {
     const context = await browser.newContext({ permissions, viewport: { width: 1280, height: 900 } });
+    const harnessUrl = base + '/docs/packages.html';
+    const explanation = 'The test runs the displayed method and checks the correlation identifier returned from the DI container.';
+    const harness = await openExample(context, harnessUrl, 'class CorrelationStore');
+    assert.ok(await harness.page.getByText(explanation, { exact: true }).isVisible(),
+      'the recipe explanation must remain visible after the toolbar is attached');
+    await harness.page.close();
+
     const marker = 'ShouldBootstrapMinimalWorkerProgram';
     const desktop = await openExample(context, base + '/docs/integration.html', marker);
     const { page, sample, original, toolbar, actions, status, checkPageUnchanged } = desktop;
@@ -191,6 +198,8 @@ async function checkCopy(example, index, activate) {
     assert.equal(await fallback.getByRole('link', { name: 'View Native Script' }).count(), 1);
     assert.equal(await fallback.getByRole('link', { name: 'View Docker Script' }).count(), 1);
     assert.ok((await fallback.locator('pre code').innerText()).includes('Assert.Equal'));
+    await fallback.goto(harnessUrl);
+    assert.ok(await fallback.getByText(explanation, { exact: true }).isVisible());
     await noJs.close();
 
     await page.bringToFront();
