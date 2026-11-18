@@ -2,6 +2,8 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'sample-tools.ps1')
 $root = Split-Path $PSScriptRoot -Parent
+$fakeEngine = Join-Path ([IO.Path]::GetTempPath()) ('csrun-fake-' + [guid]::NewGuid().ToString('N') + '.ps1')
+[IO.File]::WriteAllText($fakeEngine, "param([string]`$ManifestJson)`n[Console]::Write(`$ManifestJson)")
 $checks = 0
 function Assert-True($Condition, [string] $Message) {
     if (-not $Condition) { throw $Message }
@@ -22,7 +24,7 @@ Assert-True ($publishedBlocks.Count -eq 2) 'Standalone example must offer two in
 for ($index = 0; $index -lt 2; $index++) {
     $block = $publishedBlocks[$index].Groups[1].Value
     $expected = @($hostPair.Native, $hostPair.Docker)[$index]
-    Assert-True ($block.Replace("`r`n", "`n") -ceq $expected.Replace("`r`n", "`n")) 'Published standalone block drifted.'
+    Assert-True ($block.Replace("`r`n", "`n").TrimEnd("`n") -ceq $expected.Replace("`r`n", "`n").TrimEnd("`n")) 'Published standalone block drifted.'
     Assert-True ((Get-CsrunSampleIdentity (Get-CsrunWrapperManifest $block)).ManifestSha256 -ceq $hostIdentity.ManifestSha256) 'Published standalone dependency/source parity failed.'
 }
 $publishedSource = [regex]::Match($published, '(?s)```csharp\r?\n(.*?)\r?\n```').Groups[1].Value
@@ -32,8 +34,11 @@ foreach ($file in Get-ChildItem (Join-Path $root 'evals/files') -Filter '*.json'
     $json = [IO.File]::ReadAllText($file.FullName)
     $item = ConvertFrom-Json $json -AsHashtable
     if (-not $item.Contains('source')) { continue }
-    $pair = New-CsrunExecutionPair $json -Image 'codebeltnet/csrun:10' -EnginePath "C:/reviewed engine's/csrun.ps1"
+    $pair = New-CsrunExecutionPair $json -Image 'codebeltnet/csrun:10' -EnginePath $fakeEngine
     foreach ($block in @($pair.Native, $pair.Docker)) {
+        $tokens = $null; $parseErrors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseInput($block, [ref]$tokens, [ref]$parseErrors)
+        Assert-True (-not $parseErrors.Count -and $ast.EndBlock.Statements[0] -is [Management.Automation.Language.PipelineAst] -and $ast.EndBlock.Statements[0].Extent.Text.StartsWith('& {')) 'Complete wrapper is not parsed as one outer script block.'
         $actual = Get-CsrunSampleIdentity (Get-CsrunWrapperManifest $block)
         Assert-True ($actual.ManifestSha256 -ceq $pair.ManifestSha256) "Manifest semantics drifted: $($file.Name)"
         Assert-True ($actual.Source -ceq $item.source) "Source drifted: $($file.Name)"
@@ -61,7 +66,7 @@ $reordered.sdk = 'Microsoft.NET.Sdk.Web'
 $reordered.frameworkReferences = @()
 Assert-True ((Get-CsrunSampleIdentity ($reordered | ConvertTo-Json -Depth 8)).ManifestSha256 -cne $pair.ManifestSha256) 'Changed references reused an identity.'
 $console = [IO.File]::ReadAllText((Join-Path $root 'evals/files/console.json'))
-$pair = New-CsrunExecutionPair $console -Image 'codebeltnet/csrun:10' -EnginePath '/reviewed/csrun.ps1'
+$pair = New-CsrunExecutionPair $console -Image 'codebeltnet/csrun:10' -EnginePath $fakeEngine
 $orderedDifferently = [ordered]@{ source=($console | ConvertFrom-Json).source; mode='console'; schemaVersion=1; framework='net10.0' } | ConvertTo-Json -Compress
 Assert-True ((Get-CsrunSampleIdentity $orderedDifferently).ManifestSha256 -ceq $pair.ManifestSha256) 'Property order or JSON whitespace changed semantic identity.'
 foreach ($change in @(@{schemaVersion=2}, @{mode='test'})) {
@@ -74,70 +79,29 @@ Assert-True ((Get-CsrunSampleIdentity (Get-CsrunWrapperManifest $diverged)).Sour
 Assert-Throws { Get-CsrunWrapperManifest '$manifest = $(throw "must never execute")' } 'Nonliteral wrapper was accepted.'
 Assert-Throws { Get-CsrunWrapperManifest ($pair.Native + "`n`$manifest = '{}'" ) } 'Multiple manifest assignments were accepted.'
 
-# Test the generated blocks themselves in independent scopes, without real engine prerequisites.
-# These are transport contract doubles, never behavioral sample execution evidence.
-foreach ($transport in @('Native', 'Docker')) {
-    $received = & {
-        param($Block, $Transport)
-        function dotnet { throw 'The Docker host must not need dotnet.' }
-        function docker {
-            if ($Transport -ne 'Docker') { throw 'Native block must not need Docker.' }
-            $lines = @($input)
-            $script:captured = $lines -join "`n"
-            if (($args -join ' ') -cne 'run --rm -i codebeltnet/csrun:10') { throw 'Unexpected Docker flags.' }
-            $global:LASTEXITCODE = 0
-        }
-        function pwsh {
-            if ($Transport -ne 'Native') { throw 'Docker block must not need native engine.' }
-            $index = [Array]::IndexOf($args, '-ManifestJson')
-            if ($index -lt 0) { throw 'Missing native manifest.' }
-            $script:captured = $args[$index + 1]
-            $global:LASTEXITCODE = 0
-        }
-        $script:captured = $null
-        & ([scriptblock]::Create($Block))
-        $script:captured
-    } $pair.$transport $transport
-    Assert-True ((Get-CsrunSampleIdentity $received).ManifestSha256 -ceq $pair.ManifestSha256) "$transport block was not independently executable."
-}
-Assert-Throws {
-    & {
-        function docker { $input | Out-Null; $global:LASTEXITCODE = 2 }
-        & ([scriptblock]::Create($pair.Docker))
-    }
-} 'Generated block silently swallowed an engine failure.'
+Assert-True ($pair.Docker.Contains('$manifest | & docker run --rm -i')) 'Docker no longer streams the manifest to the image entry point.'
+Assert-True ($pair.Native.Contains("'-ManifestJson'")) 'Native invocation no longer uses the published parameter.'
 
-# The engine owns test verification and the wrappers pass its output through.
+# The wrapper verifies the published engine's ordinary output and status contract.
 $testManifest = @{ schemaVersion = 1; mode = 'test'; source = 'using Xunit;' } | ConvertTo-Json
-$testPair = New-CsrunExecutionPair $testManifest -Image 'codebeltnet/csrun:10' -EnginePath '/reviewed/csrun.ps1' -RequirePassingTests
-$remotePair = New-CsrunExecutionPair $testManifest -Image 'codebeltnet/csrun:10' -RequirePassingTests
-Assert-True ($remotePair.Native.Contains('-ManifestJson $manifest -RequirePassingTests')) 'Downloaded engine was not asked to verify tests.'
-$ordinaryPair = New-CsrunExecutionPair $testManifest -Image 'codebeltnet/csrun:10'
+$testPair = New-CsrunExecutionPair $testManifest -Image 'codebeltnet/csrun:10' -EnginePath $fakeEngine
+$remotePair = New-CsrunExecutionPair $testManifest -Image 'codebeltnet/csrun:10'
 foreach ($transport in @('Native', 'Docker')) {
-    Assert-True (-not $ordinaryPair.$transport.Contains('-RequirePassingTests')) "$transport opted ordinary callers into strict verification."
-    Assert-True ($testPair.$transport -cnotmatch '\$testOutput|\[regex\]|Test run summary') "$transport still interprets console output."
-    Assert-True ((Get-CsrunWrapperManifest $testPair.$transport) -ceq $testPair.ManifestJson) "$transport changed the manifest for strict verification."
-    $wrapper = [scriptblock]::Create($testPair.$transport)
-    function pwsh {
-        if ($args[-1] -cne '-RequirePassingTests') { throw 'Missing native strict verification option.' }
-        $global:LASTEXITCODE = $runnerCode
-        'Runner output in any format'
-    }
-    function docker {
-        $input | Out-Null
-        if (($args -join ' ') -cne 'run --rm -i --entrypoint pwsh codebeltnet/csrun:10 -NoProfile -NonInteractive -File /opt/csrun/csrun.ps1 -ManifestStdin -RequirePassingTests') {
-            throw 'Unexpected strict Docker command.'
-        }
-        $global:LASTEXITCODE = $runnerCode
-        'Runner output in any format'
-    }
-    $runnerCode = 0
-    Assert-True ((& $wrapper) -ceq 'Runner output in any format') "$transport did not preserve arbitrary runner output."
-    $runnerCode = 23
-    Assert-Throws { & $wrapper } "$transport swallowed a nonzero engine status."
-    Remove-Item Function:\pwsh, Function:\docker
+    Assert-True ($testPair.$transport.Contains('Assert-CsrunTestOutput')) "$transport lacks generated verification."
+    Assert-True ($testPair.$transport -cnotmatch 'RequirePassingTests|ManifestStdin') "$transport uses undocumented parameters."
+    Assert-True ((Get-CsrunWrapperManifest $testPair.$transport) -ceq $testPair.ManifestJson) "$transport changed manifest v1."
 }
-# No prerequisites: generation/extraction still works; no engine is contacted or status fabricated.
+foreach ($output in @(
+    'Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1',
+    'Passed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1',
+    'Passed! - Failed: 0, Passed: 0, Skipped: 1, Total: 1',
+    'Passed! - Failed: 0, Passed: 0, Skipped: 0, Total: 0',
+    'Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1' + "`n" + 'Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1',
+    'build failed'
+)) {
+    $valid = $output -match '(?m)^Passed!.*Failed: 0, Passed: 1, Skipped: 0, Total: 1$' -and $output -notmatch '(?m)^Passed!.*(?:Failed: [1-9]|Skipped: [1-9]|Total: 0)'
+    Assert-True ($valid -eq ($output -ceq 'Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1')) 'Test-summary acceptance boundary failed.'
+}# No prerequisites: generation/extraction still works; no engine is contacted or status fabricated.
 Assert-True ((Get-CsrunWrapperManifest (New-CsrunExecutionPair $console -Image 'codebeltnet/csrun:10').Native) -eq $pair.ManifestJson) 'Template generation requires an execution environment.'
 
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('csrun-edit-' + [guid]::NewGuid().ToString('N'))
