@@ -164,8 +164,12 @@ try {
             throw "$caseName must keep the functional-test namespace rule exactly once."
         }
         $bot = [System.IO.File]::ReadAllText((Join-Path $caseRoot '.bot/README.md'))
-        if (-not $bot.Contains('into root `AGENTS.md`.') -or $bot -match '(?i)Copilot') {
-            throw "$caseName .bot guidance must point only to root AGENTS.md."
+        if (-not $agents.Contains('`.bot/README.md` is intentionally tracked. Include it in the initial scaffold commit.') -or
+            -not $agents.Contains('Never stage or commit any other file under `.bot/`.')) {
+            throw "$caseName AGENTS.md must explicitly allow the .bot README and prohibit staging or committing other .bot files."
+        }
+        if (-not $bot.Contains('Move only finalized, non-confidential guidance into `AGENTS.md`.') -or $bot -match '(?i)Copilot') {
+            throw "$caseName .bot guidance must direct finalized, non-confidential guidance to AGENTS.md."
         }
         Write-Host "[PASS] $caseName emits the complete shared inventory with vendor-neutral root AGENTS.md."
         # Select a stable installed SDK only in this isolated regression workspace.

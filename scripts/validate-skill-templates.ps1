@@ -1437,7 +1437,9 @@ Add-ValidationResult -Results $results -Name 'Scaffolds use root AGENTS.md as th
             }
         }
         $bot = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared/.bot/README.md" -GitRef $Ref
-        Assert-Contains -Name "$skillRoot .bot README" -Content $bot -Needle 'into root `AGENTS.md`.'
+        Assert-Contains -Name "$skillRoot .bot README" -Content $bot -Needle 'The `.bot/README.md` file itself is intentionally tracked in source control.'
+        Assert-Contains -Name "$skillRoot .bot README" -Content $bot -Needle 'All other `.bot/` working material remains local-only and excluded from source control.'
+        Assert-Contains -Name "$skillRoot .bot README" -Content $bot -Needle 'Move only finalized, non-confidential guidance into `AGENTS.md`.'
         foreach ($path in (Get-RepoFileList -RepoRoot $repoRoot -RelativePath $skillRoot -GitRef $Ref)) {
             if ([System.IO.Path]::GetExtension($path) -notin @('.md', '.json', '.ps1')) { continue }
             $content = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/$path" -GitRef $Ref
