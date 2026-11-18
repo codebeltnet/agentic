@@ -92,16 +92,14 @@ Read `references/app.md` for the app-specific project structure, template file m
 
 ## Step 3: Resolve Dynamic Dependency Versions
 
-Before writing `Directory.Packages.props`, resolve every `*_VERSION` placeholder in that file to the latest stable listed compatible version for its matching package ID on NuGet.org, respecting the xUnit v4 / Codebelt v12 lines below.
+Before writing `Directory.Packages.props`, resolve every `*_VERSION` placeholder in that file to the latest stable listed compatible version for its matching package ID on NuGet.org.
 
-When `pwsh` 7+ is available, prefer the deterministic helper in `<skill-root>/scripts/resolve-package-versions.ps1` over manual lookup. Run it as `pwsh -NoProfile -File "<skill-root>/scripts/resolve-package-versions.ps1" -TargetFramework <TargetFramework>`. By default it resolves placeholders from this skill's own `assets/shared/Directory.Packages.props`, so a normal scaffold run only needs `-TargetFramework`. Its JSON supplies candidate versions for package placeholders, with `compatibility_status = provisional` and the requested `target_framework` on every entry. The helper filters version lines but does not inspect dependency ranges or framework assets. Inspect those metadata and restore and build the combined scaffold for the selected framework before accepting the candidates as compatible; halt and report any incompatibility.
+When `pwsh` 7+ is available, prefer the deterministic helper in `<skill-root>/scripts/resolve-package-versions.ps1` over manual lookup. Run it as `pwsh -NoProfile -File "<skill-root>/scripts/resolve-package-versions.ps1" -TargetFramework <TargetFramework>`. By default it resolves placeholders from this skill's own `assets/shared/Directory.Packages.props`, so a normal scaffold run only needs `-TargetFramework`. Its JSON supplies candidate versions for package placeholders, with `compatibility_status = provisional` and the requested `target_framework` on every entry. The `candidate_versions` array lists stable listed releases newest first. Inspect metadata and verify the combined scaffold as described below before accepting a version.
 
 - Use the NuGet V3 service index at `https://api.nuget.org/v3/index.json` to discover the package metadata endpoints
-- Prefer registration metadata so you can ignore unlisted versions and prerelease builds
-- If registration metadata is unavailable, fall back to the package base address versions list from the same service index and still exclude prerelease versions
-- Resolve each package independently by package ID; never reuse one generic "latest" value across multiple packages
+- Use registration metadata to exclude unlisted and prerelease versions
+- Resolve each package ID newest first. Check framework assets, dependency groups, and dependency ranges against every selected TFM of the projects that reference it. Check the ASP.NET Core runtime for ASP.NET Core packages. If a release is incompatible, try the next newest listed stable candidate before reporting that no compatible set exists.
 - Never hardcode version numbers from stale examples, screenshots, or prior scaffolds
-- For framework-aligned ASP.NET packages such as `Microsoft.AspNetCore.OpenApi` and `Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation`, resolve the latest stable version whose **major** matches the selected `{TARGET_FRAMEWORK}` major. Example: `net9.0` must not get `10.x` ASP.NET packages.
 - `Directory.Packages.props` is the authoritative source of NuGet package versions for the generated app scaffold. Do **not** inline `Version=` attributes into `.csproj` files or `Directory.Build.props` as a workaround for restore or build issues.
 - Never substitute remembered, example, or previously seen package versions when this lookup step is available. If the lookup step fails, halt and report it instead of guessing.
 
@@ -122,15 +120,15 @@ This includes shared and host-specific app packages such as:
 - `Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation`
 - `Microsoft.Extensions.Hosting`
 
-### xUnit v4 / Codebelt v12 test stack
+### Codebelt xUnit and native MTP test stack
 
-Resolve `Codebelt.Extensions.Xunit.App` on the latest stable compatible **12.x** line and `xunit.v3` plus `xunit.v3.runner.console` on the latest stable compatible **4.x** line. xUnit v4 retains the `xunit.v3` package IDs; do not invent an `xunit.v4` ID. Resolve `xunit.runner.visualstudio` independently and check its compatibility. These major lines define the scaffold contract, not fixed patch-version pins. Inspect package assets and nuspec dependency ranges, then restore the combined package set for every selected test TFM; a version-index lookup alone does not prove compatibility. Stop on unresolved metadata or incompatible dependencies rather than reverting to Codebelt v11 or older xUnit. The verified `Codebelt.Extensions.Xunit.App` 12.0.1 meta-package has only net9.0/net10.0 dependency groups; a net8.0 application request requires an explicitly selected compatible consumer test runtime or a verified alternative host-package layout, not a silent downgrade or a claim that the app meta-package supports net8.0.
+Resolve `Codebelt.Extensions.Xunit.App`, `xunit.v3`, `xunit.v3.runner.console`, and `xunit.runner.visualstudio` to the latest stable listed versions that work together on the selected test TFMs. Consider releases across all major lines. Keep the template package IDs and check the resolved APIs and native MTP support. Restore and build the combined scaffold for every selected TFM.
 
 Copy the shared root `global.json` with `test.runner = Microsoft.Testing.Platform`; `UseMicrosoftTestingPlatformRunner` alone does not select the SDK CLI. Use a generally supported, non-preview .NET SDK **10 or later** even when the application targets `net8.0` or `net9.0`. Verify the selected SDK with `dotnet --version` from the generated root. Keep an existing SDK pin and other `global.json` settings if generating into an existing repo; merge the runner setting and report incompatible SDK pins instead of silently replacing them.
 
 The shared test-only ItemGroup owns the versionless references to `Codebelt.Coverlet.MTP` and `Microsoft.Testing.Extensions.HangDump`; versions belong in `Directory.Packages.props`. Do not add duplicate references to test `.csproj` files. Replace legacy `coverlet.collector`, `coverlet.msbuild` and `coverlet.MTP`; do not install Microsoft's coverage engine alongside Codebelt Coverlet. The coverage assembly and registration hook remain `coverlet.MTP.dll` and `Coverlet.MTP.TestingPlatformBuilderHook`, not the NuGet package ID.
 
-Use Codebelt v12 `ManagedApplicationFixture<TEntryPoint>` / `ManagedWebApplicationFixture<TEntryPoint>` with entrypoint-owned deferred startup. Do not generate the removed `BlockingManagedApplicationFixture<TEntryPoint>` or `BlockingManagedWebApplicationFixture<TEntryPoint>` types. Generate a deterministic host startup/response or service-resolution functional test for each selected host, rather than leaving a zero-test project.
+Use Codebelt `ManagedApplicationFixture<TEntryPoint>` / `ManagedWebApplicationFixture<TEntryPoint>` with entrypoint-owned deferred startup. Do not generate the removed `BlockingManagedApplicationFixture<TEntryPoint>` or `BlockingManagedWebApplicationFixture<TEntryPoint>` types. Generate a deterministic host startup/response or service-resolution functional test for each selected host, rather than leaving a zero-test project.
 
 ## Step 4: Apply the Substitution Map
 
@@ -148,8 +146,6 @@ When copying template files, replace these placeholders in file contents:
 For generated solution filenames, preserve the user-facing `{SOLUTION_NAME}` casing exactly. The solution file must be named `{SOLUTION_NAME}.slnx`, not `{REPO_SLUG}.slnx` and not any lowercased variant.
 
 `Directory.Packages.props` also contains package-specific placeholders such as `{CODEBELT_BOOTSTRAPPER_WEB_VERSION}`, `{MICROSOFT_ASPNETCORE_OPENAPI_VERSION}`, `{MICROSOFT_ASPNETCORE_MVC_RAZOR_RUNTIMECOMPILATION_VERSION}`, `{MICROSOFT_EXTENSIONS_HOSTING_VERSION}`, and `{MICROSOFT_NET_TEST_SDK_VERSION}`. Resolve each of them from NuGet.org in Step 3 before writing the final file.
-
-For `Microsoft.AspNetCore.OpenApi` and `Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation`, the resolved stable version must stay aligned with the selected `{TARGET_FRAMEWORK}` major version instead of blindly using the latest stable overall.
 
 Keep `Directory.Packages.props` limited to packages that are actually referenced by the copied app and test templates for the selected host types, plus the shared `MinVer` package used for app versioning. Do not carry unused library-only or benchmark-only package versions into app scaffolds.
 
@@ -230,7 +226,7 @@ After generating, verify:
 - [ ] MVC and Razor variants include their starter UI assets
 - [ ] Worker projects include `Worker.cs`
 - [ ] `global.json` selects `Microsoft.Testing.Platform` and the selected SDK is generally supported, non-preview .NET 10 or later
-- [ ] Codebelt test packages resolve to 12.x and the `xunit.v3` framework/console runner resolve to 4.x, with combined restore validated for every selected test TFM
+- [ ] The latest compatible Codebelt and xUnit test packages restore together for every selected test TFM
 - [ ] Each functional test project discovers and passes at least one actual host-behavior test
 - [ ] Run `dotnet build -c Release`, then one `dotnet test --project <test-project> --framework <tfm> -c Release --results-directory <results> -- --report-xunit-trx --coverlet --coverlet-output-format opencover` per project/TFM; verify nonempty TRX and OpenCover artifacts, coverage of the application's executed code, and `--hangdump` options in runner help
 - [ ] Existing CI reusable-workflow/action refs support native MTP, OpenCover output and matching upload globs; preserve the caller pipeline rather than copying another repository's jobs or duplicating extension arguments supplied by the shared action
