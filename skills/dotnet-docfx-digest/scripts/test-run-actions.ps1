@@ -8,7 +8,7 @@ $app = Get-FileBasedAppCommand -SourcePath (Join-Path $PSScriptRoot 'docfx.cs')
 function dotnet {
     if ($inventoryOverride) { $global:LASTEXITCODE = 0; return $inventoryOverride }
     # Cache the file-based inventory build once; every inventory assertion still executes.
-    & (Get-Command $app.Executable -CommandType Application).Source @($app.ArgumentPrefix + @($args | Select-Object -Skip ([Array]::IndexOf($args, '--repo-root'))))
+    & (Get-Command $app.Executable -CommandType Application | Select-Object -First 1).Source @($app.ArgumentPrefix + @($args | Select-Object -Skip ([Array]::IndexOf($args, '--repo-root'))))
     $global:LASTEXITCODE = $LASTEXITCODE
 }
 $work = if ($OutputRoot) { $OutputRoot } else { Join-Path ([IO.Path]::GetTempPath()) ('docfx-actions-' + [guid]::NewGuid().ToString('N')) }
@@ -182,7 +182,7 @@ if ($nativeOnlyEntry.native -ne 'Verified' -or $nativeOnlyEntry.docker -ne 'Unve
     throw 'Successful Native verification must not mark the unexecuted Docker transport Verified.'
 }
 # Actual DocFX render checks tilde links, publishing, modern template composition and C# fidelity.
-& (Get-Command docfx -CommandType Application).Source build "$work/docfx.json" --disableGitFeatures *> "$work/build.log"
+& (Get-Command docfx -CommandType Application | Select-Object -First 1).Source build "$work/docfx.json" --disableGitFeatures *> "$work/build.log"
 if ($LASTEXITCODE -ne 0) { throw "DocFX render failed: $work/build.log" }
 $html = Get-Content "$work/_site/docs/integration.html" -Raw
 if (-not $html.Contains('data-example-id=') -or -not $html.Contains('View Native Script') -or -not $html.Contains('View Docker Script') -or
