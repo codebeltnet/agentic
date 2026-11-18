@@ -6,26 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.13.0] - 2026-11-17
 
-This is a minor release that adds the `dotnet-csrun` skill for executable C# evidence, binds `dotnet-docfx-digest` samples to maintained project and source context, adds contextual source references and repository-backed one-shot examples to `dotnet-docfx-digest`, and connects standalone runtime examples to `dotnet-csrun`.
+This is a minor release that adds the `dotnet-csrun` skill for executable C# evidence, adds source-bound samples, contextual source references, repository-backed one-shot examples, and generated run actions to `dotnet-docfx-digest`, changes its example authoring to match the actual execution context, and fixes sample compile attribution and comma-separated `-Skill` lists in the sync script.
 
 ### Added
 
 - `dotnet-csrun` skill for creating small complete C# console examples and genuine xUnit v3 tests, running them through `csrun` with exact package pins, and reporting independent native and Docker statuses of verified, compiled only, or unverified,
 - `dotnet-csrun` verify, repair, and scoped audit lifecycle for existing standalone source, with feasibility assessed before manifest construction and failures classified before any repair,
-- `dotnet-docfx-digest` source-bound sample contexts that bind fences to a maintained project and source file, reject unresolvable bindings, revalidate pages whose bound source or project changes, including deleted or moved inputs, and skip `.bot` directories during source discovery,
+- `dotnet-csrun` README entry, install example, validator, and eval fixtures, including a check that the published example matches its console fixture,
+- `dotnet-docfx-digest` source-bound sample contexts that bind fences to a maintained project and source file, reject unresolvable bindings, revalidate pages when the bound source or project changes, including deleted or moved inputs, and skip `.bot` directories during source discovery,
 - `dotnet-docfx-digest` rejection of a `ManagedApplicationFixture` entry point collapsed into a test-owned source unit, and of displayed excerpts excluded by conditional compilation for the selected framework and configuration,
 - `dotnet-docfx-digest` optional contextual source references that link maintained source after each example's immediate explanation, with contextual reference checks in its validation,
 - `dotnet-docfx-digest` repository-backed one-shot examples that pin a maintained test or application project when an API requires an actual application, runner, or distinct assembly identity instead of a standalone program,
-- `dotnet-csrun` README entry, install example, deterministic validators, and eval fixtures, plus `dotnet-docfx-digest` regression coverage for source-bound samples and contextual references.
+- `dotnet-docfx-digest` `generate-run-actions` command that inventories documentation examples, resolves their published dependencies or maintained integration tests, and generates paired Native and Docker PowerShell assets with a coverage report.
 
 ### Changed
 
-- `dotnet-docfx-digest` example authoring chooses standalone programs, library usage, multi-project scenarios, framework integrations, or labelled partial excerpts from the actual execution context instead of treating every generated C# fence as a complete compilation unit,
-- `dotnet-docfx-digest` composes with `dotnet-csrun` for compatible standalone runtime examples, keeping its source discovery, placement, project-aware compilation, and DocFX build gates authoritative and leaving project-dependent examples in the existing workflow.
+- `dotnet-docfx-digest` example authoring chooses standalone programs, library usage, multi-project scenarios, framework integrations, or labelled partial excerpts from the actual execution context instead of requiring every generated `csharp` fence to be a complete compilation unit,
+- `dotnet-docfx-digest` composes with `dotnet-csrun` for compatible standalone runtime examples, keeping its source discovery, placement, project-aware compilation, and DocFX build gates authoritative.
 
 ### Fixed
 
-- `dotnet-docfx-digest` attributes sample compile failures to each project from the native MSBuild binary log instead of the shared batch exit code, so a shared batch failure no longer marks unrelated projects as failed.
+- `dotnet-docfx-digest` attributes sample compile failures to each project from the native MSBuild binary log instead of the shared batch exit code, so a shared batch failure no longer marks unrelated projects as failed,
+- `scripts/sync-skill-install.ps1` splits comma-separated `-Skill` values, so `pwsh -File` invocations with `a,b` sync each named skill instead of treating the whole list as one name.
 
 ## [0.12.1] - 2026-11-15
 
