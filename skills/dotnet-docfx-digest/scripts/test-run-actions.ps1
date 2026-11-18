@@ -130,8 +130,8 @@ if ($LASTEXITCODE -ne 2 -or @($first | Where-Object coverage -eq 'Paired').Count
 $resolved = $first | Where-Object uid -ceq $packageUid
 $manifests = @(foreach ($transport in @('native','docker')) {
     $scriptText = Get-Content "$work/run-actions/$($resolved.id)/$transport.ps1" -Raw
-    if (-not $scriptText.Contains('-RequirePassingTests') -or $scriptText -cmatch '\$testOutput|Test run summary') {
-        throw "The generated $transport test script must delegate strict verification to csrun."
+    if (-not $scriptText.Contains('Assert-CsrunTestOutput') -or $scriptText -cmatch 'RequirePassingTests|ManifestStdin') {
+        throw "The generated $transport test script must verify MTP output without unsupported engine parameters."
     }
     Get-CsrunWrapperManifest $scriptText
 })
