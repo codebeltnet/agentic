@@ -29,8 +29,8 @@ $nativeScript = [regex]::Match($nativeSection.Value, '(?s)```powershell\r?\n(?<s
 $dockerScript = [regex]::Match($dockerSection.Value, '(?s)```powershell\r?\n(?<script>.*?)\r?\n```')
 if (-not $nativeSection.Success -or -not $dockerSection.Success -or
     -not $nativeScript.Success -or -not $dockerScript.Success -or
-    -not $nativeScript.Groups['script'].Value.StartsWith('#requires -Version 7.0') -or
-    -not $dockerScript.Groups['script'].Value.StartsWith('#requires -Version 7.0')) {
+    $nativeScript.Groups['script'].Value -cnotmatch '\A& \{\r?\n#requires -Version 7\.0\r?\n' -or
+    $dockerScript.Groups['script'].Value -cnotmatch '\A& \{\r?\n#requires -Version 7\.0\r?\n') {
     throw 'The paired reference example must contain complete, independently runnable Native and Docker scripts.'
 }
 foreach ($scriptText in @($nativeScript.Groups['script'].Value, $dockerScript.Groups['script'].Value)) {
@@ -128,8 +128,11 @@ $settingsPath = "$work/run-actions.settings.json"
 $first = (& $generator -RepoRoot $work) | ConvertFrom-Json
 if ($LASTEXITCODE -ne 2 -or @($first | Where-Object coverage -eq 'Paired').Count -ne 5 -or @($first | Where-Object coverage -eq 'Unresolved').Count -ne 1) { throw "Unexpected generation: $($first | ConvertTo-Json -Depth 10)" }
 $resolved = $first | Where-Object uid -ceq $packageUid
+# The same envelope assets/run-actions.js accepts: one complete paste unit, so execution and verification run together.
+$completeScript = '\A& \{\r?\n#requires -Version 7\.0\r?\n[\s\S]*\r?\n\}\r?\n?\z'
 $manifests = @(foreach ($transport in @('native','docker')) {
     $scriptText = Get-Content "$work/run-actions/$($resolved.id)/$transport.ps1" -Raw
+    if ($scriptText -cnotmatch $completeScript) { throw "The generated $transport csrun script is not one complete script block." }
     if (-not $scriptText.Contains('Assert-CsrunTestOutput') -or $scriptText -cmatch 'RequirePassingTests|ManifestStdin') {
         throw "The generated $transport test script must verify MTP output without unsupported engine parameters."
     }
@@ -148,6 +151,7 @@ if (-not $consoleWithAssociation.StartsWith($console + "`n`n<!-- docfx-run-actio
 $entry = $first | Where-Object { $_.uid -like '*ManagedApplicationFixture*' -and $_.file -match '[\\/]docs[\\/]integration.md$' }
 foreach ($transport in @('native','docker')) {
     $script = Get-Content "$work/run-actions/$($entry.id)/$transport.ps1" -Raw
+    if ($script -cnotmatch $completeScript) { throw "The generated $transport integration script is not one complete script block." }
     if (-not $script.Contains('84b13767cb9484f8f3a36a71875662edfdb3e511') -or -not $script.Contains('ShouldBootstrapMinimalWorkerProgram')) { throw 'Wrong pinned test.' }
     if ($entry.$transport -ne 'Unverified') { throw 'Generation claimed runtime verification.' }
 }

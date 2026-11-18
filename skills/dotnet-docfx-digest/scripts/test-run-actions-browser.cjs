@@ -12,6 +12,7 @@ const mimeTypes = {
 };
 const permissions = ['clipboard-read', 'clipboard-write'];
 const normalizeNewlines = text => text.replace(/\r\n/g, '\n');
+const executionScript = /^& \{\r?\n#requires -Version 7\.0\r?\n[\s\S]*\r?\n\}\r?\n?$/;
 
 async function openExample(context, url, marker) {
   const page = await context.newPage();
@@ -51,7 +52,8 @@ async function openExample(context, url, marker) {
     const response = await page.request.get(asset);
     assert.ok(response.ok());
     const script = await response.text();
-    assert.ok(script.startsWith('#requires -Version 7.0'));
+    assert.match(script, executionScript, label + ' asset must be one complete script block');
+    assert.doesNotMatch(script, /RequirePassingTests|ManifestStdin/);
     return { label, button, asset, script };
   }));
   const navigations = [];
@@ -118,7 +120,12 @@ async function checkCopy(example, index, activate) {
     try {
       const content = fs.readFileSync(file);
       res.setHeader('Content-Type', mimeTypes[path.extname(file)] || 'text/plain');
-      if (file.endsWith('.ps1')) res.setHeader('Content-Disposition', 'attachment');
+      if (file.endsWith('.ps1')) {
+        res.setHeader('Content-Disposition', 'attachment');
+        // Model a host that lets browsers cache scripts; a regenerated script must still be copied fresh.
+        res.setHeader('Cache-Control', 'max-age=3600');
+        res.setHeader('Last-Modified', fs.statSync(file).mtime.toUTCString());
+      }
       res.end(content);
     } catch { res.writeHead(404).end(); }
   });
@@ -175,6 +182,17 @@ async function checkCopy(example, index, activate) {
     const api = await openExample(context, base + '/api/fixture.html', marker);
     await checkCopy(api, 0, button => button.press('Enter'));
     await checkCopy(api, 1, button => button.press('Enter'));
+    // Regeneration keeps the asset URL; the copy must reflect the current bytes, not the cached response.
+    const assetFile = path.resolve(site, '.' + decodeURIComponent(new URL(api.actions[0].asset).pathname));
+    const published = fs.readFileSync(assetFile);
+    const regenerated = api.actions[0].script.replace(/\r?\n\}\r?\n?$/, '\n# regenerated\n}\n');
+    try {
+      fs.writeFileSync(assetFile, regenerated);
+      await api.status.filter({ hasText: 'Docker script copied.' }).waitFor({ state: 'hidden' });
+      await api.actions[0].button.press('Enter');
+      await api.status.filter({ hasText: 'Native script copied.' }).waitFor();
+      await checkClipboard(api.page, regenerated);
+    } finally { fs.writeFileSync(assetFile, published); }
     await api.page.close();
 
     const mobile = await browser.newContext({ ...devices['iPhone 13'], permissions });
@@ -210,6 +228,19 @@ async function checkCopy(example, index, activate) {
     assert.deepEqual(await sample.boundingBox(), block);
     assert.equal(normalizeNewlines(await page.evaluate(() => navigator.clipboard.readText())), normalizeNewlines(actions[1].script));
     checkPageUnchanged();
+
+    // Legacy unwrapped and truncated scripts are not complete paste units and must never reach the clipboard.
+    const unwrapped = actions[0].script.replace(/^& \{\r?\n/, '').replace(/\r?\n\}\r?\n?$/, '\n');
+    const truncated = actions[0].script.replace(/\r?\n\}\r?\n?$/, '\n');
+    for (const body of [unwrapped, truncated]) {
+      await status.filter({ hasText: 'Could not copy Native script.' }).waitFor({ state: 'hidden' });
+      await page.unroute('**/native.ps1');
+      await page.route('**/native.ps1', route => route.fulfill({ status: 200, contentType: 'text/plain', body }));
+      await actions[0].button.press('Enter');
+      await status.filter({ hasText: 'Could not copy Native script.' }).waitFor();
+      assert.equal(normalizeNewlines(await page.evaluate(() => navigator.clipboard.readText())), normalizeNewlines(actions[1].script));
+      checkPageUnchanged();
+    }
 
     if (representative) {
       await context.route('https://context7.com/widget.js', route => route.fulfill({ contentType: 'text/javascript', body: '' }));
