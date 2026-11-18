@@ -109,12 +109,14 @@ function Test-SkillTree {
 $repoRoot = Get-RepoRoot
 $skillsRoot = Join-Path $repoRoot 'skills'
 
-# `pwsh -File` does not parse `-Skill a,b` as an array; the whole list arrives as the single string 'a,b'.
-# Splitting here keeps the documented comma form working from every invocation style, and each entry
-# still passes the kebab-case path-safety check below.
-$Skill = @($Skill | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-
-if (-not $Skill -or $Skill.Count -eq 0) {
+if ($PSBoundParameters.ContainsKey('Skill')) {
+    # `pwsh -File` passes `-Skill a,b` as one string. Split it before validating each name below.
+    $Skill = @($Skill | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($Skill.Count -eq 0) {
+        throw 'Specify at least one skill name with -Skill.'
+    }
+}
+else {
     $Skill = @(Get-ChildItem -LiteralPath $skillsRoot -Directory | ForEach-Object { $_.Name })
 }
 
