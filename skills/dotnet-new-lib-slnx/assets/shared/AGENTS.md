@@ -415,7 +415,7 @@ Use `<value>` for property-value descriptions, as illustrated in the example abo
 
 ## .bot/ Folder
 
-If a `.bot/` folder exists at the root, it contains **confidential, local-only** working material for AI agents — product requirement documents (PRDs), design proposals, agentic loop state, and brainstorming outputs. This folder is gitignored and never committed.
+`.bot/README.md` is intentionally tracked. Include it in the initial scaffold commit. Never stage or commit any other file under `.bot/`. Keep all working material there local and confidential, including product requirement documents (PRDs), design proposals, agent state, and brainstorming outputs.
 
 When starting creative or design work (new features, architecture decisions, PRD drafts), use the [brainstorming skill](https://skills.sh/obra/superpowers/brainstorming) and save outputs to `.bot/`. Only move finalized, non-confidential instructions into root `AGENTS.md`.
 
