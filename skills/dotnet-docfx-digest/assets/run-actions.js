@@ -6,14 +6,17 @@ const icons = {
     '<path fill-rule="evenodd" d="M1.5 14h17.2c.5 0 1-.1 1.4-.3-.3-1.1.1-2.5 1-3.6 1.1.5 1.7 1.3 2 2.4a4.8 4.8 0 0 1 3 .4c-.7 1.5-2.1 2.1-3.6 2.1-1.9 4.4-5.5 6.5-10.9 6.5C5.7 21.5 2.2 19 1.5 14Zm5.7 2.4a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6Z"/>',
 };
 const waitingForCopy = new WeakSet();
+// Generated scripts are one complete `& { ... }` paste unit, so execution and verification run together.
+const executionScript = /^& \{\r?\n#requires -Version 7\.0\r?\n[\s\S]*\r?\n\}\r?\n?$/;
 
 async function fetchScript(link) {
   const url = new URL(link.href);
   if (url.origin !== location.origin) throw new Error('Script must be hosted on this site.');
-  const response = await fetch(url, { mode: 'same-origin' });
+  // Asset URLs are stable per example, so always revalidate rather than copy a stale cached script.
+  const response = await fetch(url, { mode: 'same-origin', cache: 'no-cache' });
   if (!response.ok) throw new Error('Script unavailable.');
   const script = await response.text();
-  if (!script.startsWith('#requires -Version 7.0')) throw new Error('Response is not an execution script.');
+  if (!executionScript.test(script)) throw new Error('Response is not an execution script.');
   return script;
 }
 

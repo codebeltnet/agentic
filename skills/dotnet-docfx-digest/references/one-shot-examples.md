@@ -57,8 +57,8 @@ Failure throws and retains logs/results under the printed OS-temporary diagnosti
 ## Native: PowerShell 7 and .NET 11 SDK
 
 ```powershell
-#requires -Version 7.0
 & {
+#requires -Version 7.0
     $ErrorActionPreference = 'Stop'
     $PSNativeCommandUseErrorActionPreference = $false
     # Executes trusted repository build tasks and NuGet packages with your permissions.
@@ -114,8 +114,8 @@ Failure throws and retains logs/results under the printed OS-temporary diagnosti
 No host .NET SDK is required. The official SDK image supplies it; first use pulls the image. On Linux, the container runs with the host UID and GID so build and test outputs remain removable during cleanup. Its home and .NET CLI state use container-local `/tmp`, which is writable by that identity.
 
 ```powershell
-#requires -Version 7.0
 & {
+#requires -Version 7.0
     $ErrorActionPreference = 'Stop'
     $PSNativeCommandUseErrorActionPreference = $false
     # Executes trusted repository build tasks and NuGet packages with your permissions.

@@ -16,8 +16,8 @@ function New-RepositoryExamplePair {
         throw 'Expected a pinned GitHub repository, relative project, exact xUnit method, TFM and official SDK image.'
     }
     $template = @'
-#requires -Version 7.0
 & {
+#requires -Version 7.0
     $ErrorActionPreference = 'Stop'
     $PSNativeCommandUseErrorActionPreference = $false
     # Executes trusted repository build tasks and NuGet packages with your permissions.
