@@ -6833,10 +6833,11 @@ internal static class DocfxValidator
 
         // Only repositories enriched by the explicit run-action command have these deliverables.
         // This is a path check, never generation or runtime verification on the fast path.
-        if (File.Exists(Path.Combine(docfxWorkspace, "run-actions", "index.json")))
+        if (File.Exists(Path.Combine(docfxWorkspace, "run-actions", "index.json")) ||
+            File.Exists(Path.Combine(docfxWorkspace, "run-actions.manifest.json")))
         {
             var relative = Path.GetRelativePath(docfxWorkspace, candidate).Replace('\\', '/');
-            if (relative is "run-actions/index.json" or "run-actions.settings.json" ||
+            if (relative is "run-actions/index.json" or "run-actions.settings.json" or "run-actions.manifest.json" or "BuildRunActions.ps1" ||
                 Regex.IsMatch(relative, @"^run-actions/[a-f0-9]{24}/(?:native|docker)\.ps1$")) { return true; }
             using var config = JsonDocument.Parse(File.ReadAllText(docfxPath));
             if (config.RootElement.TryGetProperty("build", out var build) && build.TryGetProperty("template", out var templates) &&

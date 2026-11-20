@@ -1,4 +1,4 @@
-#requires -Version 7.0
+﻿#requires -Version 7.0
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string] $RepoRoot,
@@ -66,6 +66,7 @@ if (-not $Settings) { $Settings = Join-Path $workspace 'run-actions.settings.jso
 if (Test-Path $Settings) { $recipes = @((Get-Content $Settings -Raw | ConvertFrom-Json).examples) }
 $toolHash = Hash ((Get-Content $PSCommandPath -Raw) + (Get-Content (Join-Path $PSScriptRoot 'docfx.cs') -Raw) + (Get-Content (Join-Path $PSScriptRoot 'integration-example.ps1') -Raw) + (Get-Content $helpers -Raw) + $script:Csrun021Asset + $script:Csrun021Sha256 + $script:CsrunTestVerificationTemplate)
 $results = [Collections.Generic.List[object]]::new()
+$manifestEntries = [Collections.Generic.List[object]]::new()
 $associations = [hashtable]::new([StringComparer]::Ordinal)
 $previousPages = foreach ($entry in $old) {
     if (-not $entry.file) { continue }
@@ -148,6 +149,12 @@ foreach ($example in $inventory.examples) {
             $path = Join-Path $dir "$transport.ps1"
             if (-not (Test-Path $path) -or -not $reusable -or (Hash ([IO.File]::ReadAllText($path))) -cne $prior[0]."${transport}Sha256") { $reusable = $false }
         }
+        $manifestObject = $null
+        if ($strategy -eq 'standalone') {
+            $manifestObject = if ($recipe) { $recipe.manifest | Select-Object * } else { [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) } }
+            if ($manifestObject.PSObject.Properties['source'] -and (Normalize $manifestObject.source) -cne $displayedSource) { throw 'Manifest source differs from displayed C#.' }
+            $manifestObject | Add-Member -NotePropertyName source -NotePropertyValue $displayedSource -Force
+        }
         if ($reusable) {
             $pair = @{}
             foreach ($transport in $transports) {
@@ -158,10 +165,7 @@ foreach ($example in $inventory.examples) {
         } elseif ($strategy -eq 'repository') {
             $pair = New-RepositoryExamplePair -Repository $recipe.repository -Commit $recipe.commit -Project $recipe.project -Test $recipe.test -Framework $recipe.framework -Image $recipe.image
         } else {
-            $manifest = if ($recipe) { $recipe.manifest | Select-Object * } else { [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) } }
-            if ($manifest.PSObject.Properties['source'] -and (Normalize $manifest.source) -cne $displayedSource) { throw 'Manifest source differs from displayed C#.' }
-            $manifest | Add-Member -NotePropertyName source -NotePropertyValue $displayedSource -Force
-            $pair = New-CsrunExecutionPair -ManifestJson ($manifest | ConvertTo-Json -Depth 30) -Image $image
+            $pair = New-CsrunExecutionPair -ManifestJson ($manifestObject | ConvertTo-Json -Depth 30) -Image $image
         }
         $changed = $false
         foreach ($transport in $transports) {
@@ -183,6 +187,27 @@ foreach ($example in $inventory.examples) {
         $result.coverage = if ($transports.Count -eq 2) { 'Paired' } else { 'Partially supported' }
         if ($recipe.explanation) { $result.explanation = $recipe.explanation }
         $result.fingerprint = $fingerprint
+        if ($strategy -eq 'repository') {
+            $manifestEntries.Add([ordered]@{
+                id = $id
+                strategy = 'repository'
+                transports = @($transports)
+                repository = $recipe.repository
+                commit = $recipe.commit
+                project = $recipe.project
+                test = $recipe.test
+                framework = $recipe.framework
+                image = $recipe.image
+            })
+        } else {
+            $manifestEntries.Add([ordered]@{
+                id = $id
+                strategy = 'standalone'
+                transports = @($transports)
+                image = $image
+                manifest = $manifestObject
+            })
+        }
         $links = @($transports | ForEach-Object {
             $label = if ($_ -eq 'native') { 'Native' } else { 'Docker' }
             '<a href="~/run-actions/' + $id + '/' + $_ + '.ps1" data-transport="' + $_ + '">View ' + $label + ' Script</a>'
@@ -269,6 +294,9 @@ $mainText = [IO.File]::ReadAllText($main)
 if (-not $mainText.Contains("import './run-actions.js';")) { $null = Write-Changed $main ($mainText + "`nimport './run-actions.js';`n") }
 $null = Write-Changed (Join-Path (Split-Path $main -Parent) 'run-actions.js') ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../assets/run-actions.js')))
 $null = Write-Changed $configPath (($config | ConvertTo-Json -Depth 100) + "`n")
+$sortedManifest = @($manifestEntries | Sort-Object { $_.id })
+$null = Write-Changed (Join-Path $workspace 'run-actions.manifest.json') (([ordered]@{ schemaVersion = 1; examples = $sortedManifest } | ConvertTo-Json -Depth 30) + "`n")
+$null = Write-Changed (Join-Path $workspace 'BuildRunActions.ps1') ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../assets/BuildRunActions.ps1')))
 $persisted = @($results | ForEach-Object {
     $entry = $_ | Select-Object *
     $entry.file = [IO.Path]::GetRelativePath($root, $entry.file).Replace('\','/')
