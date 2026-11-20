@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-11-21
+
+This is a minor release that adds a standalone run-action materializer to `dotnet-docfx-digest`, so the generated Native and Docker wrapper scripts can be rebuilt at DocFX build time from a committed manifest instead of being committed themselves, and it updates the run-action guidance to match.
+
+### Added
+
+- `dotnet-docfx-digest` standalone `BuildRunActions.ps1` materializer that rebuilds the Native and Docker run-action scripts from `run-actions.manifest.json` beside `docfx.json` without requiring an installed skill, with the `csrun` generator emitting the manifest and materializer alongside the existing wrappers and the fast validator accepting both new deliverables.
+
+### Changed
+
+- `dotnet-docfx-digest` run-action guidance now recommends committing the settings, manifest, materializer, and Markdown associations while ignoring the generated `run-actions/` directory, instead of committing that directory as documentation source.
+
 ## [0.13.0] - 2026-11-20
 
 This is a minor release that adds the `dotnet-csrun` skill for executable C# evidence, adds source-bound samples, contextual source references, repository-backed one-shot examples, and opt-in run actions to `dotnet-docfx-digest`, changes its example authoring to match the execution context, updates the .NET scaffolds to resolve current compatible test packages across major lines, and fixes sample compile attribution and comma-separated `-Skill` lists in the sync script.
@@ -833,6 +845,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.13.1]: https://github.com/codebeltnet/agentic/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/codebeltnet/agentic/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/codebeltnet/agentic/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/codebeltnet/agentic/compare/v0.11.2...v0.12.0
