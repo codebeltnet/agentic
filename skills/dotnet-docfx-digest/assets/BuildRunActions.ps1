@@ -9,7 +9,11 @@ $PSNativeCommandUseErrorActionPreference = $false
 Set-StrictMode -Version Latest
 
 if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
-    throw "Run-actions manifest not found: $ManifestPath"
+    if ($PSBoundParameters.ContainsKey('ManifestPath')) {
+        throw "Run-actions manifest not found: $ManifestPath"
+    }
+    Write-Host "No run-actions manifest found at $ManifestPath; skipping."
+    return
 }
 
 $CsrunTestVerificationTemplate = @'
