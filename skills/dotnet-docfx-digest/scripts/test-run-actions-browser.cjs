@@ -100,8 +100,11 @@ async function checkCopy(example, index, activate) {
     activate(button),
   ]);
   await status.filter({ hasText: label + ' script copied.' }).waitFor();
+  await button.locator('.bi-check-lg.link-success').waitFor();
+  assert.equal(await button.locator('svg').count(), 0);
   await checkClipboard(page, script);
   assert.deepEqual(await sample.boundingBox(), block, 'copy feedback must not move or resize the code block');
+  await button.locator('svg').waitFor();
   checkPageUnchanged();
 }
 

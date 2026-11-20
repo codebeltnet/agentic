@@ -52,8 +52,13 @@ function createAction(link, report) {
   button.setAttribute('aria-description', 'Press Shift+Enter to preview the PowerShell script.');
   button.innerHTML = '<svg class="docfx-run-icon-' + transport + '" width="25" height="20" viewBox="0 0 28 22" fill="currentColor" aria-hidden="true">' +
     icons[transport] + '<path class="docfx-run-play" d="M21.5 1.5 27 4.8l-5.5 3.3Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+  const icon = button.firstElementChild;
+  const check = document.createElement('i');
+  check.className = 'bi bi-check-lg link-success';
+  check.setAttribute('aria-hidden', 'true');
 
   let pending = false;
+  let resetIcon;
   async function act(preview) {
     if (pending) return;
     pending = true;
@@ -72,7 +77,10 @@ function createAction(link, report) {
           const text = await script;
           await clipboard.writeText(text);
         }
-        report(label + ' script copied.');
+        clearTimeout(resetIcon);
+        button.replaceChildren(check);
+        resetIcon = setTimeout(() => button.replaceChildren(icon), 1000);
+        report(label + ' script copied.', true);
       }
     } catch {
       report('Could not ' + (preview ? 'preview ' : 'copy ') + label + ' script.');
@@ -131,8 +139,9 @@ function attachToolbar(pre, links, assets) {
   status.setAttribute('role', 'status');
   status.className = 'docfx-run-status';
   let clearStatus;
-  function report(message) {
+  function report(message, visuallyHidden = false) {
     clearTimeout(clearStatus);
+    status.classList.toggle('visually-hidden', visuallyHidden);
     status.textContent = message;
     if (message) clearStatus = setTimeout(() => { status.textContent = ''; }, 3000);
   }
