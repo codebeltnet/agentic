@@ -26,7 +26,7 @@ public sealed record WorkerIdentity(string Name);
 
 ## Native: PowerShell 7 and a .NET 10-compatible SDK/runtime
 
-Network access to GitHub and NuGet is required. The block downloads published csrun v0.2.1 and verifies its SHA-256 before executing it with your permissions. No Docker is needed.
+The native block requires access to GitHub and NuGet. It downloads the latest stable release and checks the SHA-256 digest published by GitHub before executing the script with your permissions. [csrun source and releases](https://github.com/codebeltnet/csrun)
 
 ```powershell
 & {
@@ -67,15 +67,22 @@ function Assert-CsrunTestOutput([string] $Output) {
         throw 'Tests must execute at least once, all pass, and none fail or skip.'
     }
 }
-# Downloads and executes the published csrun v0.2.1 asset with your permissions.
-$engineDirectory = Join-Path ([IO.Path]::GetTempPath()) ('csrun-021-' + [guid]::NewGuid().ToString('N'))
+# Downloads and executes the latest stable csrun release with your permissions.
+# Source and release history: https://github.com/codebeltnet/csrun
+$engineDirectory = Join-Path ([IO.Path]::GetTempPath()) ('csrun-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $engineDirectory
 $enginePath = Join-Path $engineDirectory 'csrun.ps1'
 $process = $null
 try {
-    Invoke-WebRequest 'https://github.com/codebeltnet/csrun/releases/download/v0.2.1/csrun.ps1' -OutFile $enginePath
-    $actualHash = (Get-FileHash -LiteralPath $enginePath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actualHash -cne '6609acb7ac9df5cbbbf70d58b3dbc40f2d242e34831f89c7b42d7069015db802') { throw "csrun asset checksum mismatch: $actualHash" }
+    $release = Invoke-RestMethod 'https://api.github.com/repos/codebeltnet/csrun/releases/latest'
+    $assets = @($release.assets | Where-Object name -CEQ 'csrun.ps1')
+    if ($assets.Count -ne 1 -or $assets[0].digest -notmatch '^sha256:[0-9a-f]{64}$') {
+        throw "csrun release $($release.tag_name) must publish one csrun.ps1 asset with a SHA-256 digest."
+    }
+    $asset = $assets[0]
+    Invoke-WebRequest $asset.browser_download_url -OutFile $enginePath
+    $actualHash = (Get-FileHash -LiteralPath $enginePath -Algorithm SHA256).Hash
+    if ("sha256:$actualHash" -ne $asset.digest) { throw "csrun asset checksum mismatch: $actualHash" }
 $startInfo = [Diagnostics.ProcessStartInfo]::new('pwsh')
 foreach ($argument in @('-NoProfile','-NonInteractive','-File')) { $startInfo.ArgumentList.Add($argument) }
 $startInfo.ArgumentList.Add($enginePath)
@@ -164,4 +171,4 @@ if ($verifyTests) { Assert-CsrunTestOutput $output }
 
 ```
 
-The Native wrapper pins and verifies published csrun v0.2.1. The Docker convenience tag is mutable; pin an immutable image digest when available. See [presentation](presentation.md). The sample helper generates these blocks and the focused helper tests enforce parity with the maintained manifest.
+The native wrapper resolves the latest stable release each time it runs. For reproducible runs, use a reviewed local engine via the sample helper's `-EnginePath` option and pin the Docker image by digest. The focused helper tests enforce parity with the maintained manifest. [Presentation guidance](presentation.md)
