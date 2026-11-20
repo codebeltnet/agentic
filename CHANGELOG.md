@@ -4,25 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.13.0] - 2026-11-17
+## [0.13.0] - 2026-11-20
 
-This is a minor release that adds the `dotnet-csrun` skill for executable C# evidence, adds source-bound samples, contextual source references, repository-backed one-shot examples, and generated run actions to `dotnet-docfx-digest`, changes its example authoring to match the actual execution context, and fixes sample compile attribution and comma-separated `-Skill` lists in the sync script.
+This is a minor release that adds the `dotnet-csrun` skill for executable C# evidence, adds source-bound samples, contextual source references, repository-backed one-shot examples, and opt-in run actions to `dotnet-docfx-digest`, changes its example authoring to match the execution context, updates the .NET scaffolds to resolve current compatible test packages across major lines, and fixes sample compile attribution and comma-separated `-Skill` lists in the sync script.
 
 ### Added
 
-- `dotnet-csrun` skill for creating small complete C# console examples and genuine xUnit v3 tests, running them through `csrun` with exact package pins, and reporting independent native and Docker statuses of verified, compiled only, or unverified,
-- `dotnet-csrun` verify, repair, and scoped audit lifecycle for existing standalone source, with feasibility assessed before manifest construction and failures classified before any repair,
-- `dotnet-csrun` README entry, install example, validator, and eval fixtures, including a check that the published example matches its console fixture,
-- `dotnet-docfx-digest` source-bound sample contexts that bind fences to a maintained project and source file, reject unresolvable bindings, revalidate pages when the bound source or project changes, including deleted or moved inputs, and skip `.bot` directories during source discovery,
+- `dotnet-csrun` skill for creating, verifying, repairing, and auditing small standalone C# console examples and genuine xUnit v3 tests, executed through native or Docker transports with independent verified, compiled only, or unverified status per transport, together with its validator and eval fixtures,
+- `dotnet-docfx-digest` source-bound sample contexts that bind each C# fence to a maintained project and source file, and reject bindings that are not evaluated Compile items for the selected framework and configuration,
 - `dotnet-docfx-digest` rejection of a `ManagedApplicationFixture` entry point collapsed into a test-owned source unit, and of displayed excerpts excluded by conditional compilation for the selected framework and configuration,
-- `dotnet-docfx-digest` optional contextual source references that link maintained source after each example's immediate explanation, with contextual reference checks in its validation,
 - `dotnet-docfx-digest` repository-backed one-shot examples that pin a maintained test or application project when an API requires an actual application, runner, or distinct assembly identity instead of a standalone program,
+- `dotnet-docfx-digest` optional contextual source references that link maintained source after each example's immediate explanation,
 - `dotnet-docfx-digest` `generate-run-actions` command that inventories documentation examples, resolves their published dependencies or maintained integration tests, and generates paired Native and Docker PowerShell assets with a coverage report.
 
 ### Changed
 
-- `dotnet-docfx-digest` example authoring chooses standalone programs, library usage, multi-project scenarios, framework integrations, or labelled partial excerpts from the actual execution context instead of requiring every generated `csharp` fence to be a complete compilation unit,
-- `dotnet-docfx-digest` composes with `dotnet-csrun` for compatible standalone runtime examples, keeping its source discovery, placement, project-aware compilation, and DocFX build gates authoritative.
+- `dotnet-docfx-digest` example authoring chooses standalone programs, library usage, multi-project scenarios, framework integrations, or labelled partial excerpts from the actual execution context instead of requiring every generated `csharp` fence to be a complete compilation unit, and composes with `dotnet-csrun` for compatible standalone runtime examples while keeping its discovery, placement, project-aware compilation, and DocFX build gates authoritative,
+- `dotnet-new-app-slnx` and `dotnet-new-lib-slnx` resolve package versions to the newest listed stable candidate that is compatible with each selected target framework, instead of pinning the Codebelt 12.x and xUnit 4.x test-stack lines, and `dotnet-new-app-slnx` no longer aligns ASP.NET Core packages to the target framework major.
 
 ### Fixed
 
