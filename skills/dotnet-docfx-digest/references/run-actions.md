@@ -1,6 +1,6 @@
 # Generated run actions (opt-in)
 
-The logical command `dotnet-docfx-digest generate-run-actions` covers the active DocFX repository in one skill invocation. Resolve the loaded skill directory and start with the deterministic generator:
+The logical command `dotnet-docfx-digest csrun` covers the active DocFX repository in one skill invocation. Resolve the loaded skill directory and start with the deterministic generator:
 
 ```powershell
 pwsh -NoProfile -File <skill-dir>/scripts/generate-run-actions.ps1 -RepoRoot <repository> [-Docfx <docfx.json>]

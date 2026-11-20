@@ -1,7 +1,7 @@
 ---
 name: dotnet-docfx-digest
 description: >
-  Use when the user wants to create, repair, audit, or complete DocFX docs for .NET public APIs, or has changed public API that needs namespace pages, XML comments, overwrite files, extension-member tables, examples, or build verification. Exclude private/internal APIs.
+  Use when the user wants to create, repair, audit, or complete DocFX docs for .NET public APIs, or has changed public API that needs namespace pages, XML comments, overwrite files, extension-member tables, examples, or build verification. Use `dotnet-docfx-digest csrun` to generate Native and Docker run actions for DocFX examples. Exclude private/internal APIs.
 ---
 
 # .NET DocFX Digest Steward
@@ -14,7 +14,7 @@ Create and maintain developer-friendly DocFX documentation digests for .NET publ
 
 ## Opt-in run actions
 
-For `dotnet-docfx-digest generate-run-actions`, read [run actions](references/run-actions.md). Run the deterministic generator across the active DocFX repository, then resolve its outstanding examples in bounded project batches within the same skill invocation. Inspect source projects, evaluated references, published package assets and maintained tests, persist source-bound recipes, and regenerate until every example is paired or has a demonstrated technical limitation. Keep C#, source links and template customizations readable. Runtime verification is opt-in and independent for each transport. The generator uses the existing csrun contract and runs without model calls.
+For `dotnet-docfx-digest csrun` (also accepted as `dotnet-docfx-digest generate-run-actions`), read [run actions](references/run-actions.md). Run the deterministic generator across the active DocFX repository, then resolve its outstanding examples in bounded project batches within the same skill invocation. Inspect source projects, evaluated references, published package assets and maintained tests, persist source-bound recipes, and regenerate until every example is paired or has a demonstrated technical limitation. Keep C#, source links and template customizations readable. Runtime verification is opt-in and independent for each transport. The generator uses the existing csrun contract and runs without model calls.
 
 ## Critical
 

@@ -1328,7 +1328,7 @@
     },
     {
       "id": 124,
-      "prompt": "Use dotnet-docfx-digest generate-run-actions on a DocFX repository containing the original ManagedApplicationFixture worker test, a complete console example, a class-library example using Codebelt, Cuemon and Microsoft.Extensions with centrally versioned package references, and a partial integration excerpt. Resolve dependencies and add execution actions across the repository in this invocation. Preserve Context7 and source links. Do not execute the scripts.",
+      "prompt": "Use dotnet-docfx-digest csrun on a DocFX repository containing the original ManagedApplicationFixture worker test, a complete console example, a class-library example using Codebelt, Cuemon and Microsoft.Extensions with centrally versioned package references, and a partial integration excerpt. Resolve dependencies and add execution actions across the repository in this invocation. Preserve Context7 and source links. Do not execute the scripts.",
       "expected_output": "Uses repository-wide discovery and reports every example. Inspects the source project, central pins and published assets, then saves a source-bound recipe with a meaningful harness for the library example. Generates both transports for faithful cases, keeps all generated scripts unverified, and accounts for any unresolved excerpt. Preserves the original C# and source references, modern template controls and static fallback links. Identical reruns preserve bytes and timestamps.",
       "expectations": [
         "Uses the shared DocFX inventory and existing csrun generation helpers without per-file model calls",
