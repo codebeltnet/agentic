@@ -1193,6 +1193,152 @@
         "Interprets CS1061 extension-method failures as likely missing using directives when source/API evidence supports it",
         "Adds `using System.Linq;` for the LINQ `Select` failure and reruns sample validation instead of trial-and-error editing"
       ]
+    },
+    {
+      "prompt": "During a DocFX audit, add runtime evidence for an existing standalone published-package example and assess an ApplicationTest example that depends on an unpublished local application entry point. Preserve current docs structure and completion gates.",
+      "id": 114,
+      "expected_output": "Uses dotnet-csrun verify or authorized repair for the compatible standalone case, emits paired execution deliverables without forcing full blocks onto every type page, keeps application-owned startup on project-backed validation, and completes the existing DocFX gates.",
+      "expectations": [
+        "Uses one canonical source for standalone runtime evidence, records per-transport outcomes and does not claim published package execution verifies unpublished code.",
+        "Preserves application Main and assembly separation and retains docfx.cs --build-api-model --validate-samples --verify-docfx-build as authoritative documentation gates.",
+        "Keeps concise primary C# fences and existing UID placement; no deterministic validator launches an AI agent and no duplicate compiler or unrequested project scaffolding is added."
+      ]
+    },
+    {
+      "id": 115,
+      "prompt": "Improve the ManagedApplicationFixture<TEntryPoint> API-reference example using the attached InventoryWorker application and xUnit v3 test projects. The old page displays InventoryWorkerTest and WorkerProgram.Main together as one independently runnable file. Explain and preserve what the test proves, keep the API page concise, and validate the real application/test graph. Do not edit codebeltnet/xunit or use stub fixtures.",
+      "files": [
+        "scripts/fixtures/example-architecture/app/InventoryWorker/InventoryWorker.csproj",
+        "scripts/fixtures/example-architecture/app/InventoryWorker/Program.cs",
+        "scripts/fixtures/example-architecture/test/InventoryWorker.Tests/InventoryWorker.Tests.csproj",
+        "scripts/fixtures/example-architecture/test/InventoryWorker.Tests/InventoryWorkerTest.cs",
+        "scripts/fixtures/example-architecture/evidence.md"
+      ],
+      "expected_output": "Establishes the developer task and assembly-selection contract from the pinned implementation and functional tests. Presents labelled application/test files with actual project/package prerequisites, binds them to the maintained source/project context, preserves Main, fixture injection, Fact and assertions, and distinguishes build evidence from real runner execution. Recommends the upstream documentation correction separately without modifying that repository.",
+      "expectations": [
+        "Explains typeof(TEntryPoint).Assembly and the separate executable xUnit runner entry point; never claims the merged source is standalone",
+        "Keeps application-owned registration and startup in the application project and the real fixture assertion in the referencing test project",
+        "Does not remove Main, choose a startup object, replace the host, or register WorkerIdentity inside the test as a compilation repair",
+        "Uses labelled files and exact maintained project/source bindings or a concise essential example with a direct maintained integration link; does not merely concatenate fences",
+        "Reports compilation and actual execution evidence separately, including unexecuted runtime behavior",
+        "Keeps the existing full DocFX completion contract and csrun execution boundary"
+      ]
+    },
+    {
+      "id": 116,
+      "prompt": "Review proposed repairs to an entrypoint-owned ApplicationTest example: A deletes WorkerProgram.Main, B overrides ConfigureHost to register WorkerIdentity inside the test while claiming the application registered it, C substitutes a manually built Host, and D keeps two projects but says the assertion ran successfully based only on dotnet build. All variants compile. Decide which claims are justified and describe the smallest correct documentation repair.",
+      "expected_output": "Rejects all four as evidence of the original application registration. Explains the changed contract for each, preserves real application Main and registration, requires actual test execution for runtime claims, and treats semantic review as evidence-backed judgment rather than an invented universal regex diagnostic.",
+      "expectations": [
+        "Removing Main leaves the marker in the wrong assembly or removes required startup; compilation cannot establish the original contract",
+        "A test-owned registration or alternative host may be valid for a different scenario but cannot prove original application-owned registration",
+        "Successful compilation alone is labelled compilation only; no claimed successful test execution",
+        "Missing or invented dependencies remain unresolved failures and are repaired against actual project/package evidence",
+        "Does not weaken assertions or introduce skip markers to manufacture success"
+      ]
+    },
+    {
+      "id": 117,
+      "prompt": "Design concise DocFX examples for: a library method returning parsed inventory quantities; a complete single-file console program; a standalone xUnit v3 Fact; and ASP.NET Core middleware that adds a response header before the next delegate. The middleware has a maintained application and HTTP integration test. Use the smallest realistic representation, preserve lifecycle/pipeline semantics, and state what can actually be verified.",
+      "expected_output": "Classifies each execution model before authoring, keeps the ordinary library snippet concise and the console Program.cs executable, preserves real assertions for the testing API, and uses the middleware's actual registration, pipeline, request/response and host lifecycle. Uses csrun only for compatible standalone cases and project-aware validation for integration.",
+      "expectations": [
+        "Establishes intention, real dependencies/framework, intended observation and reproducibility before source generation",
+        "Does not force the library method into a console application or require every fence to independently execute",
+        "Preserves genuine xUnit Fact/fixture structure where it is the testing API's consumer contract",
+        "Middleware setup and ordering support the claimed HTTP behavior, with async/disposal lifecycles preserved",
+        "No runtime success is inferred from compilation and no implementation metadata substitutes for behavior"
+      ]
+    },
+    {
+      "id": 118,
+      "prompt": "An API page needs a short fixture example linking to its maintained multi-project integration test, plus an intentionally partial assertion excerpt from that test. The existing context file has valid DocFX UID ownership, conditional target-framework examples, a pre-existing approved sample waiver, and UTF-8 BOM/CRLF. Extend the page without rewriting unrelated content. Another proposal labels a missing project dependency as a successful standalone example.",
+      "expected_output": "Keeps essential target usage and prerequisites concise, labels the excerpt and binds it to its real source/project, links the working integration graph, and rejects the missing dependency/standalone claim. Preserves existing UID structure, conditional asset selection, strict waiver rules, encoding, line endings and completion gates.",
+      "expectations": [
+        "A maintained link supplements rather than replaces local target API usage and compilation",
+        "The excerpt is explicitly partial, has accurate containing context, and is never represented as an independently runnable file",
+        "Source identity and evaluated Compile membership must hold; an unrelated compiling project or unavailable dependency is not accepted",
+        "Existing multiple-class files, ordinary library snippets and Program.cs examples retain their validation behavior",
+        "Preserves exact overwrite UID ownership, conditional TFM requirements, strict existing waiver approval and Markdown encoding/line endings"
+      ]
+    },
+    {
+      "id": 123,
+      "prompt": "Refine the ManagedApplicationFixture API example at https://xunit.codebelt.net/api/Codebelt.Extensions.Xunit.Hosting.ManagedApplicationFixture-1.html. Use codebeltnet/xunit test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/BootstrapperMinimalWorkerApplicationTestTest.cs. Give one-shot native and Docker commands that execute the original maintained test; do not modify that repository or invent a host.",
+      "expected_output": "Classifies repository-backed integration, inspects the actual project graph and pinned source, and delivers two independent pinned-snapshot PowerShell blocks with positive exact-test execution verification and cleanup. Shows a concise meaningful excerpt and direct implementation/application/test/project links. Reports actual evidence separately per environment and preserves diagnostics if unavailable.",
+      "expectations": [
+        "Preserves the original application implementation, project references, fixture lifecycle and assertions; no multi-project csrun schema or engine changes.",
+        "Requires exact intended test identity, positive execution and pass counts plus process status; rejects wrong filters, zero tests and skipped tests.",
+        "Both commands include all setup and cleanup and state prerequisites; unavailable environments or dependencies are explicitly unverified with diagnostics.",
+        "A source-only fallback is used only when faithful execution is unavailable, without a verified runnable label; optional further exploration can also accompany successful execution."
+      ]
+    },
+    {
+      "id": 119,
+      "prompt": "Improve a DocFX page for a simple StockQuantity.Parse(string) API that converts text to an inventory quantity. Its existing complete C# example prints 42 from the input string and has a working one-shot execution pair. Repository discovery finds only the parser implementation and tests repeating this same conversion; there is no broader usage example adding useful context. Keep this page useful for a developer copying and adapting the example.",
+      "expected_output": "Keeps purpose, concise meaningful C#, expected result and existing executable reproduction. Does not add a Further exploration section or arbitrary repository links when the discovered material adds no educational depth. Retains existing compilation and completion gates.",
+      "expectations": [
+        "The primary example is understandable without external reading and does not acquire unrelated setup or project scaffolding",
+        "No link quota or mandatory five-heading layout is imposed; duplicated conversion tests do not justify unnecessary references",
+        "Existing one-shot blocks, required C# usage, compilation and full DocFX completion requirements remain intact"
+      ]
+    },
+    {
+      "id": 120,
+      "prompt": "Supplement the existing ManagedApplicationFixture worker example and its successful pinned native/Docker one-shot blocks with optional learning depth. Inspect https://github.com/codebeltnet/xunit/blob/main/app/Codebelt.Extensions.Xunit.Hosting.BootstrapperMinimalWorker.App/Program.cs, https://github.com/codebeltnet/xunit/blob/main/test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/BootstrapperMinimalWorkerApplicationTestTest.cs and https://github.com/codebeltnet/xunit/blob/main/test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/Codebelt.Extensions.Xunit.Hosting.FunctionalTests.csproj. Keep the principal usage understandable on the page. Do not edit the upstream repository.",
+      "expected_output": "Preserves the self-sufficient example, its expected assertions, assembly separation and verified reproduction. After outcome/execution guidance, adds short source references explaining omitted entry-point registration/startup, ApplicationTest/fixture verification and actual project references/frameworks. Distinguishes maintained branch exploration from the pinned execution revision without requiring repository browsing to run the example.",
+      "expectations": [
+        "Inspects all new targets and accurately relates their contents to ManagedApplicationFixture and ApplicationTest",
+        "Explains the educational value of each selected reference rather than saying only see source or GitHub",
+        "Does not attribute inherited package/runner settings to explicit declarations in the project file",
+        "Successful runnable execution still permits optional exploration after purpose, essential C#, outcome and reproduction",
+        "Preserves pinned execution evidence, exact-test success checks and independent native/Docker blocks without expanding csrun manifest v1",
+        "Does not replace required local C# usage or compilation/completion gates with source links"
+      ]
+    },
+    {
+      "id": 121,
+      "prompt": "Document a partial assertion from the attached InventoryWorker functional test, retaining a meaningful principal fixture example. The excerpt omits imports and fixture initialization. Offline project compilation is available, but runtime verification is unavailable in this environment. Explain what is omitted and offer optional maintained source context using the supplied application, test and project evidence. Do not claim the excerpt is independently executable or that compilation proves it ran; retain any existing working one-shot reproduction guidance.",
+      "files": [
+        "scripts/fixtures/example-architecture/app/InventoryWorker/InventoryWorker.csproj",
+        "scripts/fixtures/example-architecture/app/InventoryWorker/Program.cs",
+        "scripts/fixtures/example-architecture/test/InventoryWorker.Tests/InventoryWorker.Tests.csproj",
+        "scripts/fixtures/example-architecture/test/InventoryWorker.Tests/InventoryWorkerTest.cs",
+        "scripts/fixtures/example-architecture/evidence.md"
+      ],
+      "expected_output": "Labels the partial excerpt and omitted containing context, retains essential fixture usage and assertions, and binds compilation to the supplied maintained source/project. Explains how application, functional test and project references teach registration/startup, fixture initialization and assembly ownership. Distinguishes compilation from unavailable runtime evidence and does not downgrade an available faithful one-shot path to source-only guidance.",
+      "expectations": [
+        "States concrete omissions, prerequisites, containing project and runtime verification limitation on the page",
+        "Uses exact source/project bindings for the excerpt, preserving actual application-owned registration and entry point",
+        "Explains what readers gain from each selected maintained reference while leaving the main example understandable without visiting it",
+        "No invented upstream InventoryWorker path, dummy host, weakened assertion or new skip waiver is introduced",
+        "Unavailable local runtime verification does not remove working one-shot reproduction or relax the existing completion contract"
+      ]
+    },
+    {
+      "id": 122,
+      "prompt": "Review a proposal to add source references to the existing worker fixture DocFX example. Proposed links include the maintained BootstrapperMinimalWorker Program.cs and corresponding functional test, an unrelated passing compression test, a guessed examples/ManagedWorkerDemo.cs path, and a generic repository homepage. The page already has valid pinned links and a Related: section; one existing historical URL lookup now times out. Select only useful verified additions, explain their learning value, and preserve required C# and execution guidance.",
+      "expected_output": "Reuses discovered authoritative evidence, inspects proposed targets, rejects unrelated and invented/unverified additions, avoids redundant homepage links and duplicate references, preserves valid pinned/Related content and the timed-out historical URL, and explains any useful new source reference after the self-contained example and execution path. Uses editorial judgment rather than adding network crawling or keyword quality rules to the fast validator.",
+      "expectations": [
+        "No guessed path or unrelated test is added merely because it is in the same repository or passes",
+        "New source claims are backed by inspected contents and specific API relationships",
+        "Existing valid links and Related: content remain, and a timeout is not treated as confirmed HTTP 404",
+        "Repeated destinations are consolidated unless revision or learning value justifies both",
+        "C# target usage, one-shot reproduction, source-bound compilation and full DocFX completion checks remain required",
+        "Does not implement a second repository search subsystem, fast-path network checks or subjective keyword heuristics"
+      ]
+    },
+    {
+      "id": 124,
+      "prompt": "Use dotnet-docfx-digest csrun on a DocFX repository containing the original ManagedApplicationFixture worker test, a complete console example, a class-library example using Codebelt, Cuemon and Microsoft.Extensions with centrally versioned package references, and a partial integration excerpt. Resolve dependencies and add execution actions across the repository in this invocation. Preserve Context7 and source links. Do not execute the scripts.",
+      "expected_output": "Uses repository-wide discovery and reports every example. Inspects the source project, central pins and published assets, then completes the visible library example and saves a source-bound manifest recipe. Generates both transports for faithful cases, keeps all generated scripts unverified, and accounts for any unresolved excerpt. Preserves the documented operation, source references, modern template controls and static fallback links. Both standalone scripts embed the complete visible C#. Identical reruns preserve bytes and timestamps.",
+      "expectations": [
+        "Uses the shared DocFX inventory and existing csrun generation helpers without per-file model calls",
+        "Principal integration scripts retain the original pinned repository, project and exact test",
+        "The library recipe uses exact dependency pins from project and package evidence. The visible C# includes its invocation and observable result or assertion, and both standalone scripts execute that same source.",
+        "Unexplored dependencies or missing context remain Unresolved, so the report cannot imply full paired coverage",
+        "Both copy controls fetch and copy the entire corresponding script without executing it",
+        "Source, overwrite UIDs, template customizations and no-JavaScript fallback remain intact",
+        "Repeated generation is incremental, source changes invalidate assets and generation does not claim Verified"
+      ]
     }
   ]
 }

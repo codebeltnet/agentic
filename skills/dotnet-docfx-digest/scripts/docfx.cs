@@ -1,8 +1,10 @@
+#:package MSBuild.StructuredLogger@2.3.269
 #:property TargetFramework=net10.0
 #:property Nullable=enable
 #:property LangVersion=latest
 #:property PublishAot=false
 #:package System.Reflection.MetadataLoadContext@9.0.0
+#:package Microsoft.CodeAnalysis.CSharp@5.0.0
 
 using System.Diagnostics;
 using System.Globalization;
@@ -14,6 +16,11 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.Build.Framework;
+using BuildLog = Microsoft.Build.Logging.StructuredLogger;
 
 return DocfxValidator.Run(args);
 
@@ -92,6 +99,62 @@ internal static class DocfxValidator
 
         try
         {
+            if (options.RunActionInventory)
+            {
+                var root = Path.GetFullPath(string.IsNullOrWhiteSpace(options.RepoRoot) ? "." : options.RepoRoot);
+                var config = ResolveDocfxPath(root, options.DocfxPath) ?? throw new IOException("DocFX configuration not found.");
+                var report = new Report();
+                var directory = Path.GetDirectoryName(config)!;
+                var projects = DiscoverProjects(config, directory, report, out var groups);
+                var files = DiscoverMarkdown(root, config, directory, report);
+                var workspace = new ValidationWorkspace
+                {
+                    RepoRoot = root, DocfxPath = config, DocfxWorkspace = directory, Projects = projects,
+                    LibraryProjects = projects.Where(p => !p.IsTest).ToList(), MarkdownFiles = files,
+                    MarkdownTextByPath = new(StringComparer.OrdinalIgnoreCase), OverwriteSections = [], SkipAllowlistEntries = []
+                };
+                EnsureNamespaceProjectMap(workspace);
+                var platformReferences = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
+                    .Where(p => Path.GetFileName(p).StartsWith("System.", StringComparison.Ordinal) || Path.GetFileName(p) is "netstandard.dll" or "mscorlib.dll")
+                    .Select(p => MetadataReference.CreateFromFile(p)).ToArray();
+                var examples = files.SelectMany(file =>
+                {
+                    var sections = ExtractOverwriteSections(file);
+                    return ExtractFences(file).Select(sample =>
+                    {
+                        var owner = ResolveSampleOwner(sections, sample);
+                        var error = ResolveSampleContext(sample, root, out var context);
+                        var code = context is null ? sample.Code : string.Join("\n", sample.Code.Split('\n').Skip(2));
+                        var tree = CSharpSyntaxTree.ParseText(code);
+                        var syntax = tree.GetCompilationUnitRoot();
+                        var sourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(code.Replace("\r\n", "\n").TrimEnd('\r', '\n'))));
+                        var ns = LongestNamespacePrefix(owner.Uid ?? Path.GetFileNameWithoutExtension(file), workspace);
+                        var standalone = !tree.GetDiagnostics().Any(d => d.Severity == DiagnosticSeverity.Error) &&
+                            (syntax.Members.OfType<GlobalStatementSyntax>().Any() || syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Any(m => m.Identifier.ValueText == "Main"));
+                        var isTest = syntax.DescendantNodes().OfType<AttributeSyntax>().Any(a =>
+                            a.Name.GetLastToken().ValueText is "Fact" or "Theory" or "FactAttribute" or "TheoryAttribute");
+                        var compilation = CSharpCompilation.Create("DocfxRunActionEligibility", [tree], platformReferences,
+                            new CSharpCompilationOptions(isTest ? OutputKind.DynamicallyLinkedLibrary : OutputKind.ConsoleApplication));
+                        var eligible = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).All(d =>
+                            isTest && d.Location.IsInSource && d.Id is "CS0246" or "CS0103" &&
+                            tree.GetText().ToString(d.Location.SourceSpan) is "Xunit" or "Fact" or "Theory" or "Assert");
+                        return new { sample.File, sample.StartLine, sample.Code, owner.Uid,
+                            Source = context?.Source, Project = context?.Project, ContextError = error, Standalone = standalone,
+                            Eligible = eligible, IsTest = isTest, SourceSha256 = sourceHash,
+                            OwnerProjects = ns is null ? [] : workspace.NamespaceProjects[ns].Select(p => Rel(root, p.Path)).ToArray(),
+                            Imports = syntax.DescendantNodes().OfType<UsingDirectiveSyntax>().Select(u => u.Name?.ToString()).ToArray() };
+                    });
+                }).ToArray();
+                var projectEvidence = projects.Select(p => new
+                {
+                    Path = Rel(root, p.Path), p.PackageId, p.AssemblyName, p.TargetFrameworks,
+                    MetadataFrameworks = groups.Where(g => g.ProjectPaths.Any(path => PathsEqual(path, p.Path)))
+                        .Select(g => g.Properties.GetValueOrDefault("TargetFramework")).Where(f => f is not null).Distinct(),
+                    BuildInputs = RunActionProjectInputs(root, p.Path)
+                });
+                Console.WriteLine(JsonSerializer.Serialize(new { config, examples, projects = projectEvidence, warnings = report.Warnings }, JsonOptions));
+                return 0;
+            }
             if (options.WriteOverwriteRequestPath is not null)
             {
                 _quietProgress = options.QuietProgress;
@@ -116,6 +179,21 @@ internal static class DocfxValidator
             }
 
             return (int)ExitCode.InternalError;
+        }
+    }
+
+    private static IEnumerable<string> RunActionProjectInputs(string root, string project)
+    {
+        // These are inspection inputs. Imports and conditions still require MSBuild evaluation
+        // for the chosen TFM before a package/framework pin can be authored.
+        for (var directory = Path.GetDirectoryName(project); directory is not null && (PathsEqual(directory, root) || IsPathUnderDirectory(directory, root));
+            directory = Path.GetDirectoryName(directory))
+        {
+            foreach (var name in new[] { "Directory.Packages.props", "Directory.Build.props", "Directory.Build.targets" })
+            {
+                var path = Path.Combine(directory, name);
+                if (File.Exists(path)) { yield return Rel(root, path); }
+            }
         }
     }
 
@@ -414,6 +492,21 @@ internal static class DocfxValidator
         ValidateRequiredExamples(repoRoot, docfxWorkspace, allOverwriteSections, api, options, changedFiles, scope, workspace.NamespaceProjects, report);
         WritePhase(options, report, "required example validation", phaseTimer.Elapsed);
 
+        // Explicit source bindings are checked without MSBuild on the fast path. They are not waivers.
+        foreach (var md in workspace.MarkdownFiles)
+        {
+            if (options.ChangedOnly && changedFiles is not null && !ShouldValidateSamplePage(workspace, md, changedFiles)) { continue; }
+            foreach (var sample in ExtractFences(md, workspace.ReadMarkdown(md)))
+            {
+                var error = ResolveSampleContext(sample, repoRoot, out _);
+                if (error is not null)
+                {
+                    report.Errors.Add(new Diagnostic("SAMPLE_CONTEXT_INVALID", Rel(repoRoot, md), null,
+                        $"C# fence #{sample.FenceIndex} (line {sample.StartLine}): {error}"));
+                }
+            }
+        }
+
         // 9. Extract and compile C# documentation samples (opt-in: the only path that compiles).
         if (options.ValidateSamples)
         {
@@ -474,8 +567,8 @@ internal static class DocfxValidator
             }
         }
 
-        bool hasSampleError = report.Errors.Any(e => e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_STRUCTURE_INVALID");
-        bool hasOtherError = report.Errors.Any(e => e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_STRUCTURE_INVALID");
+        bool hasSampleError = report.Errors.Any(e => e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_STRUCTURE_INVALID" or "SAMPLE_CONTEXT_INVALID");
+        bool hasOtherError = report.Errors.Any(e => e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_STRUCTURE_INVALID" and not "SAMPLE_CONTEXT_INVALID");
 
         report.Status = report.Errors.Count == 0 ? "passed" : "failed";
         report.Summary.Errors = report.Errors.Count;
@@ -1486,7 +1579,8 @@ internal static class DocfxValidator
         foreach (var directory in Directory.GetDirectories(sourceDirectory))
         {
             var name = Path.GetFileName(directory);
-            if (IgnoredDirectorySegments.Contains(name, StringComparer.OrdinalIgnoreCase))
+            if (name.Equals(".bot", StringComparison.OrdinalIgnoreCase) ||
+                IgnoredDirectorySegments.Contains(name, StringComparer.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -1897,7 +1991,10 @@ internal static class DocfxValidator
                     case "PackageReference":
                         var include = el.Attribute("Include")?.Value ?? string.Empty;
                         if (include.Contains("Microsoft.NET.Test.Sdk", StringComparison.OrdinalIgnoreCase) ||
-                            include.Contains("xunit", StringComparison.OrdinalIgnoreCase) ||
+                            include.Equals("xunit", StringComparison.OrdinalIgnoreCase) ||
+                            include.Equals("xunit.v3", StringComparison.OrdinalIgnoreCase) ||
+                            include.StartsWith("xunit.runner.", StringComparison.OrdinalIgnoreCase) ||
+                            include.StartsWith("xunit.v3.runner.", StringComparison.OrdinalIgnoreCase) ||
                             include.StartsWith("NUnit", StringComparison.OrdinalIgnoreCase) ||
                             include.Contains("MSTest", StringComparison.OrdinalIgnoreCase))
                         {
@@ -4707,6 +4804,29 @@ internal static class DocfxValidator
         return changedFiles.Contains(Path.GetFullPath(page)) || changedFiles.Any(IsChangedDocfxConfig);
     }
 
+    private static bool ShouldValidateSamplePage(ValidationWorkspace ws, string page, HashSet<string> changedFiles)
+    {
+        if (changedFiles.Contains(Path.GetFullPath(page)) || changedFiles.Any(IsChangedDocfxConfig)) { return true; }
+        // Read the binding before validating its files: deleted/moved sources and projects must
+        // still select their pages so ResolveSampleContext can report the stale documentation.
+        foreach (var fence in ExtractFences(page, ws.ReadMarkdown(page)))
+        {
+            foreach (var line in fence.Code.Replace("\r\n", "\n").Split('\n'))
+            {
+                var prefix = line.StartsWith("// docfx-context: ", StringComparison.Ordinal) ? "// docfx-context: " :
+                    line.StartsWith("// docfx-source: ", StringComparison.Ordinal) ? "// docfx-source: " : null;
+                if (prefix is null) { continue; }
+                try
+                {
+                    var path = Path.GetFullPath(Path.Combine(ws.RepoRoot, line[prefix.Length..].Trim()));
+                    if (changedFiles.Contains(path)) { return true; }
+                }
+                catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException) { }
+            }
+        }
+        return false;
+    }
+
     private static bool ShouldValidateRequiredExampleTarget(ApiTargetInfo target, HashSet<string> changedFiles)
     {
         foreach (var changedFile in changedFiles)
@@ -4814,6 +4934,21 @@ internal static class DocfxValidator
         }
 
         var combinedCode = string.Join(Environment.NewLine, codeBlocks);
+        // This contract is specific to Codebelt's entrypoint-owned fixture, not a naming heuristic
+        // for arbitrary hosting APIs. Inspect each source unit separately; never merge assemblies.
+        if (target.Uid is "Codebelt.Extensions.Xunit.Hosting.ManagedApplicationFixture`1" or
+            "Codebelt.Extensions.Xunit.Hosting.ApplicationTest`2")
+        {
+            foreach (var code in codeBlocks)
+            {
+                var collapsedType = FindLocalApplicationEntryPoint(code);
+                if (collapsedType is not null)
+                {
+                    return new ExampleQualityResult(false, "EXAMPLE_APPLICATION_ASSEMBLY_COLLAPSED",
+                        $"The example for `{target.DisplayName}` declares fixture entry-point type `{collapsedType}` in the test source unit. ManagedApplicationFixture selects typeof(TEntryPoint).Assembly; a library compile cannot prove the application entry point, and an executable xUnit v3 runner owns its own entry point. Keep the real Main and application registrations in a separate application project, reference it from the test project, label both files, and bind the fences to maintained project/source context. Do not remove Main or substitute test-owned registration to obtain a passing build.", 7);
+                }
+            }
+        }
         var codeWithoutCommentsOrStrings = StripCodeCommentsAndStrings(combinedCode);
         if (Regex.IsMatch(codeWithoutCommentsOrStrings,
                 @"\.\s*GetType\s*\(\s*\)\s*\.\s*(?:Name|FullName)\b"))
@@ -4941,6 +5076,45 @@ internal static class DocfxValidator
         }
 
         return ExampleQualityResult.Success;
+    }
+
+    private static string? FindLocalApplicationEntryPoint(string code)
+    {
+        var tree = CSharpSyntaxTree.ParseText(code);
+        var root = tree.GetCompilationUnitRoot();
+        var model = CSharpCompilation.Create("DocfxArchitecture", [tree]).GetSemanticModel(tree);
+        // Syntax-only evidence: only an unqualified, unambiguous imported Codebelt fixture or its
+        // fully qualified name, and a matching local declaration. Aliases/conditional code that
+        // cannot be established here stay with build-backed verification and source review.
+        var imported = root.Usings.Any(u => u.Alias is null && u.Name?.ToString() == "Codebelt.Extensions.Xunit.Hosting");
+        foreach (var fixture in root.DescendantNodes().OfType<GenericNameSyntax>()
+                     .Where(n => n.Identifier.ValueText == "ManagedApplicationFixture" && n.Arity == 1))
+        {
+            // Establish test-class context rather than rejecting an application that legitimately
+            // contains a marker and uses a fixture elsewhere. Never infer this from class names.
+            var baseType = fixture.Ancestors().OfType<SimpleBaseTypeSyntax>().FirstOrDefault();
+            if (baseType is null || !baseType.Type.DescendantNodesAndSelf().OfType<GenericNameSyntax>()
+                    .Any(n => n.Identifier.ValueText == "ApplicationTest" && n.Arity == 2 &&
+                              n.TypeArgumentList.Arguments[1].DescendantNodesAndSelf().Contains(fixture))) { continue; }
+            var qualified = fixture.Parent is QualifiedNameSyntax q && q.Right == fixture;
+            if (qualified ? ((QualifiedNameSyntax)fixture.Parent!).Left.ToString().Replace("global::", "") != "Codebelt.Extensions.Xunit.Hosting" : !imported)
+            {
+                continue;
+            }
+
+            var argument = fixture.TypeArgumentList.Arguments[0];
+            if (argument is not IdentifierNameSyntax entryPoint) { continue; }
+            var type = model.GetTypeInfo(argument).Type;
+            // A Main is not required for this diagnostic: deleting it leaves the marker in the
+            // test assembly and still violates the fixture's assembly-selection contract.
+            if (type is not null && type.TypeKind != TypeKind.Error && type.DeclaringSyntaxReferences.Any(r => r.SyntaxTree == tree) &&
+                !root.Usings.Any(u => u.Alias?.Name.Identifier.ValueText == entryPoint.Identifier.ValueText) &&
+                !root.DescendantNodes().OfType<TypeDeclarationSyntax>().Any(t => t.Identifier.ValueText == "ManagedApplicationFixture"))
+            {
+                return entryPoint.Identifier.ValueText;
+            }
+        }
+        return null;
     }
 
     private static bool IsApplicationEntryPointTarget(ApiTargetInfo target)
@@ -5226,6 +5400,58 @@ internal static class DocfxValidator
     // Sample validation
     // ----------------------------------------------------------------------
 
+    private static string? ResolveSampleContext(SampleFence sample, string repoRoot, out SampleContext? context)
+    {
+        context = null;
+        var lines = sample.Code.Replace("\r\n", "\n").Split('\n');
+        if (!lines.Any(l => l.StartsWith("// docfx-context:", StringComparison.Ordinal) ||
+                            l.StartsWith("// docfx-source:", StringComparison.Ordinal))) { return null; }
+        if (lines.Length < 3 || !lines[0].StartsWith("// docfx-context: ", StringComparison.Ordinal) ||
+            !lines[1].StartsWith("// docfx-source: ", StringComparison.Ordinal))
+        {
+            return "Use exactly two leading lines: // docfx-context: <repo-relative.csproj> and // docfx-source: <repo-relative.cs>. Both files must exist; this is source-backed compilation, not a skip marker.";
+        }
+        try
+        {
+            var project = ResolveContextPath(repoRoot, lines[0][18..].Trim(), ".csproj");
+            var source = ResolveContextPath(repoRoot, lines[1][17..].Trim(), ".cs");
+            var excerpt = string.Join("\n", lines.Skip(2)).Trim('\n');
+            var maintained = File.ReadAllText(source).Replace("\r\n", "\n").Trim('\n');
+            if (string.IsNullOrWhiteSpace(excerpt) || !("\n" + maintained + "\n").Contains("\n" + excerpt + "\n", StringComparison.Ordinal))
+            {
+                return "The fence must match a complete maintained source file or a contiguous whole-line excerpt exactly (apart from CRLF/LF and outer blank lines). Repair source/documentation drift; do not remove Main or change assertions only in the displayed copy.";
+            }
+            context = new SampleContext(project, source);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return $"Invalid maintained project/source context: {ex.Message}";
+        }
+    }
+
+    private static string ResolveContextPath(string root, string relative, string extension)
+    {
+        if (Path.IsPathRooted(relative) || !relative.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException($"Expected a repository-relative {extension} path: '{relative}'.");
+        }
+        var full = Path.GetFullPath(Path.Combine(root, relative));
+        if (!IsPathUnderDirectory(full, root) || !File.Exists(full))
+        {
+            throw new IOException($"The context file must exist inside the repository: '{relative}'.");
+        }
+        // Copying a linked source outside the repository would give a misleading identity.
+        for (var current = full; IsPathUnderDirectory(current, root); current = Path.GetDirectoryName(current)!)
+        {
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new IOException($"Linked context paths are unsupported: '{relative}'. Use a maintained file inside the repository.");
+            }
+        }
+        return full;
+    }
+
     private static void ValidateSamples(ValidationWorkspace ws, Options options, HashSet<string>? changedFiles,
         bool hasStrongNameKey, int defaultParallelism, Report report)
     {
@@ -5236,7 +5462,7 @@ internal static class DocfxValidator
         var samples = new List<SampleFence>();
         foreach (var md in ws.MarkdownFiles)
         {
-            if (options.ChangedOnly && changedFiles is not null && !changedFiles.Contains(Path.GetFullPath(md)))
+            if (options.ChangedOnly && changedFiles is not null && !ShouldValidateSamplePage(ws, md, changedFiles))
             {
                 continue;
             }
@@ -5254,6 +5480,7 @@ internal static class DocfxValidator
         // 2. Pre-validate structure (skip/structure checks) — no compilation.
         //    Record which samples need compilation and their original index for deterministic ordering.
         var toCompile = new List<(SampleFence Sample, int OriginalIndex)>(samples.Count);
+        var contexts = new Dictionary<int, SampleContext>();
         for (int i = 0; i < samples.Count; i++)
         {
             var sample = samples[i];
@@ -5312,6 +5539,13 @@ internal static class DocfxValidator
                 }
             }
 
+            if (ResolveSampleContext(sample, repoRoot, out var context) is not null) { continue; } // reported by fast checks
+            if (context is not null)
+            {
+                contexts[i] = context;
+                toCompile.Add((sample, i));
+                continue; // Excerpts compile in their maintained source/project, not in an invented library.
+            }
             var structureError = ValidateSampleStructure(sample.Code);
             if (structureError is not null)
             {
@@ -5342,6 +5576,7 @@ internal static class DocfxValidator
         var sampleRefs = new Dictionary<int, SampleReferenceSet>();
         foreach (var entry in toCompile)
         {
+            if (contexts.ContainsKey(entry.OriginalIndex)) { continue; }
             var kind = IsProgramCsExample(entry.Sample.Code) ? "app" : "lib";
             var refSet = ResolveSampleReferenceSet(entry.Sample, ws, kind, packageMode);
             var key = $"{kind}::{(refSet.IsPackageMode ? "pkg" : "proj")}::{string.Join(";", refSet.Items)}";
@@ -5368,17 +5603,116 @@ internal static class DocfxValidator
             // diagnostic ordering regardless of MSBuild project completion order.
             var results = new SampleCompileResult?[samples.Count];
             var workers = new List<SampleWorker>(toCompile.Count);
+            var contextRoot = Path.Combine(tempRoot, "context-repo");
+            if (contexts.Count > 0)
+            {
+                CopyDirectory(repoRoot, contextRoot, CancellationToken.None);
+            }
+            var compileItems = new Dictionary<string, HashSet<string>?>(StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < toCompile.Count; i++)
             {
                 var (sample, originalIndex) = toCompile[i];
+                if (contexts.TryGetValue(originalIndex, out var context))
+                {
+                    var project = Path.Combine(contextRoot, Path.GetRelativePath(repoRoot, context.Project));
+                    var source = Path.Combine(contextRoot, Path.GetRelativePath(repoRoot, context.Source));
+                    if (!compileItems.TryGetValue(project, out var items))
+                    {
+                        var evaluation = RunProcess("dotnet", $"msbuild \"{project}\" -nologo -p:Configuration={options.Configuration} -getProperty:TargetFramework,TargetFrameworks -getItem:Compile",
+                            contextRoot, permission: ProcessPermission.SampleCompile);
+                        items = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        try
+                        {
+                            if (evaluation.ExitCode != 0) { throw new InvalidOperationException(Trim(evaluation.StdOut + evaluation.StdErr)); }
+                            using var declared = JsonDocument.Parse(evaluation.StdOut);
+                            var properties = declared.RootElement.GetProperty("Properties");
+                            var singleFramework = properties.GetProperty("TargetFramework").GetString() ?? "";
+                            var declaredFrameworks = singleFramework + ";" + properties.GetProperty("TargetFrameworks").GetString();
+                            if (!declaredFrameworks.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                    .Contains(framework, StringComparer.OrdinalIgnoreCase))
+                            {
+                                throw new InvalidOperationException($"{framework} is not a declared framework of this project ({declaredFrameworks.Trim(';')}). Select its actual runnable framework with --framework; do not silently retarget the project.");
+                            }
+                            if (!string.Equals(singleFramework, framework, StringComparison.OrdinalIgnoreCase))
+                            {
+                                evaluation = RunProcess("dotnet", $"msbuild \"{project}\" -nologo -p:TargetFramework={framework} -p:Configuration={options.Configuration} -getItem:Compile",
+                                    contextRoot, permission: ProcessPermission.SampleCompile);
+                                if (evaluation.ExitCode != 0) { throw new InvalidOperationException(Trim(evaluation.StdOut + evaluation.StdErr)); }
+                            }
+                            using var json = JsonDocument.Parse(evaluation.StdOut);
+                            foreach (var item in json.RootElement.GetProperty("Items").GetProperty("Compile").EnumerateArray())
+                            {
+                                items.Add(Path.GetFullPath(item.GetProperty("FullPath").GetString()!));
+                            }
+                        }
+                        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException)
+                        {
+                            items = null;
+                            report.Errors.Add(new Diagnostic("SAMPLE_CONTEXT_INVALID", Rel(repoRoot, sample.File), null,
+                                $"Cannot establish evaluated Compile membership for '{Rel(repoRoot, context.Project)}': {ex.Message}. Use a supported maintained project; no compilation success is inferred."));
+                        }
+                        compileItems[project] = items;
+                    }
+                    if (items is null) { continue; } // The project's evaluation failure was reported once.
+                    if (!items.Contains(source))
+                    {
+                        report.Errors.Add(new Diagnostic("SAMPLE_CONTEXT_INVALID", Rel(repoRoot, sample.File), null,
+                            $"Fence #{sample.FenceIndex}: '{Rel(repoRoot, context.Source)}' is not an evaluated Compile item of '{Rel(repoRoot, context.Project)}' for {framework}/{options.Configuration}. Correct the project/source binding or conditional framework; an unrelated project build does not validate this fence."));
+                        continue;
+                    }
+                    workers.Add(new SampleWorker(originalIndex, Path.GetDirectoryName(project)!, project, source, "", true));
+                    continue;
+                }
                 workers.Add(CreateSampleWorker(tempRoot, i + 1, originalIndex, sample,
                     sampleRefs[originalIndex], framework));
             }
 
+            if (workers.Count == 0) { return; }
             var batchResult = CompileSampleBatch(tempRoot, workers, options.Configuration,
-                parallelism, hasStrongNameKey);
+                parallelism, hasStrongNameKey, contexts.Count > 0 ? framework : null);
+            string? evidenceError = null;
+            var buildEvidence = contexts.Count > 0 ? ReadSampleBuildEvidence(Path.Combine(tempRoot, "samples.binlog"), out evidenceError) : null;
             foreach (var worker in workers)
             {
+                if (worker.ProjectContext)
+                {
+                    var projectEvidence = buildEvidence!.Where(p => PathsEqual(p.Project, worker.ProjectPath)).ToList();
+                    var compilations = projectEvidence.Where(p => p.Succeeded == true && evidenceError is null &&
+                            string.Equals(p.Framework, framework, StringComparison.OrdinalIgnoreCase) &&
+                            string.Equals(p.Configuration, options.Configuration, StringComparison.OrdinalIgnoreCase)).SelectMany(p => p.Compilations)
+                        .Where(c => c.SourceFiles.Any(f => PathsEqual(f.Path, worker.SourcePath))).ToList();
+                    if (compilations.Count > 0)
+                    {
+                        var inactive = ValidateActiveSampleRegion(samples[worker.OriginalIndex], worker.SourcePath, compilations);
+                        if (inactive is not null)
+                        {
+                            report.Errors.Add(new Diagnostic("SAMPLE_CONTEXT_INVALID", Rel(repoRoot, samples[worker.OriginalIndex].File), null,
+                                $"Fence #{samples[worker.OriginalIndex].FenceIndex}: {inactive}"));
+                            continue;
+                        }
+                        results[worker.OriginalIndex] = new SampleCompileResult(true, "", 0);
+                    }
+                    else
+                    {
+                        // Native errors scoped to this project (including its dependency subtree)
+                        // establish a failure. An unrelated batch error never supplies that evidence.
+                        var errors = projectEvidence.SelectMany(p => p.Errors).Distinct(StringComparer.Ordinal).ToList();
+                        if (errors.Count == 0 && projectEvidence.Any(p => p.Succeeded == false))
+                        {
+                            errors.Add($"Native MSBuild recorded a failed project invocation for '{Rel(contextRoot, worker.ProjectPath)}'. A referenced dependency or build target failed without a compiler diagnostic in this project.");
+                        }
+                        if (errors.Count > 0)
+                        {
+                            results[worker.OriginalIndex] = new SampleCompileResult(false, AddSampleCompileHints(string.Join(Environment.NewLine, errors)), batchResult.ExitCode);
+                        }
+                        else
+                        {
+                            report.Errors.Add(new Diagnostic("SAMPLE_CONTEXT_INVALID", Rel(repoRoot, samples[worker.OriginalIndex].File), null,
+                                $"Fence #{samples[worker.OriginalIndex].FenceIndex}: No successful native C# compilation of '{Rel(contextRoot, worker.SourcePath)}' was recorded for '{Rel(contextRoot, worker.ProjectPath)}'. {evidenceError ?? "The shared build may have stopped before this project ran."} Resolve the reported build blocker and rerun; this sample is unverified, not a project-specific compilation failure."));
+                        }
+                    }
+                    continue;
+                }
                 var outputAssembly = Path.Combine(worker.Directory, "bin", options.Configuration,
                     framework, worker.AssemblyName + ".dll");
                 var ok = batchResult.ExitCode == 0 || File.Exists(outputAssembly);
@@ -5599,25 +5933,130 @@ internal static class DocfxValidator
 
     private static ProcessResult CompileSampleBatch(
         string tempRoot, List<SampleWorker> workers, string configuration, int parallelism,
-        bool hasStrongNameKey)
+        bool hasStrongNameKey, string? framework = null)
     {
         var solutionPath = Path.Combine(tempRoot, "DocfxSamples.slnx");
         var solution = new StringBuilder();
         solution.AppendLine("<Solution>");
-        foreach (var worker in workers)
+        foreach (var project in workers.Select(w => w.ProjectPath).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            solution.AppendLine($"  <Project Path=\"{worker.ProjectPath}\" />");
+            solution.AppendLine($"  <Project Path=\"{System.Security.SecurityElement.Escape(project)}\" />");
         }
 
         solution.AppendLine("</Solution>");
         File.WriteAllText(solutionPath, solution.ToString(), new UTF8Encoding(false));
 
         var signingProperty = hasStrongNameKey ? string.Empty : " -p:SkipSignAssembly=true";
+        var frameworkProperty = framework is null ? string.Empty : $" -p:TargetFramework={framework}";
+        // Context graphs live in a disposable copy. Persistent nodes can retain a different
+        // DOTNET_CLI_HOME/package root (and loaded test-runner task DLLs) from another workspace.
+        var contextIsolation = framework is null ? string.Empty : " --disable-build-servers";
+        // Actual Csc arguments and native project terminal events establish context evidence.
+        // ProjectImports=None keeps source/import archives out of the disposable binary log.
+        var binaryLog = framework is null ? string.Empty : $" \"-bl:{Path.Combine(tempRoot, "samples.binlog")};ProjectImports=None\"";
         return RunProcess("dotnet",
-            $"build \"{solutionPath}\" -c {configuration} --nologo -m:{parallelism}{signingProperty}",
+            $"build \"{solutionPath}\" -c {configuration} --nologo -m:{parallelism}{signingProperty}{frameworkProperty}{contextIsolation}{binaryLog}",
             tempRoot, permission: ProcessPermission.SampleCompile,
             progress: new ProcessProgress("sample compilation",
                 $"{workers.Count} sample project(s), {parallelism} runner(s)"));
+    }
+
+    private static List<SampleProjectBuildEvidence> ReadSampleBuildEvidence(string path, out string? error)
+    {
+        error = null;
+        var projects = new Dictionary<(int, int), SampleProjectBuildEvidence>();
+        var parents = new Dictionary<(int, int), (int, int)>();
+        var invocations = new Dictionary<(int, int), BuildLog.CompilerInvocation>();
+        var reader = new BuildLog.CompilerInvocationsReader();
+        var finished = false;
+        try
+        {
+            foreach (var record in BuildLog.BinaryLog.ReadRecords(path))
+            {
+                var ev = record.Args;
+                if (ev is BuildFinishedEventArgs) { finished = true; }
+                var context = ev?.BuildEventContext;
+                if (context is null) { continue; }
+                var key = (context.NodeId, context.ProjectContextId);
+                if (ev is ProjectStartedEventArgs start && !string.IsNullOrEmpty(start.ProjectFile))
+                {
+                    projects[key] = new SampleProjectBuildEvidence(Path.GetFullPath(start.ProjectFile),
+                        start.GlobalProperties is { } globals && globals.TryGetValue("TargetFramework", out var tfm) ? tfm : "",
+                        start.GlobalProperties is { } config && config.TryGetValue("Configuration", out var configuration) ? configuration : "");
+                    if (start.ParentProjectBuildEventContext is { } parent)
+                    {
+                        parents[key] = (parent.NodeId, parent.ProjectContextId);
+                    }
+                }
+                if (ev is ProjectFinishedEventArgs end && projects.TryGetValue(key, out var project))
+                {
+                    project.Succeeded = end.Succeeded;
+                }
+                if (ev is BuildErrorEventArgs failure)
+                {
+                    var diagnostic = $"{failure.File}({failure.LineNumber},{failure.ColumnNumber}): {failure.Code}: {failure.Message}";
+                    if (projects.TryGetValue(key, out project)) { project.Errors.Add(diagnostic); }
+                    // Restore can report through the solution's task context while identifying
+                    // the affected project explicitly. Do not assign that error to other roots.
+                    if (!string.IsNullOrEmpty(failure.ProjectFile) || !string.IsNullOrEmpty(failure.File))
+                    {
+                        foreach (var affected in projects.Values.Where(p =>
+                                     (!string.IsNullOrEmpty(failure.ProjectFile) && PathsEqual(p.Project, failure.ProjectFile)) ||
+                                     (!string.IsNullOrEmpty(failure.File) && PathsEqual(p.Project, failure.File))))
+                        {
+                            affected.Errors.Add(diagnostic);
+                        }
+                    }
+                }
+                var invocation = reader.TryGetInvocationFromRecord(ev, invocations);
+                if (invocation?.Language == "C#" && projects.TryGetValue(key, out project))
+                {
+                    var arguments = CommandLineParser.SplitCommandLineIntoArguments(invocation.CommandLineArguments, removeHashComments: false);
+                    project.Compilations.Add(CSharpCommandLineParser.Default.Parse(arguments, invocation.ProjectDirectory, sdkDirectory: null));
+                }
+            }
+            if (!finished) { error = "The native build log was not finalized; incomplete evidence cannot validate a sample."; }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException or InvalidOperationException or NotSupportedException)
+        {
+            error = $"Cannot read native build evidence: {ex.Message}";
+        }
+        // Dependency errors belong to the requesting project's graph, including shared child
+        // projects that may have run on a different MSBuild node. Preserve deterministic ordering.
+        foreach (var (key, project) in projects.ToList())
+        {
+            var ancestor = key;
+            var visited = new HashSet<(int, int)> { key };
+            while (parents.TryGetValue(ancestor, out ancestor) && visited.Add(ancestor))
+            {
+                if (projects.TryGetValue(ancestor, out var parent)) { parent.Errors.AddRange(project.Errors.ToArray()); }
+            }
+        }
+        return projects.Values.ToList();
+    }
+
+    private static string? ValidateActiveSampleRegion(SampleFence sample, string sourcePath, List<CSharpCommandLineArguments> compilations)
+    {
+        var source = File.ReadAllText(sourcePath).Replace("\r\n", "\n").Trim('\n');
+        var excerpt = string.Join("\n", sample.Code.Replace("\r\n", "\n").Split('\n').Skip(2)).Trim('\n');
+        var search = "\n" + source + "\n";
+        var pattern = "\n" + excerpt + "\n";
+        foreach (var compilation in compilations)
+        {
+            // Parse the containing file, so #if/#elif/#else, nested guards and local #define/#undef
+            // preceding the displayed region all use the actual Csc invocation's symbols.
+            var root = CSharpSyntaxTree.ParseText(source, compilation.ParseOptions).GetRoot();
+            var inactive = root.DescendantTrivia(descendIntoTrivia: true)
+                .Where(t => t.IsKind(SyntaxKind.DisabledTextTrivia) && !string.IsNullOrWhiteSpace(t.ToFullString())).Select(t => t.FullSpan).ToList();
+            var offset = 0;
+            while ((offset = search.IndexOf(pattern, offset, StringComparison.Ordinal)) >= 0)
+            {
+                var span = new Microsoft.CodeAnalysis.Text.TextSpan(offset, excerpt.Length);
+                if (!inactive.Any(s => s.OverlapsWith(span))) { return null; }
+                offset++; // An identical excerpt may also occur in an active branch.
+            }
+        }
+        return "The displayed source region contains code excluded by conditional compilation for the selected framework/configuration. Select an active excerpt or validate the matching framework/configuration; a successful containing-project build does not compile this region.";
     }
 
     private static string ExtractSampleDiagnostics(ProcessResult result, SampleWorker worker)
@@ -6230,7 +6669,9 @@ internal static class DocfxValidator
             return null;
         }
 
-        var diff = RunProcess("git", "diff --name-only --diff-filter=ACMRTUXB HEAD", repoRoot, permission: ProcessPermission.Git);
+        // Bindings can still name deleted or renamed inputs. Keep both sides of a rename so
+        // unchanged pages pointing at the old path are selected for stale-context diagnostics.
+        var diff = RunProcess("git", "diff --name-only --no-renames --diff-filter=ACDMRTUXB HEAD", repoRoot, permission: ProcessPermission.Git);
         if (diff.ExitCode != 0)
         {
             return null;
@@ -6388,6 +6829,20 @@ internal static class DocfxValidator
             PathsEqual(candidate, Path.Combine(docfxWorkspace, SkipAllowlistFileName)))
         {
             return true;
+        }
+
+        // Only repositories enriched by the explicit run-action command have these deliverables.
+        // This is a path check, never generation or runtime verification on the fast path.
+        if (File.Exists(Path.Combine(docfxWorkspace, "run-actions", "index.json")))
+        {
+            var relative = Path.GetRelativePath(docfxWorkspace, candidate).Replace('\\', '/');
+            if (relative is "run-actions/index.json" or "run-actions.settings.json" ||
+                Regex.IsMatch(relative, @"^run-actions/[a-f0-9]{24}/(?:native|docker)\.ps1$")) { return true; }
+            using var config = JsonDocument.Parse(File.ReadAllText(docfxPath));
+            if (config.RootElement.TryGetProperty("build", out var build) && build.TryGetProperty("template", out var templates) &&
+                templates.ValueKind == JsonValueKind.Array && templates.EnumerateArray().Any(t => t.ValueKind == JsonValueKind.String &&
+                    (PathsEqual(candidate, Path.Combine(docfxWorkspace, t.GetString()!, "public", "run-actions.js")) ||
+                     (t.GetString() == "run-actions-template" && PathsEqual(candidate, Path.Combine(docfxWorkspace, "run-actions-template", "public", "main.js")))))) { return true; }
         }
 
         return IsKnownNamespaceMarkdown(candidate, docfxWorkspace, ws, knownNamespaces) ||
@@ -8350,7 +8805,7 @@ internal static class DocfxValidator
         AppendRequiredExampleDiagnostics(sb, report.Errors.Where(IsExampleQualityDiagnostic), report.PackageIds);
         AppendGitHubExampleSources(sb, report.PackageIds, report.ExampleSearchSnippets);
         AppendDiagnostics(sb, "Sample Compilation Repairs", report.Errors.Where(e =>
-            e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING" or "SAMPLE_SKIP_REASON_INSUFFICIENT" or "SAMPLE_SKIP_NOT_ALLOWLISTED" or "FAIL_NEW_SKIP_MARKER_INTRODUCED" or "SAMPLE_STRUCTURE_INVALID" or "SKIP_ALLOWLIST_INVALID"));
+            e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_CONTEXT_INVALID" or "SAMPLE_SKIP_REASON_MISSING" or "SAMPLE_SKIP_REASON_INSUFFICIENT" or "SAMPLE_SKIP_NOT_ALLOWLISTED" or "FAIL_NEW_SKIP_MARKER_INTRODUCED" or "SAMPLE_STRUCTURE_INVALID" or "SKIP_ALLOWLIST_INVALID"));
         AppendDiagnostics(sb, "Xref Member Link Repairs", report.Errors.Where(e => e.Code is "XREF_MEMBER_LINK"));
         AppendDiagnostics(sb, "Other Errors", report.Errors.Where(e =>
             e.Code is not "AGENTS_BLOCK_MISSING" &&
@@ -8360,7 +8815,7 @@ internal static class DocfxValidator
             !e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) &&
             e.Code is not "SYMBOL_COLLISION_UNRESOLVED" &&
             !IsExampleQualityDiagnostic(e) &&
-            e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_SKIP_REASON_MISSING" and not "SAMPLE_SKIP_REASON_INSUFFICIENT" and not "SAMPLE_SKIP_NOT_ALLOWLISTED" and not "FAIL_NEW_SKIP_MARKER_INTRODUCED" and not "SAMPLE_STRUCTURE_INVALID" and not "SKIP_ALLOWLIST_INVALID" and not "XREF_MEMBER_LINK"));
+            e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_CONTEXT_INVALID" and not "SAMPLE_SKIP_REASON_MISSING" and not "SAMPLE_SKIP_REASON_INSUFFICIENT" and not "SAMPLE_SKIP_NOT_ALLOWLISTED" and not "FAIL_NEW_SKIP_MARKER_INTRODUCED" and not "SAMPLE_STRUCTURE_INVALID" and not "SKIP_ALLOWLIST_INVALID" and not "XREF_MEMBER_LINK"));
         AppendDiagnostics(sb, "Warnings", report.Warnings);
 
         sb.AppendLine("## Completion Checklist");
@@ -8554,6 +9009,9 @@ internal static class DocfxValidator
                 case "--repo-root":
                     if (!Next(args, ref i, out var rr)) { error = "--repo-root requires a path."; return false; }
                     options.RepoRoot = rr;
+                    break;
+                case "--run-action-inventory":
+                    options.RunActionInventory = true;
                     break;
                 case "--docfx":
                     if (!Next(args, ref i, out var dx)) { error = "--docfx requires a path."; return false; }
@@ -8785,6 +9243,7 @@ internal static class DocfxValidator
               --build-api-model        Reflection-backed API discovery from compiled assemblies. Builds
                                       only the documented project graph (dotnet). Alias: --strict-api-discovery.
               --verify-docfx-build     Run DocFX against a temp copy of the repository (docfx).
+              --run-action-inventory   Export source-bound example inventory only; no builds or execution.
               --search-examples        Run GitHub code search per documented package (gh). Use with --assessment-queue.
 
             Options:
@@ -8822,6 +9281,7 @@ internal static class DocfxValidator
               --verify-docfx-build     Run DocFX against a temp copy of the repository (opt-in).
               --assessment-queue <path>
                                       Write a deterministic Markdown assessment work queue from validation diagnostics.
+              --run-action-inventory   Export source-bound example inventory only; no builds or execution.
               --search-examples        Run GitHub code search for each documented package and embed real usage snippets in the
                                       assessment work queue. Requires the gh CLI to be authenticated. Use together with --assessment-queue.
               --clean-generated-metadata
@@ -8883,6 +9343,7 @@ internal static class DocfxValidator
 
     private sealed class Options
     {
+        public bool RunActionInventory { get; set; }
         public string? RepoRoot { get; set; }
         public string? DocfxPath { get; set; }
         public string Configuration { get; set; } = "Release";
@@ -9068,6 +9529,7 @@ internal static class DocfxValidator
     }
 
     private sealed record SampleFence(string File, int FenceIndex, int StartLine, string Code);
+    private sealed record SampleContext(string Project, string Source);
 
     private sealed record OverwriteSection(
         string File,
@@ -9153,7 +9615,8 @@ internal static class DocfxValidator
         string Directory,
         string ProjectPath,
         string SourcePath,
-        string AssemblyName);
+        string AssemblyName,
+        bool ProjectContext = false);
 
     private sealed record SampleReferenceSet(
         string Kind,
@@ -9163,6 +9626,16 @@ internal static class DocfxValidator
         List<(string Id, string Version)> PackageReferences);
 
     private sealed record SampleCompileResult(bool Ok, string Diagnostics, int ExitCode);
+
+    private sealed class SampleProjectBuildEvidence(string project, string framework, string configuration)
+    {
+        public string Project { get; } = project;
+        public string Framework { get; } = framework;
+        public string Configuration { get; } = configuration;
+        public bool? Succeeded { get; set; }
+        public List<CSharpCommandLineArguments> Compilations { get; } = new();
+        public List<string> Errors { get; } = new();
+    }
 }
 
 internal sealed class Diagnostic

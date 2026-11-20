@@ -1,0 +1,10 @@
+{
+  "framework": "net10.0",
+  "dependsOn": [
+    "Codebelt.Extensions.Xunit.App@13.0.0",
+    "xunit.v3@4.0.3"
+  ],
+  "source": "using Codebelt.Extensions.Xunit.Hosting;\nusing Microsoft.Extensions.DependencyInjection;\nusing Microsoft.Extensions.Hosting;\nusing Xunit;\n\nnamespace InventoryWorker.Tests;\n\npublic sealed class InventoryWorkerTest : ApplicationTest<WorkerProgram, ManagedApplicationFixture<WorkerProgram>>\n{\n    public InventoryWorkerTest(ManagedApplicationFixture<WorkerProgram> fixture, ITestOutputHelper output)\n        : base(fixture, output)\n    {\n    }\n\n    [Fact]\n    public void Host_ContainsApplicationService()\n    {\n        var identity = Host.Services.GetRequiredService<WorkerIdentity>();\n\n        Assert.Equal(\"Inventory worker\", identity.Name);\n    }\n}\n\npublic sealed record WorkerIdentity(string Name);\n\npublic sealed class WorkerProgram\n{\n    public static void Main(string[] args)\n    {\n        var builder = Host.CreateApplicationBuilder(args);\n        builder.Services.AddSingleton(new WorkerIdentity(\"Inventory worker\"));\n\n        using var host = builder.Build();\n        host.Run();\n    }\n}",
+  "mode": "test",
+  "schemaVersion": 1
+}

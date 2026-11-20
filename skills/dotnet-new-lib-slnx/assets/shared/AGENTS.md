@@ -32,7 +32,7 @@ Do not hard-wrap prose to a fixed column width. Keep paragraphs and Markdown lis
 
 ## Test Conventions
 
-Use xUnit v4 (`xunit.v3` 4.x packages) with Codebelt.Extensions.Xunit.App v12 base classes. Functional host tests retain the appropriate managed application fixtures; the unit-test rules below apply to tests of individual classes.
+Use xUnit (`xunit.v3`) with Codebelt.Extensions.Xunit.App base classes. Functional host tests retain the appropriate managed application fixtures; the unit-test rules below apply to tests of individual classes.
 
 - Test project names must end with `Tests` (e.g. `{PROJECT_NAME}.Tests`)
 - Test classes should inherit from the appropriate base class in `Codebelt.Extensions.Xunit`
@@ -53,7 +53,7 @@ This document provides instructions for writing unit tests for a project/solutio
 
 **Always inherit from the `Test` base class** for all unit test classes. This ensures consistent setup, teardown, and output handling across all tests.
 
-> Important: Do NOT add `using Xunit.Abstractions`. xUnit v4 (the `xunit.v3` 4.x package line) does not expose that namespace; including it is incorrect and will cause compilation errors. Use the `Codebelt.Extensions.Xunit` Test base class and `using Xunit;` as shown in the examples below. If you need access to test output, rely on the Test base class (which accepts the appropriate output helper) rather than importing `Xunit.Abstractions`.
+> Important: Do NOT add `using Xunit.Abstractions`. The `xunit.v3` package does not expose that namespace; including it is incorrect and will cause compilation errors. Use the `Codebelt.Extensions.Xunit` Test base class and `using Xunit;` as shown in the examples below. If you need access to test output, rely on the Test base class (which accepts the appropriate output helper) rather than importing `Xunit.Abstractions`.
 
 ```csharp
 using Codebelt.Extensions.Xunit;
@@ -415,7 +415,7 @@ Use `<value>` for property-value descriptions, as illustrated in the example abo
 
 ## .bot/ Folder
 
-If a `.bot/` folder exists at the root, it contains **confidential, local-only** working material for AI agents — product requirement documents (PRDs), design proposals, agentic loop state, and brainstorming outputs. This folder is gitignored and never committed.
+`.bot/README.md` is intentionally tracked. Include it in the initial scaffold commit. Never stage or commit any other file under `.bot/`. Keep all working material there local and confidential, including product requirement documents (PRDs), design proposals, agent state, and brainstorming outputs.
 
 When starting creative or design work (new features, architecture decisions, PRD drafts), use the [brainstorming skill](https://skills.sh/obra/superpowers/brainstorming) and save outputs to `.bot/`. Only move finalized, non-confidential instructions into root `AGENTS.md`.
 

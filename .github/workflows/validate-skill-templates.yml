@@ -35,6 +35,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install .NET LTS and STS SDKs
+        if: matrix.name == 'templates'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            10.0.x
+            11.0.x
+
       - name: Install DocFX CLI
         if: matrix.name == 'docfx'
         shell: pwsh

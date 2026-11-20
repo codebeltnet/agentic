@@ -25,7 +25,7 @@ If you generated multiple host types, replace this section with one command per 
 
 ## Testing
 
-Tests use xUnit v4 (`xunit.v3` 4.x), Codebelt xUnit v12, and `Codebelt.Coverlet.MTP`. Run each functional test project with `dotnet test --project <test-project> -c Release --results-directory TestResults -- --report-xunit-trx --coverlet --coverlet-output-format opencover`. Verify nonzero discovery and nonempty TRX/OpenCover output.
+Tests use xUnit (`xunit.v3`), Codebelt xUnit, and `Codebelt.Coverlet.MTP`. Run each functional test project with `dotnet test --project <test-project> -c Release --results-directory TestResults -- --report-xunit-trx --coverlet --coverlet-output-format opencover`. Verify nonzero discovery and nonempty TRX/OpenCover output.
 
 ## Contributing
 

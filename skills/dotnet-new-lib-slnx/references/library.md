@@ -134,9 +134,9 @@ Always resolve `{LATEST_Nx}` from NuGet.org — never hardcode versions.
 
 Hard rule:
 
-1. Resolve every `*_VERSION` placeholder to the latest stable listed compatible release for that exact package ID on NuGet.org at generation time; keep Codebelt xUnit on 12.x and the `xunit.v3` framework/console runner on 4.x as required by `SKILL.md`
+1. Resolve every `*_VERSION` placeholder to the latest stable listed compatible release for that exact package ID on NuGet.org at generation time. Work down from the newest release when framework assets, dependency ranges, or restore and build checks show incompatibility with a selected TFM.
 2. Exclude prerelease versions even if they are newer
-3. Exclude unlisted versions when the metadata source exposes listing status
+3. Exclude unlisted versions using registration metadata
 4. Resolve each package independently; never reuse one generic "latest" token across multiple packages
 5. Never copy package versions from stale screenshots, older repos, or prior scaffold output
 
@@ -144,11 +144,6 @@ Preferred data source:
 
 - NuGet V3 service index: `https://api.nuget.org/v3/index.json`
 - From there, prefer the registration resource so you can inspect package versions with listing metadata
-
-Fallback data source:
-
-- NuGet package base address resource from the same service index
-- Use its versions list only when the registration resource is unavailable, and still filter out prerelease versions before picking the highest stable semantic version
 
 Practical guidance:
 
@@ -163,7 +158,7 @@ The generated `.github/dependabot.yml` should watch the repo root (`directory: "
 
 ## Native MTP Testing
 
-Follow `SKILL.md` for the coupled Codebelt xUnit 12.x / xUnit 4.x package contract. The package IDs remain `xunit.v3` and `xunit.v3.runner.console`. Copy root `global.json` selecting `Microsoft.Testing.Platform`, use a supported non-preview .NET 10+ SDK independently of library TFMs, and retain the test-only shared references to `Codebelt.Coverlet.MTP` and `Microsoft.Testing.Extensions.HangDump` without duplicate project references or legacy coverage integrations.
+Follow `SKILL.md` for resolving compatible Codebelt and xUnit packages together. The package IDs remain `xunit.v3` and `xunit.v3.runner.console`. Copy root `global.json` selecting `Microsoft.Testing.Platform`, use a supported non-preview .NET 10+ SDK independently of library TFMs, and retain the test-only shared references to `Codebelt.Coverlet.MTP` and `Microsoft.Testing.Extensions.HangDump` without duplicate project references or legacy coverage integrations.
 
 In root `Directory.Build.props`, render `{TARGET_FRAMEWORKS}` as the complete source matrix and `{EXECUTABLE_TARGET_FRAMEWORKS}` as the selected executable TFMs in selection order for tests and benchmarks. Exclude source-only TFMs such as `netstandard*` from the executable list; if it is empty, ask for a consumer test runtime. Validate package compatibility for each executable TFM before accepting the scaffold.
 

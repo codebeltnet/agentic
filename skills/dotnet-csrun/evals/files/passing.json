@@ -1,0 +1,9 @@
+{
+  "mode": "test",
+  "dependsOn": [
+    "xunit.v3@4.0.3"
+  ],
+  "schemaVersion": 1,
+  "source": "using System.Threading.Tasks; using Xunit; public class ArithmeticTests { [Fact] public async Task AddsAfterAwait() { var value = await Task.FromResult(20); Assert.Equal(42, value + 22); } }",
+  "framework": "net10.0"
+}

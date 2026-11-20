@@ -1,0 +1,9 @@
+{
+  "mode": "test",
+  "dependsOn": [
+    "xunit.v3@4.0.3"
+  ],
+  "schemaVersion": 1,
+  "source": "using Xunit; public class ArithmeticTests { [Fact] public void DeliberateFailure() => Assert.Equal(42, 41); }",
+  "framework": "net10.0"
+}

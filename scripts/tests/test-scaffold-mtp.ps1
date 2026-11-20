@@ -29,61 +29,64 @@ function Invoke-DotNet {
     return ($output -join [Environment]::NewLine)
 }
 
-function Assert-DotNetFailure {
-    param([string[]]$Arguments, [string]$ExpectedError)
-    $output = @(& dotnet @Arguments 2>&1)
-    $exitCode = $LASTEXITCODE
-    $diagnostics = $output -join [Environment]::NewLine
-    if ($exitCode -eq 0 -or $diagnostics -notmatch $ExpectedError) {
-        throw "dotnet $($Arguments -join ' ') must fail with '$ExpectedError' (exit $exitCode):`n$diagnostics"
-    }
-}
-
 try {
     [void][System.IO.Directory]::CreateDirectory($workspace)
-    # Test version-line selection with a newer future major, prereleases, and mismatched ASP.NET majors.
+    # Verify candidate discovery across major lines, excluding unlisted releases and prereleases.
     & {
         function Invoke-RestMethod {
             param([string]$Uri)
             if ($Uri.EndsWith('/v3/index.json')) {
-                return @{ resources = @(@{ '@type' = 'PackageBaseAddress/3.0.0'; '@id' = 'https://fixture.invalid/' }) }
+                return @{ resources = @(@{ '@type' = 'RegistrationsBaseUrl/3.6.0'; '@id' = 'https://fixture.invalid/' }) }
+            }
+            if ($Uri.EndsWith('/older-page.json')) {
+                return @{ items = @(@{ catalogEntry = @{ version = '11.2.1'; listed = $true } }) }
             }
             $versions = switch -Regex ($Uri) {
-                '/codebelt.extensions.xunit.app/' { @('11.2.1', '12.0.0', '12.0.1', '12.1.0-preview.1', '13.0.0'); break }
+                '/codebelt.extensions.xunit.app/' { @('12.0.2', '12.0.10', '12.1.0-preview.1', '13.0.0+build-1', '14.0.0'); break }
                 '/xunit.v3(?:.runner.console)?/' { @('3.2.2', '4.0.0', '4.0.1', '4.1.0-preview.1', '5.0.0'); break }
-                '/microsoft.aspnetcore.' { @('8.0.31', '9.0.14', '10.0.12', '11.0.0'); break }
+                '/microsoft.aspnetcore.' { @('10.0.12', '11.0.0'); break }
                 default { @('1.0.0', '1.0.1', '2.0.0-preview.1') }
             }
-            return @{ versions = $versions }
+            $leaves = @($versions | ForEach-Object {
+                @{ catalogEntry = @{ version = $_; listed = ($_ -ne '14.0.0') } }
+            })
+            $pages = @([pscustomobject]@{ items = $leaves })
+            if ($Uri -like '*/codebelt.extensions.xunit.app/*') {
+                $pages += [pscustomobject]@{ '@id' = 'https://fixture.invalid/older-page.json' }
+            }
+            return @{ items = $pages }
         }
         $resolved = & (Join-Path $repoRoot 'skills/dotnet-new-app-slnx/scripts/resolve-package-versions.ps1') -TargetFramework net10.0 | ConvertFrom-Json
         foreach ($pair in @(
-            @('{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}', '12.0.1'),
-            @('{XUNIT_V3_VERSION}', '4.0.1'),
-            @('{XUNIT_V3_RUNNER_CONSOLE_VERSION}', '4.0.1'),
-            @('{MICROSOFT_ASPNETCORE_OPENAPI_VERSION}', '10.0.12')
+            @('{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}', '13.0.0+build-1'),
+            @('{XUNIT_V3_VERSION}', '5.0.0'),
+            @('{XUNIT_V3_RUNNER_CONSOLE_VERSION}', '5.0.0'),
+            @('{MICROSOFT_ASPNETCORE_OPENAPI_VERSION}', '11.0.0')
         )) {
-            if ($resolved.($pair[0]).version -ne $pair[1]) { throw "Resolver selected the wrong API line for $($pair[0])." }
+            if ($resolved.($pair[0]).version -ne $pair[1]) { throw "Resolver returned the wrong newest candidate for $($pair[0])." }
+        }
+        if (($resolved.'{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}'.candidate_versions -join ',') -ne '13.0.0+build-1,12.0.10,12.0.2,11.2.1') {
+            throw 'The resolver must return stable listed candidates from all registration pages in descending version order.'
         }
         foreach ($entry in $resolved.PSObject.Properties.Value) {
             if ($entry.compatibility_status -ne 'provisional' -or $entry.target_framework -ne 'net10.0') {
                 throw 'Version-index lookup must not claim verified compatibility.'
             }
         }
-        $olderRuntime = & (Join-Path $repoRoot 'skills/dotnet-new-app-slnx/scripts/resolve-package-versions.ps1') -TargetFramework net8.0 | ConvertFrom-Json
-        if ($olderRuntime.'{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}'.compatibility_status -ne 'provisional' -or
-            $olderRuntime.'{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}'.target_framework -ne 'net8.0') {
-            throw 'The resolver must preserve provisional status for an unsupported test runtime.'
+        $stsRuntime = & (Join-Path $repoRoot 'skills/dotnet-new-app-slnx/scripts/resolve-package-versions.ps1') -TargetFramework net11.0 | ConvertFrom-Json
+        if ($stsRuntime.'{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}'.compatibility_status -ne 'provisional' -or
+            $stsRuntime.'{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}'.target_framework -ne 'net11.0') {
+            throw 'The resolver must preserve provisional status for the requested test runtime.'
         }
-        Write-Host '[PASS] Resolver preserves authorized test-stack majors and excludes prereleases.'
+        Write-Host '[PASS] Resolver returns stable listed candidates across major lines.'
     }
 
     $sdkVersions = @(& dotnet --list-sdks)
     if ($LASTEXITCODE -ne 0) { throw 'Unable to enumerate installed SDKs.' }
     $sdk = @($sdkVersions | ForEach-Object {
-        if ($_ -match '^(\d+\.\d+\.\d+)\s' -and [version]$Matches[1] -ge [version]'10.0.100') { $Matches[1] }
+        if ($_ -match '^(\d+\.\d+\.\d+)\s' -and [version]$Matches[1] -ge [version]'11.0.100') { $Matches[1] }
     } | Sort-Object { [version]$_ } -Descending | Select-Object -First 1)
-    if ($sdk.Count -ne 1) { throw 'A supported non-preview .NET 10+ SDK is required for scaffold MTP tests.' }
+    if ($sdk.Count -ne 1) { throw 'A supported non-preview .NET 11+ SDK is required for scaffold MTP tests.' }
 
     # Fixed package versions are reproducible regression fixtures, not generated scaffold defaults.
     $versions = @{
@@ -105,17 +108,14 @@ try {
         '{BENCHMARKDOTNET_DIAGNOSTICS_WINDOWS_VERSION}' = '0.15.8'
         '{CODEBELT_EXTENSIONS_BENCHMARKDOTNET_CONSOLE_VERSION}' = '1.3.4'
     }
-    # net8 is an incompatibility regression for the fixed v12 stack, not an older-stack workaround.
     # Only libraries support multiple source TFMs, including source-only netstandard.
     $cases = @(
         @{ Variant = 'app'; HostType = 'web'; AppType = 'Web'; Tfm = 'net10.0' },
-        @{ Variant = 'app'; HostType = 'console'; AppType = 'Console'; Tfm = 'net9.0' },
-        @{ Variant = 'app'; HostType = 'worker'; AppType = 'Worker'; Tfm = 'net10.0' },
-        @{ Variant = 'app'; HostType = 'console'; AppType = 'Console'; Tfm = 'net8.0' },
+        @{ Variant = 'app'; HostType = 'console'; AppType = 'Console'; Tfm = 'net10.0' },
+        @{ Variant = 'app'; HostType = 'worker'; AppType = 'Worker'; Tfm = 'net11.0' },
         @{ Variant = 'lib'; Tfm = 'net10.0' },
-        @{ Variant = 'lib'; Tfm = 'net9.0' },
-        @{ Variant = 'lib'; Tfm = 'net8.0' },
-        @{ Variant = 'lib'; Tfm = 'netstandard2.0;net9.0;net10.0' }
+        @{ Variant = 'lib'; Tfm = 'net11.0' },
+        @{ Variant = 'lib'; Tfm = 'netstandard2.0;net10.0;net11.0' }
     )
     foreach ($case in $cases) {
         $variant = $case.Variant
@@ -136,9 +136,8 @@ try {
         $map['{EXECUTABLE_TARGET_FRAMEWORKS}'] = $runtimeTfms -join ';'
         $map['{BENCHMARK_RUNNER_TARGET_FRAMEWORK}'] = $runtimeTfms[-1]
         $map['{BENCHMARK_RUNNER_NAMESPACE}'] = 'benchmark_runner'
-        $benchmarkRuntimes = @{ 'net8.0' = 'Core80'; 'net9.0' = 'Core90'; 'net10.0' = 'Core10_0' }
         $map['{BENCHMARK_RUNTIME_JOBS}'] = ($runtimeTfms | ForEach-Object {
-            "                    .AddJob(slimJob.WithRuntime(CoreRuntime.$($benchmarkRuntimes[$_])))"
+            "                    .AddJob(slimJob.WithRuntime(CoreRuntime.CreateForNewVersion(`"$_`", `"$_`")))"
         }) -join [Environment]::NewLine
         $map['{AUTHOR}'] = 'Scaffold Regression'
         $map['{AUTHOR_EMAIL}'] = 'fixture@example.invalid'
@@ -165,8 +164,12 @@ try {
             throw "$caseName must keep the functional-test namespace rule exactly once."
         }
         $bot = [System.IO.File]::ReadAllText((Join-Path $caseRoot '.bot/README.md'))
-        if (-not $bot.Contains('into root `AGENTS.md`.') -or $bot -match '(?i)Copilot') {
-            throw "$caseName .bot guidance must point only to root AGENTS.md."
+        if (-not $agents.Contains('`.bot/README.md` is intentionally tracked. Include it in the initial scaffold commit.') -or
+            -not $agents.Contains('Never stage or commit any other file under `.bot/`.')) {
+            throw "$caseName AGENTS.md must explicitly allow the .bot README and prohibit staging or committing other .bot files."
+        }
+        if (-not $bot.Contains('Move only finalized, non-confidential guidance into `AGENTS.md`.') -or $bot -match '(?i)Copilot') {
+            throw "$caseName .bot guidance must direct finalized, non-confidential guidance to AGENTS.md."
         }
         Write-Host "[PASS] $caseName emits the complete shared inventory with vendor-neutral root AGENTS.md."
         # Select a stable installed SDK only in this isolated regression workspace.
@@ -285,27 +288,6 @@ public class PriceCalculatorBenchmark
                 $runnerTfm = Invoke-DotNet -Arguments @('msbuild', $runnerProject, '-getProperty:TargetFramework', '--nologo')
                 if ($runnerTfm.Trim() -ne $runtimeTfms[-1]) { throw "$caseName benchmark runner must target the highest executable TFM." }
                 Write-Host "[PASS] ${caseName}: source matrix retained; tests, benchmarks and runner use executable TFMs only."
-            }
-            if ($case.Tfm -eq 'net8.0') {
-                if ($variant -eq 'lib') {
-                    [void](Invoke-DotNet -Arguments @('build', $benchmarkProject, '-c', 'Release', '-p:SkipSignAssembly=true', '--nologo'))
-                    Assert-DotNetFailure -Arguments @('build', $runnerProject, '-c', 'Release', '-p:SkipSignAssembly=true', '--nologo') -ExpectedError 'error NU1202: Package Codebelt.Extensions.BenchmarkDotNet.Console'
-                }
-                $expectedError = if ($variant -eq 'app') { 'error NU1202: Package Codebelt.Bootstrapper.Console' } else { "error CS0246: The type or namespace name 'Codebelt'" }
-                Assert-DotNetFailure -Arguments @('build', $testProject, '-c', 'Release', '-p:SkipSignAssembly=true', '--nologo') -ExpectedError $expectedError
-                $testAssetsPath = Join-Path $caseRoot (Join-Path (Split-Path $testProject) 'obj/project.assets.json')
-                $testAssets = [System.IO.File]::ReadAllText($testAssetsPath) | ConvertFrom-Json
-                $nuspecPaths = @($testAssets.packageFolders.PSObject.Properties.Name | ForEach-Object {
-                    Join-Path $_ 'codebelt.extensions.xunit.app/12.0.1/codebelt.extensions.xunit.app.nuspec'
-                } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
-                if ($nuspecPaths.Count -ne 1) { throw "$caseName could not locate the restored Codebelt app meta-package metadata." }
-                [xml]$nuspec = [System.IO.File]::ReadAllText($nuspecPaths[0])
-                $groups = @($nuspec.package.metadata.dependencies.group.targetFramework)
-                if ($groups -contains 'net8.0' -or $groups.Count -ne 2 -or $groups -notcontains 'net9.0' -or $groups -notcontains 'net10.0') {
-                    throw "$caseName expected only net9/net10 dependency groups in the fixed Codebelt app meta-package."
-                }
-                Write-Host "[PASS] ${caseName}: incompatible net8 stack fails explicitly; Codebelt app meta-package has no net8 dependency group."
-                continue
             }
             [void](Invoke-DotNet -Arguments @('build', 'MtpScaffold.slnx', '-c', 'Release', '-p:SkipSignAssembly=true', '--nologo'))
             foreach ($runtimeTfm in $runtimeTfms) {

@@ -2438,6 +2438,306 @@ Namespace overview.
     }
 }
 
+# Bound-context review regressions use small SDK projects; no network or external test runner is
+# needed to exercise compiler activity, changed-only selection and per-project batch attribution.
+$contextReview = Join-Path ([IO.Path]::GetTempPath()) ('dotnet-docfx-context-review-' + [guid]::NewGuid().ToString('N'))
+try {
+    Write-Utf8File (Join-Path $contextReview 'AGENTS.md') "<!-- dotnet-docfx-digest:start -->`nManaged DocFX guidance.`n<!-- dotnet-docfx-digest:end -->"
+    Write-Utf8File (Join-Path $contextReview 'src/Library/Library.csproj') $projectCsproj
+    Write-Utf8File (Join-Path $contextReview 'src/Library/Library.cs') 'namespace Acme.Context; public sealed class InventoryTotal { public int Quantity => 42; }'
+    Write-Utf8File (Join-Path $contextReview '.docfx/docfx.json') (New-DocfxJson @('src/Library/Library.csproj'))
+    $goodProject = Join-Path $contextReview 'samples/Good/Good.csproj'
+    $goodSource = Join-Path $contextReview 'samples/Good/Good.cs'
+    $contextPage = Join-Path $contextReview '.docfx/contexts.md'
+    $goodCode = 'namespace Samples; internal static class Inventory { public static int Total() => 42; }'
+    Write-Utf8File $goodProject $projectCsproj
+    Write-Utf8File $goodSource $goodCode
+    $fence = '```'
+    $bound = "${fence}csharp`n// docfx-context: samples/Good/Good.csproj`n// docfx-source: samples/Good/Good.cs`n$goodCode`n$fence`n"
+    Write-Utf8File $contextPage $bound
+    Initialize-GitRepo $contextReview
+
+    # The Markdown remains byte-identical while its source changes, disappears or moves.
+    Write-Utf8File $goodSource ($goodCode.Replace('42', '99'))
+    Assert-Diagnostic (Invoke-Validator -Workspace $contextReview -ExtraArgs @('--changed-only')) 'SAMPLE_CONTEXT_INVALID'
+    Assert-Diagnostic (Invoke-Validator -Workspace $contextReview -ExtraArgs @('--changed-only', '--validate-samples')) 'SAMPLE_CONTEXT_INVALID'
+    Remove-Item -LiteralPath $goodSource
+    Assert-Diagnostic (Invoke-Validator -Workspace $contextReview -ExtraArgs @('--changed-only')) 'SAMPLE_CONTEXT_INVALID'
+    Write-Utf8File $goodSource $goodCode
+    # Project-only changes select the unchanged page for sample extraction as well as fast checks.
+    Write-Utf8File $goodProject ($projectCsproj.Replace('</Project>', '<ItemGroup><Compile Remove="Good.cs" /></ItemGroup></Project>'))
+    Assert-Diagnostic (Invoke-Validator -Workspace $contextReview -ExtraArgs @('--changed-only', '--validate-samples')) 'SAMPLE_CONTEXT_INVALID'
+    Remove-Item -LiteralPath $goodProject
+    Assert-Diagnostic (Invoke-Validator -Workspace $contextReview -ExtraArgs @('--changed-only')) 'SAMPLE_CONTEXT_INVALID'
+    Write-Utf8File $goodProject $projectCsproj
+    Write-Host 'DocFX bound source/project changed-only regressions passed.'
+
+    $conditionalSource = Join-Path $contextReview 'samples/Good/Conditional.cs'
+    $conditional = @'
+namespace Samples;
+internal static class ConditionalInventory
+{
+#if DEBUG
+    public static int DebugQuantity() => UndefinedQuantity;
+#endif
+#if NET10_0 && !DEBUG
+    public static int ReleaseQuantity() => 42;
+#endif
+}
+'@
+    Write-Utf8File $conditionalSource $conditional
+    $conditionalBinding = "${fence}csharp`n// docfx-context: samples/Good/Good.csproj`n// docfx-source: samples/Good/Conditional.cs`n"
+    Write-Utf8File $contextPage ($conditionalBinding + '    public static int DebugQuantity() => UndefinedQuantity;' + "`n$fence")
+    $inactive = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples')
+    Assert-DiagnosticMessageContains $inactive 'SAMPLE_CONTEXT_INVALID' 'excluded by conditional compilation'
+    Assert-NoDiagnostic $inactive 'SAMPLE_COMPILE_FAILED'
+    if ($inactive.summary.samplesCompiled -ne 0) { throw 'Release counted an inactive broken DEBUG excerpt as compiled.' }
+    $debugBroken = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples', '--configuration', 'Debug')
+    Assert-DiagnosticMessageContains $debugBroken 'SAMPLE_COMPILE_FAILED' 'CS0103'
+    # The SDK-defined TFM symbol comes from the actual Csc command, not evaluation-only properties.
+    Write-Utf8File $contextPage ($conditionalBinding + '    public static int ReleaseQuantity() => 42;' + "`n$fence")
+    $active = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples')
+    Assert-NoDiagnostic $active 'SAMPLE_CONTEXT_INVALID'
+    Assert-NoDiagnostic $active 'SAMPLE_COMPILE_FAILED'
+    if ($active.summary.samplesCompiled -ne 1) { throw 'Active TFM/configuration excerpt was not compiled.' }
+    Write-Utf8File $conditionalSource ($conditional.Replace('UndefinedQuantity', '42'))
+    Write-Utf8File $contextPage ($conditionalBinding + '    public static int DebugQuantity() => 42;' + "`n$fence")
+    $debugActive = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples', '--configuration', 'Debug')
+    Assert-NoDiagnostic $debugActive 'SAMPLE_CONTEXT_INVALID'
+    Assert-NoDiagnostic $debugActive 'SAMPLE_COMPILE_FAILED'
+    if ($debugActive.summary.samplesCompiled -ne 1) { throw 'Active DEBUG excerpt was not compiled.' }
+    # Nested directives, local define/undef, repeated excerpts and symbols added by build targets.
+    $customCode = @'
+#define LOCAL
+#undef DISABLED
+namespace Samples;
+internal static class ConditionalInventory
+{
+#if DEBUG
+    public static int Quantity() => 42;
+#elif NET10_0 && REVIEW_SYMBOL
+#if LOCAL && !DISABLED
+    public static int Quantity() => 42;
+#endif
+#endif
+}
+'@
+    Write-Utf8File $conditionalSource $customCode
+    Write-Utf8File $goodProject ($projectCsproj.Replace('</Project>', '<Target Name="ReviewSymbols" BeforeTargets="CoreCompile"><PropertyGroup><DefineConstants>$(DefineConstants);REVIEW_SYMBOL</DefineConstants></PropertyGroup></Target></Project>'))
+    Write-Utf8File $contextPage ($conditionalBinding + '    public static int Quantity() => 42;' + "`n$fence")
+    $customActive = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples')
+    Assert-NoDiagnostic $customActive 'SAMPLE_CONTEXT_INVALID'
+    Assert-NoDiagnostic $customActive 'SAMPLE_COMPILE_FAILED'
+    if ($customActive.summary.samplesCompiled -ne 1) { throw 'Actual late compiler symbol or second active occurrence was missed.' }
+    Write-Utf8File $goodProject $projectCsproj
+    Remove-Item -LiteralPath $conditionalSource
+    Write-Host 'DocFX bound conditional region activity regressions passed.'
+
+    # The unrelated broken console must not turn either copy of the good bound sample into a failure.
+    $brokenConsole = "${fence}csharp`n// Program.cs`nusing System;`nConsole.WriteLine(UnrelatedBrokenConsole);`n$fence`n"
+    Write-Utf8File $contextPage ($bound + "`n" + $bound + "`n" + $brokenConsole)
+    $mixed = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples')
+    Assert-NoDiagnostic $mixed 'SAMPLE_CONTEXT_INVALID'
+    $failures = @($mixed.errors | Where-Object code -eq 'SAMPLE_COMPILE_FAILED')
+    if ($mixed.summary.samplesCompiled -ne 2 -or $failures.Count -ne 1 -or $failures[0].message -notmatch 'fence #3') {
+        throw "Mixed batch misattributed a failure: $($mixed | ConvertTo-Json -Depth 8)"
+    }
+    # Two distinct bound failures retain their own diagnostics; the good root still passes.
+    $badFences = ''
+    foreach ($name in @('BadOne', 'BadTwo')) {
+        Write-Utf8File (Join-Path $contextReview "samples/$name/$name.csproj") $projectCsproj
+        $code = "namespace Samples; internal static class $name { public static int Total() => Missing$name; }"
+        Write-Utf8File (Join-Path $contextReview "samples/$name/$name.cs") $code
+        $badFences += "`n${fence}csharp`n// docfx-context: samples/$name/$name.csproj`n// docfx-source: samples/$name/$name.cs`n$code`n$fence`n"
+    }
+    Write-Utf8File $contextPage ($bound + $badFences)
+    $scopedFailures = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples')
+    Assert-NoDiagnostic $scopedFailures 'SAMPLE_CONTEXT_INVALID'
+    $failures = @($scopedFailures.errors | Where-Object code -eq 'SAMPLE_COMPILE_FAILED')
+    if ($scopedFailures.summary.samplesCompiled -ne 1 -or $failures.Count -ne 2) { throw 'Bound project results were not recorded individually.' }
+    foreach ($failure in $failures) {
+        if ($failure.message.Contains('MissingBadOne') -eq $failure.message.Contains('MissingBadTwo')) {
+            throw "Bound diagnostics contain an unrelated project's errors: $($failure.message)"
+        }
+    }
+    Write-Host 'DocFX mixed-batch per-project result and diagnostic regressions passed.'
+} finally {
+    if (Test-Path $contextReview) { Remove-Item -LiteralPath $contextReview -Recurse -Force }
+}
+
+# Architecture fixtures use the real published fixture and xUnit runner, never a substitute host.
+# Build only the temp copy; the source fixture tree must remain free of bin/obj artifacts.
+$architecture = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-architecture-' + [guid]::NewGuid().ToString('N'))
+try {
+    $fixtureRoot = Join-Path $PSScriptRoot 'fixtures/example-architecture'
+    New-Item -ItemType Directory -Path $architecture | Out-Null
+    Copy-Item -Path (Join-Path $fixtureRoot '*') -Destination $architecture -Recurse
+    Write-Utf8File (Join-Path $architecture 'AGENTS.md') "<!-- dotnet-docfx-digest:start -->`nManaged DocFX guidance.`n<!-- dotnet-docfx-digest:end -->"
+    Write-Utf8File (Join-Path $architecture '.docfx/docfx.json') (New-DocfxJson @('app/InventoryWorker/InventoryWorker.csproj'))
+    # A metadata fixture selects the exact public contract without implementing a fake API.
+    Write-Utf8File (Join-Path $architecture '.docfx/api/fixture.yml') @'
+### YamlMime:ManagedReference
+items:
+- uid: Codebelt.Extensions.Xunit.Hosting
+  name: Codebelt.Extensions.Xunit.Hosting
+  type: Namespace
+- uid: Codebelt.Extensions.Xunit.Hosting.ManagedApplicationFixture`1
+  name: ManagedApplicationFixture<TEntryPoint>
+  namespace: Codebelt.Extensions.Xunit.Hosting
+  type: Class
+  syntax:
+    content: public class ManagedApplicationFixture<TEntryPoint>
+'@
+    $appSource = [IO.File]::ReadAllText((Join-Path $architecture 'app/InventoryWorker/Program.cs')).TrimEnd()
+    $testSource = [IO.File]::ReadAllText((Join-Path $architecture 'test/InventoryWorker.Tests/InventoryWorkerTest.cs')).TrimEnd()
+    $page = Join-Path $architecture '.docfx/api/types/Fixture.md'
+    $frontMatter = '---' + "`n" + 'uid: Codebelt.Extensions.Xunit.Hosting.ManagedApplicationFixture`1' + "`nexample: *content`n---`n"
+    $fence = '```'
+    $lead = 'Verify that the real worker application registers its identity service. The application owns Main and service registration; the separate xUnit v3 executable test project references it and resolves the application service through the fixture.'
+    $boundApp = "// docfx-context: app/InventoryWorker/InventoryWorker.csproj`n// docfx-source: app/InventoryWorker/Program.cs`n$appSource"
+    $boundTest = "// docfx-context: test/InventoryWorker.Tests/InventoryWorker.Tests.csproj`n// docfx-source: test/InventoryWorker.Tests/InventoryWorkerTest.cs`n$testSource"
+    $split = "$frontMatter`n$lead`n`nApplication project InventoryWorker, Program.cs:`n`n${fence}csharp`n$boundApp`n$fence`n`nTest project InventoryWorker.Tests, InventoryWorkerTest.cs. It uses Codebelt.Extensions.Xunit.Hosting and xunit.v3 and a ProjectReference to InventoryWorker. See the [maintained integration sample](https://github.com/codebeltnet/xunit/blob/84b13767cb9484f8f3a36a71875662edfdb3e511/test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/BootstrapperMinimalWorkerApplicationTestTest.cs) for the full setup:`n`n${fence}csharp`n$boundTest`n$fence`n"
+    Write-Utf8File $page $split
+    Initialize-GitRepo $architecture
+    $before = [IO.File]::ReadAllBytes($page)
+    $positive = Invoke-Validator -Workspace $architecture
+    Assert-NoDiagnostic $positive 'EXAMPLE_APPLICATION_ASSEMBLY_COLLAPSED'
+    Assert-NoDiagnostic $positive 'SAMPLE_CONTEXT_INVALID'
+    foreach ($process in @('dotnet', 'msbuild', 'docfx', 'gh')) {
+        if ($positive.summary.processes.$process -ne 0) { throw "Fast architecture validation launched $process." }
+    }
+    # Bound projects compile together, preserving real entry points and ProjectReference resolution.
+    $compiled = Invoke-Validator -Workspace $architecture -ExtraArgs @('--validate-samples')
+    Assert-NoDiagnostic $compiled 'SAMPLE_COMPILE_FAILED'
+    Assert-NoDiagnostic $compiled 'SAMPLE_STRUCTURE_INVALID'
+    Assert-NoDiagnostic $compiled 'SAMPLE_CONTEXT_INVALID'
+    if ($compiled.summary.samplesCompiled -ne 2) { throw "Expected both bound files to compile. $($compiled | ConvertTo-Json -Depth 8)" }
+    if ($compiled.summary.canClaimCompletion -or $compiled.summary.fullVerificationRan) { throw 'Compilation alone claimed full verification.' }
+    # Execute the real test runner separately: build evidence is not runtime evidence.
+    $testProject = Join-Path $architecture 'test/InventoryWorker.Tests/InventoryWorker.Tests.csproj'
+    $execution = & dotnet run --project $testProject -c Release --disable-build-servers 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $execution -notmatch '(?:Passed|Total):\s+3' -or $execution -notmatch 'Failed:\s+0') {
+        throw "Real architecture test execution failed or discovered no tests: $execution"
+    }
+    Write-Host 'DocFX split application, standalone Fact and middleware HTTP execution passed (3 real tests).'
+    if ([Convert]::ToHexString($before) -ne [Convert]::ToHexString([IO.File]::ReadAllBytes($page))) { throw 'Validation changed Markdown encoding or line endings.' }
+
+    # A semantic trap cannot be diagnosed from registration syntax alone: demonstrate that the
+    # original test fails without application registration, but a test-owned override can hide it.
+    # This is negative control evidence for architectural review, not an acceptable docs repair.
+    $appPath = Join-Path $architecture 'app/InventoryWorker/Program.cs'
+    $testPath = Join-Path $architecture 'test/InventoryWorker.Tests/InventoryWorkerTest.cs'
+    Write-Utf8File $appPath ($appSource.Replace('builder.Services.AddSingleton(new WorkerIdentity("Inventory worker"));', ''))
+    $missingRegistration = & dotnet run --project $testProject -c Release --disable-build-servers 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0 -or $missingRegistration -notmatch 'Failed:\s+1' -or $missingRegistration -notmatch 'No service for type') {
+        throw "Original assertion did not expose missing application registration: $missingRegistration"
+    }
+    $override = @'
+    protected override void ConfigureHost(IHostBuilder builder)
+    {
+        builder.ConfigureServices(services => services.AddSingleton(new WorkerIdentity("Inventory worker")));
+    }
+
+    [Fact]
+'@
+    Write-Utf8File $testPath ("using Microsoft.Extensions.Hosting;`n" + $testSource.Replace('    [Fact]', $override))
+    $testOwned = & dotnet run --project $testProject -c Release --disable-build-servers 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $testOwned -notmatch '(?:Passed|Total):\s+3' -or $testOwned -notmatch 'Failed:\s+0') {
+        throw "Test-owned registration control failed: $testOwned"
+    }
+    Write-Utf8File $appPath $appSource
+    Write-Utf8File $testPath $testSource
+    Write-Host 'DocFX registration ownership controls passed (application removal fails; test override masks it).'
+
+    # The original shape is library-compilable yet selects the wrong assembly in a real runner.
+    # Combine valid syntax, not concatenated file-scoped namespaces or mid-file using directives.
+    $merged = "using Microsoft.Extensions.Hosting;`n" + $testSource + "`n" + ($appSource -replace '(?m)^using .*;\r?\n', '' -replace 'namespace InventoryWorker;', '')
+    Write-Utf8File $page "$frontMatter`n$lead`n`n${fence}csharp`n$merged`n$fence"
+    $collapsed = Invoke-Validator -Workspace $architecture
+    Assert-Diagnostic $collapsed 'EXAMPLE_APPLICATION_ASSEMBLY_COLLAPSED'
+    Assert-DiagnosticMessageContains $collapsed 'EXAMPLE_APPLICATION_ASSEMBLY_COLLAPSED' 'Keep the real Main'
+    # Removing Main still leaves TEntryPoint in the test assembly and must remain a failure.
+    $noMain = $merged.Substring(0, $merged.IndexOf('    public static void Main')) + "}`n"
+    Write-Utf8File $page "$frontMatter`n$lead`n`n${fence}csharp`n$noMain`n$fence"
+    Assert-Diagnostic (Invoke-Validator -Workspace $architecture) 'EXAMPLE_APPLICATION_ASSEMBLY_COLLAPSED'
+    # Real xUnit source generation exposes competing Main methods as CS0017.
+    Write-Utf8File (Join-Path $architecture 'test/InventoryWorker.Tests/InventoryWorkerTest.cs') $merged
+    $conflict = & dotnet build $testProject -c Release --nologo --disable-build-servers 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0 -or $conflict -notmatch 'CS0017') { throw "Merged executable did not expose CS0017: $conflict" }
+    Write-Host 'DocFX merged entry-point negative controls passed.'
+    Write-Utf8File (Join-Path $architecture 'test/InventoryWorker.Tests/InventoryWorkerTest.cs') $testSource
+
+    # Source drift, missing references and excluded files must not become successful samples.
+    Write-Utf8File $page ($split.Replace('Assert.True(WorkerProgram.MainInvoked);', 'Assert.True(true);'))
+    Assert-Diagnostic (Invoke-Validator -Workspace $architecture) 'SAMPLE_CONTEXT_INVALID'
+    Write-Utf8File $page ($split.Replace('test/InventoryWorker.Tests/InventoryWorker.Tests.csproj', 'missing/Invented.csproj'))
+    Assert-Diagnostic (Invoke-Validator -Workspace $architecture) 'SAMPLE_CONTEXT_INVALID'
+    Write-Utf8File $page $split
+    $originalProject = [IO.File]::ReadAllText($testProject)
+    Write-Utf8File $testProject ($originalProject.Replace('<TargetFramework>net10.0</TargetFramework>', '<TargetFramework>net9.0</TargetFramework>'))
+    $wrongFramework = Invoke-Validator -Workspace $architecture -ExtraArgs @('--validate-samples')
+    Assert-DiagnosticMessageContains $wrongFramework 'SAMPLE_CONTEXT_INVALID' 'not a declared framework'
+    Write-Utf8File $testProject $originalProject
+    Write-Utf8File $testProject ($originalProject.Replace('</Project>', '<ItemGroup><Compile Remove="InventoryWorkerTest.cs" /></ItemGroup></Project>'))
+    Assert-Diagnostic (Invoke-Validator -Workspace $architecture -ExtraArgs @('--validate-samples')) 'SAMPLE_CONTEXT_INVALID'
+    Write-Utf8File $testProject $originalProject
+    Write-Utf8File $testProject ($originalProject.Replace('../../app/InventoryWorker/InventoryWorker.csproj', '../../app/Missing/Missing.csproj'))
+    Assert-Diagnostic (Invoke-Validator -Workspace $architecture -ExtraArgs @('--validate-samples')) 'SAMPLE_COMPILE_FAILED'
+    Write-Utf8File $testProject $originalProject
+
+    # Contextualized partial excerpt compiles in its actual file; no dummy entry point is supplied.
+    $excerpt = '        Assert.Equal("Inventory worker", identity.Name);'
+    # Keep essential target usage on the page; the excerpt supplements the test fence.
+    Write-Utf8File $page ($split + "`nIntentionally partial assertion from that test; initialization is shown above.`n`n${fence}csharp`n// docfx-context: test/InventoryWorker.Tests/InventoryWorker.Tests.csproj`n// docfx-source: test/InventoryWorker.Tests/InventoryWorkerTest.cs`n$excerpt`n$fence")
+    $partialReport = Invoke-Validator -Workspace $architecture -ExtraArgs @('--validate-samples')
+    Assert-NoDiagnostic $partialReport 'SAMPLE_CONTEXT_INVALID'
+    Assert-NoDiagnostic $partialReport 'SAMPLE_STRUCTURE_INVALID'
+    Assert-NoDiagnostic $partialReport 'SAMPLE_COMPILE_FAILED'
+    if ($partialReport.summary.samplesCompiled -ne 3) { throw 'Grouped source and partial excerpt were not all validated.' }
+    Write-Host 'DocFX source binding, excluded file, project reference and partial excerpt controls passed.'
+
+    # Preservation: ordinary library snippets, real multiple-class files, Program.cs,
+    # a standalone xUnit v3 Fact and realistic HTTP middleware remain valid source shapes.
+    $library = @'
+using System;
+namespace Inventory;
+public sealed record StockItem(int Quantity);
+public static class StockReport
+{
+    public static void PrintTotal()
+    {
+        var reserved = new StockItem(42);
+        Console.WriteLine(reserved.Quantity);
+    }
+}
+'@
+    $console = "// Program.cs`nusing System;`nConsole.WriteLine(6 * 7);"
+    $preserved = $split + "`nA library consumer reports the reserved inventory quantity.`n`n${fence}csharp`n$library`n$fence`n`nThis standalone console program prints the same quantity.`n`n${fence}csharp`n$console`n$fence`n"
+    foreach ($sourceName in @('StandaloneTest.cs', 'MiddlewareTest.cs')) {
+        $sourcePath = "test/InventoryWorker.Tests/$sourceName"
+        $source = [IO.File]::ReadAllText((Join-Path $architecture $sourcePath)).TrimEnd()
+        $preserved += "`nThe maintained $sourceName uses the real xUnit v3 runner. The middleware test registers the pipeline before sending HTTP and verifies both body and header.`n`n${fence}csharp`n// docfx-context: test/InventoryWorker.Tests/InventoryWorker.Tests.csproj`n// docfx-source: $sourcePath`n$source`n$fence`n"
+    }
+    Write-Utf8File $page $preserved
+    $preservation = Invoke-Validator -Workspace $architecture -ExtraArgs @('--validate-samples')
+    foreach ($code in @('SAMPLE_CONTEXT_INVALID', 'SAMPLE_STRUCTURE_INVALID', 'SAMPLE_COMPILE_FAILED', 'EXAMPLE_APPLICATION_ASSEMBLY_COLLAPSED')) {
+        Assert-NoDiagnostic $preservation $code
+    }
+    if ($preservation.summary.samplesCompiled -ne 6) { throw 'Expected six preserved source units to compile.' }
+
+    # An invented dependency cannot pass by pointing at an otherwise valid project.
+    $feed = Join-Path $architecture 'empty-feed'
+    New-Item -ItemType Directory -Path $feed | Out-Null
+    Write-Utf8File $testProject ($originalProject.Replace('</Project>', '<ItemGroup><PackageReference Include="Codebelt.Docfx.Nonexistent.Architecture.Dependency" Version="1.0.0" /></ItemGroup></Project>'))
+    Write-Utf8File (Join-Path $architecture 'NuGet.Config') "<configuration><packageSources><clear/><add key=`"fixture`" value=`"$feed`" /></packageSources></configuration>"
+    $dependencyFailure = Invoke-Validator -Workspace $architecture -ExtraArgs @('--validate-samples')
+    Assert-Diagnostic $dependencyFailure 'SAMPLE_COMPILE_FAILED'
+    Assert-DiagnosticMessageContains $dependencyFailure 'SAMPLE_COMPILE_FAILED' 'NU1101'
+    Write-Host 'DocFX application assembly architecture regression passed (real xUnit execution, CS0017, contexts and excerpts).'
+} finally {
+    if (Test-Path $architecture) { Remove-Item -LiteralPath $architecture -Recurse -Force }
+}
+
 # The validator returns a non-zero exit code for fixtures that intentionally contain
 # diagnostics. Success here is determined by the assertions above not throwing, so reset
 # the process exit code for callers (e.g. validate-skill-templates.ps1) that inspect it.

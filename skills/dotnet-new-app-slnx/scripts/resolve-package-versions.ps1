@@ -9,128 +9,59 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($TemplatePath)) {
-    $scriptRoot = Split-Path -Path $PSCommandPath -Parent
-    $TemplatePath = Join-Path $scriptRoot '..\assets\shared\Directory.Packages.props'
+    $TemplatePath = Join-Path $PSScriptRoot '../assets/shared/Directory.Packages.props'
 }
 
-$TemplatePath = [System.IO.Path]::GetFullPath($TemplatePath)
-
-function Get-VersionSortKey {
-    param([string]$Version)
-
-    $stable = $Version.Split('-', 2)[0]
-    $parts = $stable.Split('.') | ForEach-Object { [int]$_ }
-    while ($parts.Count -lt 4) {
-        $parts += 0
-    }
-
-    return ,$parts
-}
-
-function Compare-VersionKeys {
-    param(
-        [int[]]$Left,
-        [int[]]$Right
-    )
-
-    $max = [Math]::Max($Left.Count, $Right.Count)
-    for ($i = 0; $i -lt $max; $i++) {
-        $l = if ($i -lt $Left.Count) { $Left[$i] } else { 0 }
-        $r = if ($i -lt $Right.Count) { $Right[$i] } else { 0 }
-        if ($l -ne $r) {
-            return [Math]::Sign($l - $r)
-        }
-    }
-
-    return 0
-}
-
-function Select-LatestStableVersion {
-    param(
-        [string[]]$Versions,
-        [int]$RequiredMajor = -1
-    )
-
-    $stable = $Versions | Where-Object { $_ -notmatch '-' }
-    if ($RequiredMajor -ge 0) {
-        $stable = $stable | Where-Object { $_ -match '^(\d+)\.' -and [int]$Matches[1] -eq $RequiredMajor }
-    }
-
-    if (-not $stable) {
-        throw "No stable versions matched RequiredMajor=$RequiredMajor."
-    }
-
-    $best = $null
-    $bestKey = $null
-    foreach ($version in $stable) {
-        $key = Get-VersionSortKey -Version $version
-        if ($null -eq $bestKey -or (Compare-VersionKeys -Left $key -Right $bestKey) -gt 0) {
-            $best = $version
-            $bestKey = $key
-        }
-    }
-
-    return $best
-}
-
-if ($TargetFramework -notmatch '^net(\d+)\.0$') {
-    throw "TargetFramework must look like net10.0. Received: $TargetFramework"
-}
-
-$targetMajor = [int]$Matches[1]
-$frameworkAlignedPackages = @(
-    'Microsoft.AspNetCore.OpenApi',
-    'Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation'
-)
-
-# These are authorized API lines, not frozen package-version pins.
-$testStackMajors = @{
-    'Codebelt.Extensions.Xunit.App' = 12
-    'xunit.v3' = 4
-    'xunit.v3.runner.console' = 4
-}
-
-[xml]$template = Get-Content -Path $TemplatePath -Raw
-$packageNodes = @($template.Project.ItemGroup.PackageVersion)
+[xml]$template = Get-Content -LiteralPath $TemplatePath -Raw
+$packageNodes = $template.SelectNodes('/Project/ItemGroup/PackageVersion[@Include and @Version]')
 if ($packageNodes.Count -eq 0) {
     throw "No PackageVersion entries found in $TemplatePath"
 }
 
 $serviceIndex = Invoke-RestMethod -Uri 'https://api.nuget.org/v3/index.json'
-$packageBaseAddress = $serviceIndex.resources |
-    Where-Object { $_.'@type' -eq 'PackageBaseAddress/3.0.0' } |
+$registrationBase = $serviceIndex.resources |
+    Where-Object { $_.'@type' -eq 'RegistrationsBaseUrl/3.6.0' } |
     Select-Object -First 1 -ExpandProperty '@id'
 
-if ([string]::IsNullOrWhiteSpace($packageBaseAddress)) {
-    throw 'Could not locate PackageBaseAddress/3.0.0 in the NuGet service index.'
+if ([string]::IsNullOrWhiteSpace($registrationBase)) {
+    throw 'Could not locate RegistrationsBaseUrl/3.6.0 in the NuGet service index.'
 }
 
 $result = [ordered]@{}
 foreach ($node in $packageNodes) {
     $packageId = [string]$node.Include
     $placeholder = [string]$node.Version
-    $indexUrl = '{0}{1}/index.json' -f $packageBaseAddress, $packageId.ToLowerInvariant()
+    $indexUrl = '{0}/{1}/index.json' -f $registrationBase.TrimEnd('/'), $packageId.ToLowerInvariant()
     $index = Invoke-RestMethod -Uri $indexUrl
-    if (-not $index.versions) {
-        throw "No versions returned for $packageId from $indexUrl"
-    }
+    $versions = @(
+        foreach ($page in $index.items) {
+            $leaves = if ($null -ne $page.PSObject.Properties['items']) {
+                $page.items
+            } else {
+                (Invoke-RestMethod -Uri $page.'@id').items
+            }
 
-    $requiredMajor = if ($testStackMajors.ContainsKey($packageId)) {
-        $testStackMajors[$packageId]
-    } elseif ($frameworkAlignedPackages -contains $packageId) {
-        $targetMajor
-    } else {
-        -1
+            foreach ($leaf in $leaves) {
+                $entry = $leaf.catalogEntry
+                if ($entry.listed -eq $true -and $entry.version.Split('+', 2)[0] -notmatch '-') {
+                    $entry.version
+                }
+            }
+        }
+    )
+    $versions = @($versions | Sort-Object { [version]($_.Split('+', 2)[0]) } -Descending)
+    if ($versions.Count -eq 0) {
+        throw "No stable listed versions returned for $packageId from $indexUrl"
     }
-    $resolved = Select-LatestStableVersion -Versions $index.versions -RequiredMajor $requiredMajor
 
     $result[$placeholder] = [ordered]@{
         package_id = $packageId
-        version = $resolved
+        version = $versions[0]
+        candidate_versions = $versions
         target_framework = $TargetFramework
         compatibility_status = 'provisional'
     }
 }
 
-Write-Warning 'Version-index selection is provisional. Inspect package assets and dependency ranges, then restore and build the combined scaffold for the selected framework before treating these versions as compatible.'
+Write-Warning 'Inspect package assets and dependency ranges, then restore and build the combined scaffold for the selected framework before accepting a candidate.'
 $result | ConvertTo-Json -Depth 4

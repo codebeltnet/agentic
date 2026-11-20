@@ -633,7 +633,7 @@ function Get-AppPlaceholderMap {
     $targetMajor = if ($TargetFramework -match '^net(\d+)\.0$') { [int]$Matches[1] } else { throw "Unsupported TargetFramework for test map: $TargetFramework" }
     $ubuntuTag = "codebeltnet/ubuntu-testrunner:$targetMajor"
     $aspNetAlignedVersion = switch ($targetMajor) {
-        9 { '9.0.14' }
+        11 { '11.0.0' }
         10 { '10.0.5' }
         default { throw "No test fixture version configured for TFM major $targetMajor" }
     }
@@ -825,6 +825,23 @@ if ($MetadataOnly) {
         exit 1
     }
     exit 0
+}
+
+Add-ValidationResult -Results $results -Name 'dotnet-csrun source fixtures and published example stay coherent' -Group 'Templates' -Action {
+    $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-csrun/SKILL.md' -GitRef $Ref
+    Assert-Contains -Name 'dotnet-csrun' -Content $skill -Needle 'Compiled only'
+    Assert-Contains -Name 'dotnet-csrun' -Content $skill -Needle 'Unverified'
+    $fixture = (Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-csrun/evals/files/console.json' -GitRef $Ref) | ConvertFrom-Json
+    $published = [regex]::Match($skill, "(?s)source = @'\r?\n(.*?)\r?\n'@").Groups[1].Value
+    if ($published.Replace("`r`n", "`n") -cne $fixture.source.Replace("`r`n", "`n")) { throw 'dotnet-csrun published source differs from its console fixture.' }
+    foreach ($link in [regex]::Matches($skill, '\]\(([^)]+)\)')) {
+        $path = $link.Groups[1].Value
+        if ($path -notmatch '://') { [void](Get-FileText -RepoRoot $repoRoot -RelativePath "skills/dotnet-csrun/$path" -GitRef $Ref) }
+    }
+    if ([string]::IsNullOrWhiteSpace($Ref)) {
+        & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'skills/dotnet-csrun/scripts/test-sample-tools.ps1')
+        if ($LASTEXITCODE -ne 0) { throw 'dotnet-csrun sample tool regressions failed.' }
+    }
 }
 
 Add-ValidationResult -Results $results -Name 'Git remote PR routing and deterministic workflow stay integrated' -Group 'Pr' -Action {
@@ -1057,7 +1074,6 @@ Add-ValidationResult -Results $results -Name 'App skill documents web-family App
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'treat a blank response as accepting that shown value'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Web` as the host family'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Do **not** substitute vanilla .NET hosting code as a workaround.'
-    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'resolve the latest stable version whose **major** matches the selected `{TARGET_FRAMEWORK}` major'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle '`Directory.Packages.props` is the authoritative source of NuGet package versions for the generated app scaffold.'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Do **not** inline `Version=` attributes into `.csproj` files or `Directory.Build.props` as a workaround for restore or build issues.'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'If the lookup step fails, halt and report it instead of guessing.'
@@ -1098,8 +1114,8 @@ Add-ValidationResult -Results $results -Name 'Both scaffolds select xUnit 4, Cod
             Assert-NotContains -Name $skillRoot -Content $props -Needle "Include=`"$id`""
             Assert-NotContains -Name $skillRoot -Content $packages -Needle "Include=`"$id`""
         }
-        Assert-Contains -Name $skillRoot -Content $skill -Needle '12.x'
-        Assert-Contains -Name $skillRoot -Content $skill -Needle '4.x'
+        Assert-Contains -Name $skillRoot -Content $skill -Needle 'Consider releases across all major lines.'
+        Assert-Contains -Name $skillRoot -Content $skill -Needle 'try the next newest listed stable candidate'
         Assert-Contains -Name $skillRoot -Content $skill -Needle '--report-xunit-trx --coverlet --coverlet-output-format opencover'
         if ($variant -eq 'lib') {
             $pipeline = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared/.github/workflows/ci-pipeline.yml" -GitRef $Ref
@@ -1210,13 +1226,13 @@ Add-ValidationResult -Results $results -Name 'App reference guide uses ROOT_NAME
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle '`web-api` (`Web API`)'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle '`web-mvc` (`MVC`)'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle '`webapp` (`Web App / Razor`)'
-    Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'a `net9.0` app should resolve these packages to the latest stable `9.x` version, not `10.x`'
+    Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Verify framework assets, ASP.NET Core runtime requirements, dependency ranges, restore, and build for the selected TFM'
 }
 
 Add-ValidationResult -Results $results -Name 'App skill ships deterministic package version resolver script' -Action {
     $script = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/scripts/resolve-package-versions.ps1' -GitRef $Ref
     Assert-Contains -Name 'resolve-package-versions.ps1' -Content $script -Needle 'https://api.nuget.org/v3/index.json'
-    Assert-Contains -Name 'resolve-package-versions.ps1' -Content $script -Needle 'PackageBaseAddress/3.0.0'
+    Assert-Contains -Name 'resolve-package-versions.ps1' -Content $script -Needle 'RegistrationsBaseUrl/3.6.0'
     Assert-Contains -Name 'resolve-package-versions.ps1' -Content $script -Needle 'TargetFramework'
     Assert-Contains -Name 'resolve-package-versions.ps1' -Content $script -Needle 'if ([string]::IsNullOrWhiteSpace($TemplatePath))'
     Assert-Contains -Name 'resolve-package-versions.ps1' -Content $script -Needle "Directory.Packages.props'"
@@ -1336,7 +1352,7 @@ Add-ValidationResult -Results $results -Name 'Scaffolds use root AGENTS.md as th
         }
         # Check small semantic anchors and prohibitions, rather than duplicating entire prose sections.
         foreach ($needle in @(
-            'xunit.v3', 'Codebelt.Extensions.Xunit.App v12', 'Codebelt.Extensions.Xunit',
+            'xunit.v3', 'Codebelt.Extensions.Xunit.App base classes', 'Codebelt.Extensions.Xunit',
             'ITestOutputHelper', 'base(output)', 'TestOutput.WriteLine', '[Fact]', '[Theory]', '[InlineData]',
             'ShouldReturnTrue_WhenConditionIsMet', 'Assert.Equal', 'System Under Test (SUT)', 'RootNamespace',
             'dummies, fakes, stubs and spies', 'Moq', 'virtual or abstract', 'JsonMarshaller',
@@ -1421,7 +1437,9 @@ Add-ValidationResult -Results $results -Name 'Scaffolds use root AGENTS.md as th
             }
         }
         $bot = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared/.bot/README.md" -GitRef $Ref
-        Assert-Contains -Name "$skillRoot .bot README" -Content $bot -Needle 'into root `AGENTS.md`.'
+        Assert-Contains -Name "$skillRoot .bot README" -Content $bot -Needle 'The `.bot/README.md` file itself is intentionally tracked in source control.'
+        Assert-Contains -Name "$skillRoot .bot README" -Content $bot -Needle 'All other `.bot/` working material remains local-only and excluded from source control.'
+        Assert-Contains -Name "$skillRoot .bot README" -Content $bot -Needle 'Move only finalized, non-confidential guidance into `AGENTS.md`.'
         foreach ($path in (Get-RepoFileList -RepoRoot $repoRoot -RelativePath $skillRoot -GitRef $Ref)) {
             if ([System.IO.Path]::GetExtension($path) -notin @('.md', '.json', '.ps1')) { continue }
             $content = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/$path" -GitRef $Ref
@@ -3659,17 +3677,17 @@ Add-ValidationResult -Results $results -Name 'Rendered app templates compile in 
         $sharedAssetFiles = Get-RepoFileList -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/assets/shared' -GitRef $Ref
         $cases = @(
             [pscustomobject]@{
-                Name = 'ConsoleMinimal-net9'
+                Name = 'ConsoleMinimal-net10'
                 AppType = 'Console'
-                TargetFramework = 'net9.0'
+                TargetFramework = 'net10.0'
                 Csproj = 'skills/dotnet-new-app-slnx/assets/app/console.csproj'
                 Program = 'skills/dotnet-new-app-slnx/assets/app/console/Program.minimal.cs'
                 ExtraFiles = @()
             }
             [pscustomobject]@{
-                Name = 'ConsoleStartup-net9'
+                Name = 'ConsoleStartup-net10'
                 AppType = 'Console'
-                TargetFramework = 'net9.0'
+                TargetFramework = 'net10.0'
                 Csproj = 'skills/dotnet-new-app-slnx/assets/app/console.csproj'
                 Program = 'skills/dotnet-new-app-slnx/assets/app/console/Program.startup.cs'
                 ExtraFiles = @(
@@ -3677,9 +3695,9 @@ Add-ValidationResult -Results $results -Name 'Rendered app templates compile in 
                 )
             }
             [pscustomobject]@{
-                Name = 'WorkerMinimal-net9'
+                Name = 'WorkerMinimal-net10'
                 AppType = 'Worker'
-                TargetFramework = 'net9.0'
+                TargetFramework = 'net10.0'
                 Csproj = 'skills/dotnet-new-app-slnx/assets/app/worker.csproj'
                 Program = 'skills/dotnet-new-app-slnx/assets/app/worker/Program.minimal.cs'
                 ExtraFiles = @(
@@ -3687,25 +3705,25 @@ Add-ValidationResult -Results $results -Name 'Rendered app templates compile in 
                 )
             }
             [pscustomobject]@{
-                Name = 'WebMinimal-net9'
+                Name = 'WebMinimal-net10'
                 AppType = 'Web'
-                TargetFramework = 'net9.0'
+                TargetFramework = 'net10.0'
                 Csproj = 'skills/dotnet-new-app-slnx/assets/app/web.csproj'
                 Program = 'skills/dotnet-new-app-slnx/assets/app/web/Program.minimal.cs'
                 ExtraFiles = @()
             }
             [pscustomobject]@{
-                Name = 'WebApiMinimal-net9'
+                Name = 'WebApiMinimal-net11'
                 AppType = 'Api'
-                TargetFramework = 'net9.0'
+                TargetFramework = 'net11.0'
                 Csproj = 'skills/dotnet-new-app-slnx/assets/app/web-api.csproj'
                 Program = 'skills/dotnet-new-app-slnx/assets/app/web-api/Program.minimal.cs'
                 ExtraFiles = @()
             }
             [pscustomobject]@{
-                Name = 'MvcStartup-net9'
+                Name = 'MvcStartup-net10'
                 AppType = 'Mvc'
-                TargetFramework = 'net9.0'
+                TargetFramework = 'net10.0'
                 Csproj = 'skills/dotnet-new-app-slnx/assets/app/web-mvc.csproj'
                 Program = 'skills/dotnet-new-app-slnx/assets/app/web-mvc/Program.startup.cs'
                 ExtraFiles = @(
@@ -3718,9 +3736,9 @@ Add-ValidationResult -Results $results -Name 'Rendered app templates compile in 
                 )
             }
             [pscustomobject]@{
-                Name = 'WebAppMinimal-net9'
+                Name = 'WebAppMinimal-net10'
                 AppType = 'WebApp'
-                TargetFramework = 'net9.0'
+                TargetFramework = 'net10.0'
                 Csproj = 'skills/dotnet-new-app-slnx/assets/app/webapp.csproj'
                 Program = 'skills/dotnet-new-app-slnx/assets/app/webapp/Program.minimal.cs'
                 ExtraFiles = @(
@@ -3822,8 +3840,8 @@ Add-ValidationResult -Results $results -Name 'Rendered library templates leave n
         '{REPOSITORY_URL}' = 'https://github.com/acme/mylibrary'
         '{REPO_OWNER}' = 'acme'
         '{REPO_SLUG}' = 'mylibrary'
-        '{TARGET_FRAMEWORKS}' = 'net10.0;net8.0'
-        '{EXECUTABLE_TARGET_FRAMEWORKS}' = 'net10.0;net8.0'
+        '{TARGET_FRAMEWORKS}' = 'net11.0;net10.0'
+        '{EXECUTABLE_TARGET_FRAMEWORKS}' = 'net11.0;net10.0'
         '{DOCFX_TARGET_FRAMEWORK}' = 'net10.0'
         '{BENCHMARK_RUNNER_PROJECT_NAME}' = 'benchmark-runner'
         '{BENCHMARK_RUNNER_NAMESPACE}' = 'benchmark_runner'
@@ -3845,6 +3863,18 @@ Add-ValidationResult -Results $results -Name 'Rendered library templates leave n
 
 if ($Full -and $Suite -in @('All', 'Docfx')) {
     $docfxScriptResults = Invoke-ValidationScriptJobs -Scripts @(
+        [pscustomobject]@{
+            Name = 'DocFX contextual references complement examples without bypassing validation'
+            Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-contextual-references.ps1'
+        }
+        [pscustomobject]@{
+            Name = 'DocFX one-shot integration examples enforce exact test execution'
+            Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-integration-example.ps1'
+        }
+        [pscustomobject]@{
+            Name = 'DocFX run actions report coverage and deliver paired source-bound recipes'
+            Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-run-actions.ps1'
+        }
         [pscustomobject]@{
             Name = 'DocFX digest rejects metadata scaffolds and accepts scenario-led documentation'
             Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-quality.ps1'

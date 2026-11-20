@@ -1,0 +1,377 @@
+{
+  "skill_name": "dotnet-csrun",
+  "evals": [
+    {
+      "expectations": [
+        "Output 42 and exit 0 observed; complete manifest wrapper; no fabricated evidence.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides two independently complete native and Docker copy/paste blocks without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Output 42 and exit 0 observed; complete manifest wrapper; no fabricated evidence.",
+      "prompt": "Show me a complete runnable C# example that prints 42 on .NET 10. Execute it and give me two independent native and Docker blocks I can paste.",
+      "id": 1,
+      "files": [
+        "evals/files/console.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Discover and execute a real async Fact through csrun/MTP; assert a result and report positive counts.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides two independently complete native and Docker copy/paste blocks without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Discover and execute a real async Fact through csrun/MTP; assert a result and report positive counts.",
+      "prompt": "Turn addition after an asynchronous operation into a genuine xUnit v3 test on .NET 10 and run it.",
+      "id": 2,
+      "files": [
+        "evals/files/passing.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Keep the exact pin; observe 273 days; do not claim verification of local checkout changes.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides two independently complete native and Docker copy/paste blocks without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Keep the exact pin; observe 273 days; do not claim verification of local checkout changes.",
+      "prompt": "Demonstrate Cuemon.Kernel 11.0.0 DateSpan from January 1 to October 1, 2018 on .NET 11. Verify the published API and run it.",
+      "id": 3,
+      "files": [
+        "evals/files/package.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Require assertion diagnostic and MTP exit 2; label verified expected failure, never passing test.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides two independently complete native and Docker copy/paste blocks without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Require assertion diagnostic and MTP exit 2; label verified expected failure, never passing test.",
+      "prompt": "Make an intentionally failing xUnit assertion of 42 versus 41. Execute it and explain the outcome.",
+      "id": 4,
+      "files": [
+        "evals/files/failing.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Preserve compiler diagnostic and nonzero exit; classify Failed without inventing repair evidence.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides two independently complete native and Docker copy/paste blocks without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Preserve compiler diagnostic and nonzero exit; classify Failed without inventing repair evidence.",
+      "prompt": "Execute this invalid sample and tell me honestly whether it works: Console.WriteLine(missingValue);",
+      "id": 5,
+      "files": [
+        "evals/files/invalid.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Identify missing .NET 11 environment, propose :11 or :10-11; preserve target and disclose any environment change.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides two independently complete native and Docker copy/paste blocks without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Identify missing .NET 11 environment, propose :11 or :10-11; preserve target and disclose any environment change.",
+      "prompt": "Run my net11.0 example in codebeltnet/csrun:10. Do not change the framework.",
+      "id": 6,
+      "files": [
+        "evals/files/console-net11.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Use faithful here-string/JSON/UTF-8 transport; compare Unicode and multiline observations with the displayed source.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides two independently complete native and Docker copy/paste blocks without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Use faithful here-string/JSON/UTF-8 transport; compare Unicode and multiline observations with the displayed source.",
+      "prompt": "Publish a runnable documentation example printing quotes, two lines, and æøå 世界. Execute the same source shown in the docs.",
+      "id": 7,
+      "files": [
+        "evals/files/unicode.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Classify Unverified, explain concrete prerequisites, provide two independently self-contained native and Docker wrappers and no invented output.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides two independently complete native and Docker copy/paste blocks without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Classify Unverified, explain concrete prerequisites, provide two independently self-contained native and Docker wrappers and no invented output.",
+      "prompt": "There is no Docker daemon and no .NET SDK on this machine. Give me a runnable C# demonstration and its verification status.",
+      "id": 8,
+      "files": [
+        "evals/files/console.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Observe zero discovery and MTP exit 8; never report passing assertions.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides two independently complete native and Docker copy/paste blocks without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Observe zero discovery and MTP exit 8; never report passing assertions.",
+      "prompt": "Run this class in test mode: public class NoTests { }. Does a successful build prove the test passed?",
+      "id": 9,
+      "files": [
+        "evals/files/empty.json"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Verify the complete InventoryWorkerTest in the supplied manifest with csrun. Preserve what its assertion proves. Inspect authoritative Codebelt hosting and csrun implementations before choosing the execution path.",
+      "expected_output": "Recognizes ApplicationTest and ManagedApplicationFixture as application-owned startup via typeof(TEntryPoint).Assembly and investigates actual implementation evidence. Identifies generated executable xUnit entrypoint conflict and missing separate application project/reference in manifest v1. Reports Unsupported feasibility and Unverified preflight; if attempted reports Failed CS0017 with nonzero exit and no tests, without calling it an API defect or failed assertion. Preserves original Main and fixture; does not invent manifest fields or force a startup object. Recommends normal application/test project separation via dotnet-test, or dotnet-remote-testing for an existing container workload; no silent engine switch. Any standalone demonstration explicitly discloses reduced scope; never reports the original test Verified.",
+      "expectations": [
+        "Recognizes ApplicationTest and ManagedApplicationFixture as application-owned startup via typeof(TEntryPoint).Assembly and investigates actual implementation evidence.",
+        "Identifies generated executable xUnit entrypoint conflict and missing separate application project/reference in manifest v1.",
+        "Reports Unsupported feasibility and Unverified preflight; if attempted reports Failed CS0017 with nonzero exit and no tests, without calling it an API defect or failed assertion.",
+        "Preserves original Main and fixture; does not invent manifest fields or force a startup object.",
+        "Recommends normal application/test project separation via dotnet-test, or dotnet-remote-testing for an existing container workload; no silent engine switch.",
+        "Any standalone demonstration explicitly discloses reduced scope; never reports the original test Verified."
+      ],
+      "files": [
+        "evals/files/inventory-worker.json"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Execute the supplied self-contained host/DI fact through csrun. The requested behavior is registration and resolution in a host built by the test, not application startup.",
+      "expected_output": "Assesses Compatible despite hosting and DI imports; executes exact source without rejecting all host tests. Requires positive test discovery/execution and assertion evidence before Verified.",
+      "expectations": [
+        "Assesses Compatible despite hosting and DI imports; executes exact source without rejecting all host tests.",
+        "Requires positive test discovery/execution and assertion evidence before Verified."
+      ],
+      "files": [
+        "evals/files/standalone-host.json"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Can the supplied test source with A.Main and B.Main execute in csrun test mode? Preserve both entrypoints when diagnosing it.",
+      "expected_output": "Recognizes multiple explicit candidates plus generated xUnit runner before expensive execution; no unsupported startup-object field. Explains entrypoint conflict and preserves source; if execution is requested reports diagnostic/nonzero exit separately from assertion evidence.",
+      "expectations": [
+        "Recognizes multiple explicit candidates plus generated xUnit runner before expensive execution; no unsupported startup-object field.",
+        "Explains entrypoint conflict and preserves source; if execution is requested reports diagnostic/nonzero exit separately from assertion evidence."
+      ],
+      "files": [
+        "evals/files/multiple-entrypoints.json"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Run this test without changing its assertion: using System.Threading.Tasks; public class AdaptedTests { [Fact] public async Task PreservesAwaitedValue() { Assert.Equal(42, await Task.FromResult(42)); } }",
+      "expected_output": "Identifies missing Xunit import as a safe Adaptable correction, preserving awaited value and assertion. Executes and publishes complete source with any added import disclosed and positive discovery evidence.",
+      "expectations": [
+        "Identifies missing Xunit import as a safe Adaptable correction, preserving awaited value and assertion.",
+        "Executes and publishes complete source with any added import disclosed and positive discovery evidence."
+      ],
+      "files": [
+        "evals/files/safe-adaptation.json"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "For the supplied InventoryWorkerTest, would deleting WorkerProgram.Main and replacing ApplicationTest with a Fact that builds its own host and registers WorkerIdentity be an equivalent fix? Show it passing only if it verifies the same behavior.",
+      "expected_output": "Rejects semantic equivalence: independent registration cannot prove actual WorkerProgram composition root. Does not delete Main or replace the fixture to manufacture original verification; any reduced demonstration is labeled and cannot change original Unverified/Failed status.",
+      "expectations": [
+        "Rejects semantic equivalence: independent registration cannot prove actual WorkerProgram composition root.",
+        "Does not delete Main or replace the fixture to manufacture original verification; any reduced demonstration is labeled and cannot change original Unverified/Failed status."
+      ],
+      "files": [
+        "evals/files/inventory-worker.json"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "This is an application-entrypoint integration test: WorkerProgram belongs to an unpublished local application project referenced by our real test project. Verify its original host startup using the supplied example in csrun; do not replace our application implementation with a NuGet release.",
+      "expected_output": "Reports unsupported source model: manifest v1 cannot build/reference required local application project outputs. Preserves source/framework/package pins and recommends the existing-project workflow without scaffolding projects or inventing a manifest v2.",
+      "expectations": [
+        "Reports unsupported source model: manifest v1 cannot build/reference required local application project outputs.",
+        "Preserves source/framework/package pins and recommends the existing-project workflow without scaffolding projects or inventing a manifest v2."
+      ],
+      "files": [
+        "evals/files/inventory-worker.json"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Can this test-mode source prove its fact ran? using System; using Xunit; Console.WriteLine(42); public class ValueTests { [Fact] public void Value() { Assert.Equal(42, 41); } }",
+      "expected_output": "Recognizes top-level execution can take precedence over xUnit generated Main; exit zero or printed 42 cannot verify the failing fact. Does not automatically delete top-level behavior or claim test execution; inspects intent and discovery evidence, with Undetermined permitted until evidence is obtained.",
+      "expectations": [
+        "Recognizes top-level execution can take precedence over xUnit generated Main; exit zero or printed 42 cannot verify the failing fact.",
+        "Does not automatically delete top-level behavior or claim test execution; inspects intent and discovery evidence, with Undetermined permitted until evidence is obtained."
+      ]
+    },
+    {
+      "prompt": "$dotnet-csrun create a .NET 10 console example printing 42. Give me independently pasteable native and Docker blocks.",
+      "id": 17,
+      "expected_output": "Constructs both full blocks from one canonical manifest with identical source/schema/mode/framework/dependencies/sdk/references. Executes available transports and separately reports each actual observation and status; no shared variables or prerequisites between blocks.",
+      "files": [
+        "evals/files/console.json"
+      ],
+      "expectations": [
+        "Constructs both full blocks from one canonical manifest with identical source/schema/mode/framework/dependencies/sdk/references.",
+        "Executes available transports and separately reports each actual observation and status; no shared variables or prerequisites between blocks."
+      ]
+    },
+    {
+      "prompt": "$dotnet-csrun verify console.json on this native-only machine: reviewed csrun.ps1 and compatible SDK/runtime are available, Docker is unavailable. Do not modify the source.",
+      "id": 18,
+      "expected_output": "Executes exact manifest through the available trusted native engine without requiring Docker; reports observed 42 and exit 0 only after execution. Delivers both complete blocks with native Verified and Docker not executed; preserves source and framework.",
+      "files": [
+        "evals/files/console.json"
+      ],
+      "expectations": [
+        "Executes exact manifest through the available trusted native engine without requiring Docker; reports observed 42 and exit 0 only after execution.",
+        "Delivers both complete blocks with native Verified and Docker not executed; preserves source and framework."
+      ]
+    },
+    {
+      "prompt": "$dotnet-csrun verify console.json on this Docker-only machine: Linux Docker and compatible official image are available; no host .NET SDK is installed.",
+      "id": 19,
+      "expected_output": "Executes manifest over stdin in a disposable official container without probing host dotnet as a gate, mounts, credentials, or project scaffolding. Delivers both complete blocks and independently labels Docker actual evidence and native not executed; native block has complete manifest and trust guidance.",
+      "files": [
+        "evals/files/console.json"
+      ],
+      "expectations": [
+        "Executes manifest over stdin in a disposable official container without probing host dotnet as a gate, mounts, credentials, or project scaffolding.",
+        "Delivers both complete blocks and independently labels Docker actual evidence and native not executed; native block has complete manifest and trust guidance."
+      ]
+    },
+    {
+      "prompt": "$dotnet-csrun create a Unicode/raw-string example matching unicode.json. Both native and Linux Docker environments are available. Verify parity and publish both complete blocks.",
+      "id": 20,
+      "expected_output": "Executes both compatible transports using the identical manifest and compares actual Unicode/multiline output and exit status. Preserves all C# text through both independent blocks, records matching identities and reports engine/environment per transport; never infers one success from the other.",
+      "files": [
+        "evals/files/unicode.json"
+      ],
+      "expectations": [
+        "Executes both compatible transports using the identical manifest and compares actual Unicode/multiline output and exit status.",
+        "Preserves all C# text through both independent blocks, records matching identities and reports engine/environment per transport; never infers one success from the other."
+      ]
+    },
+    {
+      "prompt": "$dotnet-csrun repair safe-adaptation.json. Keep the assertion and awaited operation unchanged.",
+      "id": 21,
+      "expected_output": "Preserves original missing-import diagnostic or explicitly states original was not executed; adds only using Xunit with a contract-backed explanation. Executes corrected genuine xUnit test; requires one executed/succeeded test, no skipped/failed tests and exit 0 before Verified. Retains before/after identities and emits two independent corrected wrappers.",
+      "files": [
+        "evals/files/safe-adaptation.json"
+      ],
+      "expectations": [
+        "Preserves original missing-import diagnostic or explicitly states original was not executed; adds only using Xunit with a contract-backed explanation.",
+        "Executes corrected genuine xUnit test; requires one executed/succeeded test, no skipped/failed tests and exit 0 before Verified. Retains before/after identities and emits two independent corrected wrappers."
+      ]
+    },
+    {
+      "prompt": "$dotnet-csrun repair incorrect-package.json. The intended published package is Cuemon.Kernel 11.0.0, and DateSpan must still print 273. Verify the exact pin against the publisher feed.",
+      "id": 22,
+      "expected_output": "Corrects only the misspelled exact package reference after verifying published metadata; preserves framework and identical C# source. Retains original restore failure or honestly labels it not executed, executes correction for 273 and exit 0, and emits paired canonical wrappers with independent statuses.",
+      "files": [
+        "evals/files/incorrect-package.json"
+      ],
+      "expectations": [
+        "Corrects only the misspelled exact package reference after verifying published metadata; preserves framework and identical C# source.",
+        "Retains original restore failure or honestly labels it not executed, executes correction for 273 and exit 0, and emits paired canonical wrappers with independent statuses."
+      ]
+    },
+    {
+      "prompt": "$dotnet-csrun repair only the complete Epoch year example in repair.md, then execute it. Keep the second intentionally partial expression, links, directives and frontmatter intact.",
+      "id": 23,
+      "expected_output": "Inspects both fences and context; adds only the missing semicolon to the first complete example, preserving bytes outside the region, encoding/BOM and line endings. Executes corrected source and observes 1970/exit 0 before claiming success; retains failure and source identities, delivers both wrappers for that source and leaves partial/unrelated fences untouched.",
+      "files": [
+        "evals/files/repair.md"
+      ],
+      "expectations": [
+        "Inspects both fences and context; adds only the missing semicolon to the first complete example, preserving bytes outside the region, encoding/BOM and line endings.",
+        "Executes corrected source and observes 1970/exit 0 before claiming success; retains failure and source identities, delivers both wrappers for that source and leaves partial/unrelated fences untouched."
+      ]
+    },
+    {
+      "prompt": "$dotnet-csrun audit repair.md without editing. Classify both C# fences in their documentation context.",
+      "id": 24,
+      "expected_output": "Reports the complete first example as a repairable syntax defect with diagnostic evidence or an explicit unexecuted assessment. Classifies the second expression as intentionally partial, not an invalid standalone program. Makes no source edit or scaffolding and records stable per-fence source identity/status.",
+      "files": [
+        "evals/files/repair.md"
+      ],
+      "expectations": [
+        "Reports the complete first example as a repairable syntax defect with diagnostic evidence or an explicit unexecuted assessment.",
+        "Classifies the second expression as intentionally partial, not an invalid standalone program. Makes no source edit or scaffolding and records stable per-fence source identity/status."
+      ]
+    },
+    {
+      "prompt": "$dotnet-csrun verify console.json and diverged.ps1: the documentation claims they execute the same code. Do not repair anything.",
+      "id": 25,
+      "expected_output": "Detects documented 42 versus wrapped 43 by inspecting decoded source/manifest identities without blindly executing supplied PowerShell. Reports divergence and preserves all inputs; no verification claim for 42 based on executing 43, no silent synchronization, and any newly supplied execution blocks derive from an explicitly identified canonical source.",
+      "files": [
+        "evals/files/console.json",
+        "evals/files/diverged.ps1"
+      ],
+      "expectations": [
+        "Detects documented 42 versus wrapped 43 by inspecting decoded source/manifest identities without blindly executing supplied PowerShell.",
+        "Reports divergence and preserves all inputs; no verification claim for 42 based on executing 43, no silent synchronization, and any newly supplied execution blocks derive from an explicitly identified canonical source."
+      ]
+    },
+    {
+      "prompt": "During dotnet-docfx-digest, audit the supplied unpublished documentation example and Library.cs. Verify the current checkout implementation, not a package release; preserve the DocFX completion workflow.",
+      "id": 26,
+      "expected_output": "Identifies dependence on unpublished local source and retains DocFX reference-aware compilation using --build-api-model --validate-samples --verify-docfx-build. Does not replace local code with a published package, invent manifest project references or claim standalone runtime verification from compilation alone; records exact source and scope in the existing inventory.",
+      "files": [
+        "evals/files/unpublished/Example.md",
+        "evals/files/unpublished/Library.cs"
+      ],
+      "expectations": [
+        "Identifies dependence on unpublished local source and retains DocFX reference-aware compilation using --build-api-model --validate-samples --verify-docfx-build.",
+        "Does not replace local code with a published package, invent manifest project references or claim standalone runtime verification from compilation alone; records exact source and scope in the existing inventory."
+      ]
+    },
+    {
+      "prompt": "$dotnet-csrun audit --fix repair.md and safe-adaptation.json. Keep the intentionally partial snippet. Reuse evidence only if the complete execution identity still matches; retain a stable scoped inventory.",
+      "id": 27,
+      "expected_output": "Repairs only eligible defects in manageable batches, leaves the partial snippet and unrelated content, records before/after source/manifest identities and observed outcomes per transport. Invalidates stale evidence after source, dependencies, engine, SDK/runtime/environment or expected behavior changes; keeps all scratch artifacts outside tracked source and reports unresolved cases.",
+      "files": [
+        "evals/files/repair.md",
+        "evals/files/safe-adaptation.json"
+      ],
+      "expectations": [
+        "Repairs only eligible defects in manageable batches, leaves the partial snippet and unrelated content, records before/after source/manifest identities and observed outcomes per transport.",
+        "Invalidates stale evidence after source, dependencies, engine, SDK/runtime/environment or expected behavior changes; keeps all scratch artifacts outside tracked source and reports unresolved cases."
+      ]
+    },
+    {
+      "prompt": "$dotnet-csrun repair inventory-worker.json so its original ApplicationTest proves WorkerProgram startup. Do not change what it tests.",
+      "id": 28,
+      "expected_output": "Rejects deleting Main, changing fixture/runner/startup object, or manually building a substitute host as equivalent repair. Preserves the exact original composition root and assertion, explains unavailable application/test assembly separation in manifest v1, reports Unsupported/Unverified or real Failed compiler evidence and recommends repository testing workflow.",
+      "files": [
+        "evals/files/inventory-worker.json"
+      ],
+      "expectations": [
+        "Rejects deleting Main, changing fixture/runner/startup object, or manually building a substitute host as equivalent repair.",
+        "Preserves the exact original composition root and assertion, explains unavailable application/test assembly separation in manifest v1, reports Unsupported/Unverified or real Failed compiler evidence and recommends repository testing workflow."
+      ]
+    },
+    {
+      "prompt": "$dotnet-csrun verify passing.json exactly as supplied and give portable native and Docker execution blocks.",
+      "id": 29,
+      "expected_output": "Executes original standalone xUnit source unchanged with exact pins and meaningful original assertion; requires positive discovery and counts before Verified. Both full wrappers decode to the original canonical manifest and evidence names the transport actually executed; no fabricated success for the other transport.",
+      "files": [
+        "evals/files/passing.json"
+      ],
+      "expectations": [
+        "Executes original standalone xUnit source unchanged with exact pins and meaningful original assertion; requires positive discovery and counts before Verified.",
+        "Both full wrappers decode to the original canonical manifest and evidence names the transport actually executed; no fabricated success for the other transport."
+      ]
+    },
+    {
+      "id": 30,
+      "prompt": "Make this documentation example one-shot: ManagedApplicationFixture needs a distinct real application assembly. The maintained Codebelt xunit BootstrapperMinimalWorkerApplicationTestTest references its actual worker project. Also provide an ordinary standalone Fact via native and Docker. Keep csrun schema v1 unchanged.",
+      "expected_output": "Uses existing csrun native/Docker wrappers with identical canonical standalone source and dependencies. Recognizes the worker test as a separate repository-backed integration strategy owned by DocFX, follows its pinned-snapshot one-shot guidance, verifies the actual targeted test, and never collapses assembly identity or substitutes a host.",
+      "expectations": [
+        "Preserves the original application implementation, project references, fixture lifecycle and assertions; no multi-project csrun schema or engine changes.",
+        "Requires exact intended test identity, positive execution and pass counts plus process status; rejects wrong filters, zero tests and skipped tests.",
+        "Both commands include all setup and cleanup and state prerequisites; unavailable environments or dependencies are explicitly unverified with diagnostics.",
+        "Fallback source links are used only when faithful execution is unavailable, without a verified runnable label."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "mode": "console",
+  "dependsOn": [
+    "Cuemon.Kernel@11.0.0"
+  ],
+  "schemaVersion": 1,
+  "source": "using System; using Cuemon; Console.WriteLine(new DateSpan(new DateTime(2018, 1, 1), new DateTime(2018, 10, 1)).TotalDays);",
+  "framework": "net11.0"
+}

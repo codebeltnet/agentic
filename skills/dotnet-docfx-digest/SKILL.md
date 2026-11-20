@@ -1,7 +1,7 @@
 ---
 name: dotnet-docfx-digest
 description: >
-  Use when the user wants to create, repair, audit, or complete DocFX docs for .NET public APIs, or has changed public API that needs namespace pages, XML comments, overwrite files, extension-member tables, examples, or build verification. Exclude private/internal APIs.
+  Use when the user wants to create, repair, audit, or complete DocFX docs for .NET public APIs, or has changed public API that needs namespace pages, XML comments, overwrite files, extension-member tables, examples, or build verification. Also use when the user wants Native and Docker run actions for DocFX examples. Exclude private/internal APIs.
 ---
 
 # .NET DocFX Digest Steward
@@ -12,8 +12,17 @@ description: >
 
 Create and maintain developer-friendly DocFX documentation digests for .NET public APIs. Keep namespace pages, generated API pages, examples, availability notes, and verification aligned with the actual source code and tests.
 
+## Opt-in run actions
+
+For `dotnet-docfx-digest csrun` (also accepted as `dotnet-docfx-digest generate-run-actions`), read [run actions](references/run-actions.md). Run the deterministic generator across the active DocFX repository, then resolve its outstanding examples in bounded project batches within the same skill invocation. Inspect source projects, evaluated references, published package assets and maintained tests, persist source-bound recipes, and regenerate until every example is paired or has a demonstrated technical limitation. Keep C#, source links and template customizations readable. Runtime verification is opt-in and independent for each transport. The generator uses the existing csrun contract and runs without model calls.
+
+For an existing site, always run the current skill's generator, including for toolbar-only updates. An `unchanged` example status applies to its PowerShell scripts. Verify the template's refreshed `public/run-actions.js` against the skill asset, then rebuild and verify the JavaScript in the site output. For a UI-only refresh, preserve existing examples, recipes and script verification evidence.
+
 ## Critical
 
+- Prefer complete standalone programs and genuine xUnit v3 tests, delivered through existing `dotnet-csrun` native and Docker one-shot blocks with identical source/dependencies. For APIs requiring an actual application, runner or distinct assembly identity, inspect the maintained example, test and project graph, then provide a pinned repository-backed one-shot test instead. Read [one-shot examples](references/one-shot-examples.md) before publishing execution instructions. Do not expand csrun manifest v1 or manufacture a substitute host.
+- Put the complete executable C# in the visible fence. Include every entry point, input, and assertion used by the standalone scripts in that fence. Use console mode and print the result when the example demonstrates output. Label pinned repository tests as related executions.
+- Whenever a runnable example is delivered, surface both complete Native and Docker execution options together unless one transport is genuinely unsupported. In a direct Codex response, include each as an independently copyable and executable script; never extract `## Native` alone when the corresponding `## Docker` option exists, point only to a reference/generated file, or require manual assembly. Track verification separately per transport: report `Verified`, `Failed`, `Unverified`, or `Unsupported` only from that transport's own execution or support evidence. For generated DocFX websites, associate both assets with the same C# sample so its Native and Docker copy controls appear together.
 - This skill is autonomous by default. If the user invokes it without naming a namespace, type, member, or changed API — including a bare direct skill call with no parsed arguments, a host-initiated continuation, or a host re-entry that invokes `dotnet-docfx-digest` directly with no extra arguments after the skill already auto-triggered — assume non-human/autonomous execution, treat the request as a repo-wide DocFX audit and repair task, and do not ask startup scoping or approval-to-continue questions.
 - Resolve bundled scripts from the loaded `dotnet-docfx-digest` skill directory first. If that install path is unavailable and the target repository contains the repo-managed source copy, fall back to `skills/dotnet-docfx-digest/scripts/*.cs`. Do not claim the scripts are unavailable until both locations have been checked.
 - `docfx.cs` is fast by default: a plain run validates Markdown, prose, DocFX overwrite layout, namespace pages, extension tables, and required examples **without building, restoring, or running DocFX/gh**. Use it freely during iteration — it discovers the public API from existing DocFX YAML metadata or a conservative source scan, and ends with a `[processes] dotnet=0 msbuild=0 docfx=0 gh=0` summary. Compilation and network access are opt-in.
@@ -30,7 +39,7 @@ dotnet run --file "<resolved-skill-dir>/scripts/agents.cs" -- --repo-root "<repo
 dotnet run --file "<resolved-skill-dir>/scripts/docfx.cs" -- --repo-root "<repo-root>" --build-api-model --validate-samples --verify-docfx-build
 ```
 
-- `--build-api-model` makes API discovery reflection-precise (the fast source-scan path is conservative and may under-report), `--validate-samples` compiles every C# documentation sample through isolated projects in one temporary `.slnx` graph build with bounded MSBuild parallelism, and `--verify-docfx-build` confirms the DocFX build succeeds. Treat `API_MODEL_SOURCE_SCANNER_LIMITED` in a fast run as a reminder to run the build-backed verification before completion, not as a failure.
+- `--build-api-model` makes API discovery reflection-precise (the fast source-scan path is conservative and may under-report), `--validate-samples` compiles C# documentation samples through isolated projects or explicitly bound maintained projects in one temporary `.slnx` graph build with bounded MSBuild parallelism, and `--verify-docfx-build` confirms the DocFX build succeeds. Treat `API_MODEL_SOURCE_SCANNER_LIMITED` in a fast run as a reminder to run the build-backed verification before completion, not as a failure.
 - Treat the current build-backed JSON result as authoritative over earlier fast-path diagnostics. If `--build-api-model` clears fast source-scan errors such as interim-artifact findings for real public type pages, do not keep repairing stale diagnostics from a previous fast run; proceed from the current `summary` object and rerun the final gate when ready.
 - The JSON completion fields live under the top-level `summary` object near the start of the report. For long or truncated output, search saved stdout for `completionState`, `canClaimCompletion`, `fullVerificationRan`, `remainingWorkItems`, `remainingGates`, `remainingDiagnosticsByCode`, `newlyIntroducedSkipMarkers`, and `interimArtifacts` before reading the full diagnostic payload.
 - For noisy audits, write and read a deterministic assessment work queue with `--assessment-queue`. This works on the fast path; add `--search-examples` to embed real GitHub usage:
@@ -308,23 +317,25 @@ For each repair batch, maintain an evidence ledger in the example inventory: rec
 
 Do not assume the right acquisition model. Before writing the example, discover how consumer code actually obtains the documented type from reflection-backed public API shape, docs, tests, samples, or other source-backed evidence. When the type is surfaced by another public method, factory, builder, registration call, or workflow, prefer that discoverable public path over manual construction. Do not mirror internal helper construction (`return new Type { ... }` in implementation code) or manually populate object state just because a constructor exists.
 
-Every generated `csharp` code block is a complete, copy/paste-ready compilation unit. The default is always a compilable unit (option 1). Only use intentionally incomplete excerpts (option 2) when explicitly requested by the user, and label them clearly.
+Before writing code, establish the developer's task, prerequisites, intended observation, execution topology, and verification method from source, public contracts, tests, package documentation, or maintained usage. Follow **Discover API → Understand consumer task → Determine execution topology → Find authoritative usage → Design example → Write source → Validate → Improve explanation → Publish**. Read [example architecture](references/example-architecture.md) for multi-file, application integration, testing APIs, and partial excerpts.
 
-**Complete C# example contract:**
+Choose the smallest realistic presentation: standalone executable, ordinary library usage, multi-file/multi-project scenario, framework/application integration, or intentionally partial excerpt. These are authoring decisions, not a public manifest. Do not force every fence into a console program or claim that every compilation unit independently runs. Explain the actual TFM, package/namespaces, host/configuration, assembly references, and infrastructure where needed; keep simple examples concise.
+
+**Default C# compilation-unit contract (unbound fences):**
 
 - Includes all required `using` directives.
 - Declares a file-scoped namespace (e.g., `namespace X.Y;`).
 - Declares at least one concrete class, struct, or record containing the usage.
 - Does **not** use top-level statements unless the example is explicitly labelled `// Program.cs` at the very top of the code block.
-- Does **not** invent placeholder services, interfaces, classes, methods, or overloads that are not defined inside the same code block.
+- Does **not** invent dependencies, services, members, or overloads. Helpers belong in the source unit or in an explicitly identified maintained project context.
 - Does **not** derive from an abstract or generic base type without supplying the correct concrete type arguments.
 - Does **not** call members that do not exist on the resolved public API surface.
 - Uses the documented type or invokes the documented extension method inside the C# fence. A target name in prose, comments, or string literals does not count.
 - Shows a consumer-visible operation, result, configuration, or next action. Reflection-only discovery and metadata inspection do not count as usage.
 - Contains one coherent example mapping per UID. Merge related calls into one scenario instead of repeating `example: *content` sections for the same UID.
-- Compiles in a minimal class library verification project referencing the documented assemblies.
+- Compiles in a minimal class library verification project referencing the owning documented assemblies, or as an explicitly labelled `// Program.cs` executable. A project-bound fence compiles in its maintained project graph instead; a labelled partial excerpt must bind to the real source containing it and explain its omitted context. Neither form waives compilation.
 
-Prefer examples derived from existing unit, functional, or integration tests as behavioral evidence, then from package-level usage evidence, samples, README content, and real consumer usage, then from a minimal new example based on actual public behavior. Convert Arrange/Act/Assert test structure into consumer-oriented sample code instead of pasting raw test assertions, mocks, or fixture setup. When the best evidence spells obvious framework calls as `System.*` or `Microsoft.*`, add the matching `using` directives in the final sample so the call site stays focused on the documented API unless qualification is genuinely needed to disambiguate.
+Prefer examples derived from existing unit, functional, or integration tests as behavioral evidence, then from package-level usage evidence, samples, README content, and real consumer usage, then from a minimal new example based on actual public behavior. Remove incidental test scaffolding for ordinary APIs. When the API itself is a testing abstraction, preserve `[Fact]`, fixture constructors, real assertions, runner behavior, and application/test assembly boundaries as required by its usage contract. Normalize obvious framework qualifications into matching imports unless qualification disambiguates.
 
 For public non-abstraction types, put the example on the generated type page by targeting the type UID in DocFX overwrite content. In Codebelt repositories, keep authored type overwrite Markdown under `.docfx/api/types/`, typically as `.docfx/api/types/{TypeUid}.md`.
 
@@ -338,7 +349,11 @@ For managed reference pages, map type and extension-method examples to the `exam
 
 ## Example Verification
 
-Every added or changed `csharp` code block must pass two validation gates before it is written to a markdown file. Do not write any `csharp` fence without first verifying both gates pass.
+Keep the principal example sufficient for learning on the page. Present purpose, essential C#, expected outcome, reproduction where applicable, then optional deeper exploration. Reuse already-discovered authoritative usage to select precise maintained source references, explaining what each adds about integration, configuration or lifecycle. Runnable examples can benefit too; simple APIs need no links without useful additional context. Read [contextual source references](references/contextual-source-references.md) before selecting further reading. Links never replace explanations, required C# usage, one-shot execution or compilation/completion gates.
+
+For compatible standalone runtime examples, compose with `dotnet-csrun create`, `verify`, or authorized `repair`; see [standalone execution composition](references/csrun-composition.md). Keep this skill's source discovery, placement, reference-aware compilation, and `--build-api-model --validate-samples --verify-docfx-build` completion gates. Published-package execution adds behavioral evidence; it does not verify unpublished project code. Do not force existing partial or project-dependent examples into standalone programs, and do not put two full execution blocks on every type page merely because csrun generates them.
+
+Verify added or changed C# before publishing. Unbound fences pass the following two gates. For explicitly project-bound files/excerpts, the validator checks source identity, evaluated Compile membership, and the maintained project build instead of compiling a fragment alone. See [example architecture](references/example-architecture.md) for the exact binding and its limits.
 
 **Gate 1 — Static structure (`SAMPLE_STRUCTURE_INVALID`):**
 
@@ -352,7 +367,7 @@ A code block labelled `// Program.cs` at the very top passes Gate 1 and is compi
 
 **Gate 2 — Compilation (`SAMPLE_COMPILE_FAILED`):**
 
-Class-based examples that pass Gate 1 are compiled as a class library project referencing all assemblies from `docfx.json`. If compilation fails, the example is rejected. Either repair and re-run, or omit the example and add:
+Class-based examples that pass Gate 1 compile as a library referencing the owning documented projects and their transitive dependencies. If compilation fails, repair and rerun, or omit the example and add:
 
 ```markdown
 <!-- No compile-valid example could be generated for this type. -->
@@ -385,7 +400,9 @@ Derive examples from these sources, in order:
 8. Synthesized examples only when all of the above confirm the full public API shape and the synthesized sample compiles.
 9. Omit the example entirely if none of the above yields a compile-valid, consumer-facing example.
 
-Final examples must be consumer-facing, realistic, and compile. They must read like production calling code or Microsoft Learn-style task examples, not test scaffolding, placeholder `Consumer` shells, `Demonstrate()` wrappers, or one-line smoke tests. Avoid unused locals, `MyNamespace` when a domain-specific namespace is obvious, fake "sample" values that obscure the workflow, examples that instantiate the documented type without showing the result or next step a real caller cares about, and avoidable `System.*` / `Microsoft.*` fully qualified framework references when a normal `using` keeps the code lean.
+Final examples must be consumer-facing, realistic, and compile in their declared context. They should read like production calling code, meaningful framework tests when documenting testing APIs, or Microsoft Learn-style task examples. Avoid placeholder `Consumer` shells, `Demonstrate()` wrappers, unused locals, smoke tests, and implementation metadata as outcomes. Preserve the actual composition root, registration ownership, async/disposal lifecycle, configuration semantics, middleware ordering, and real APIs. Removing Main, registering the claimed application service in the test, substituting a fake host, or weakening an assertion is not an equivalent repair.
+
+Compilation proves syntax/type compatibility; execution proves observed behavior; architectural review establishes whether the example teaches the intended contract. Record these separately in the example inventory. Do not report runtime success from a build alone, or imply that a passing assertion proves application registration when the test supplied that registration itself.
 
 Compilation-valid metadata scaffolds are still failures. Never generate a family of examples that differs only by UID while calling `Type.GetType`, returning `Type.FullName`, or wrapping the lookup in `DocumentedTypeExample`, `DocumentedExtensionExample`, or `Describe()`. These patterns conceal missing product knowledge instead of teaching the API.
 

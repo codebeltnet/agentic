@@ -1,0 +1,6 @@
+{
+  "mode": "console",
+  "schemaVersion": 1,
+  "source": "using System;\nConsole.WriteLine(42);",
+  "framework": "net10.0"
+}

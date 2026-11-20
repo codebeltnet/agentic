@@ -1,0 +1,6 @@
+{
+  "mode": "console",
+  "schemaVersion": 1,
+  "source": "using System; Console.WriteLine(missingValue);",
+  "framework": "net10.0"
+}

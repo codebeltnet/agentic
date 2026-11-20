@@ -4,7 +4,9 @@ Use this reference when you need the full step-by-step workflow, example invento
 
 ## Example inventory shape
 
-Build a small example inventory from validator output and source evidence before writing examples. Treat it as a work queue, not as final-response prose.
+For optional standalone runtime evidence, follow [csrun composition](csrun-composition.md) and extend this inventory with source/manifest identity and transport-specific outcomes. Keep reference-aware compilation and documentation completion authoritative for their established scope.
+
+Build a small example inventory from validator output and source evidence before writing examples. Treat it as a work queue, not as final-response prose. For each scenario record the developer question, prerequisites, execution classification/topology, expected observation, and verification plan. Record compilation, runtime evidence (or unexecuted status), and architectural review separately; a green build does not prove the prose's behavioral claim. Use [example architecture](example-architecture.md) before shaping integration or multi-file examples.
 
 ```markdown
 | UID | Kind | Required example location | Source evidence | Scenario | Status |
@@ -23,12 +25,14 @@ Before writing a type or extension-method example, choose the smallest real task
 3. When internet or GitHub search is available and allowed, search for the exact package ID and prefer consumer repositories outside the target repository. Treat self-repo hits as package-authored docs or samples, not independent usage proof.
 4. Search by namespace, type, and member name only after package-ID evidence has been inspected.
 5. Pick a scenario that connects the documented type to the package workflow. A good sample can include multiple related public types, a small local helper type, dependency-injection setup, host setup, options configuration, file/path setup, or result inspection when that is what a real caller would do.
-6. Remove test-only structure, raw assertions, mocks, fixture base classes, and unused locals. Keep meaningful setup and result inspection.
+6. Determine execution topology before generating source: standalone, library consumer, multi-file/project, framework/application integration, or partial excerpt. Remove incidental test scaffolding for ordinary APIs; retain real `[Fact]` methods, fixture constructors, assertions and runner semantics when the documented API is a testing abstraction. Keep meaningful setup and result inspection.
 7. Prefer domain-specific names such as `BenchmarkRunner`, `WorkspaceUsage`, or `HttpRetryExample` over `Consumer` and `MyNamespace` when the package domain is clear.
 8. Reject metadata-only substitutes before writing: `Type.GetType`, assembly lookup, `typeof`/`nameof` as the only operation, generic `Describe()` helpers, and repeated UID sections do not demonstrate a consumer task.
 9. Confirm the C# fence itself uses the documented type or invokes the documented extension method. Mentions outside the fence do not count.
 10. Reject runtime-type-name substitutes such as `host.Services.GetType().Name` or `service.GetType().FullName`. These reveal implementation metadata rather than the application behavior the API enables.
 11. For entry-point factories and fixtures, never declare an empty local `Program` merely to satisfy compilation. Show a real entry point or name the application-project prerequisite, then make the example's result depend on a service, configuration value, endpoint, or lifecycle event supplied by that application.
+12. Preserve application-owned startup and service registration. Explain executable versus test-runner entry points, references, lifecycle and infrastructure. Use labelled source files bound to maintained projects for a coherent multi-file scenario; never concatenate unrelated fences or independently compile fragments to manufacture success. If a type page becomes unwieldy, keep its essential usage and link directly to a maintained integration test or conceptual walkthrough.
+13. Reuse this discovery to select optional further reading under [contextual source references](contextual-source-references.md). Inspect each new target and record its API relationship, revision and added learning value in the existing evidence cell. Keep purpose, essential example, outcome and execution understandable on the page before optional exploration. Explain what each link adds; runnable examples can benefit, while simple APIs need no arbitrary references. Preserve existing valid links and `Related:` sections.
 
 ## Key entry-point and upstream comparison pass
 
@@ -312,7 +316,7 @@ Namespace overview files stay single-UID and stop after the fly-in, availability
 
 ## Type example shape
 
-> **DocFX overwrite Markdown only.** This shape is for writing DocFX overwrite content. Do not create tests from it. Tests are evidence, not output — use tests to understand behavior, then transform that knowledge into consumer-facing examples.
+> **DocFX overwrite Markdown only.** Use tests as evidence and transform ordinary API usage into consumer-facing examples. For testing abstractions, the consumer-facing example is a real framework test with its required fixture, runner, and assembly semantics.
 
 For public non-abstraction types, begin the overwrite file with front matter that maps the body to the `example` property:
 
@@ -339,7 +343,7 @@ public class WidgetFactory
 ```
 ````
 
-Do not include a manual `### Examples` heading in the body. DocFX renders that heading automatically for the `example` property. Every `csharp` code block must include a file-scoped namespace and at least one class declaration; top-level statements are not allowed unless the block is labelled `// Program.cs`.
+Do not include a manual `### Examples` heading in the body. DocFX renders that heading automatically for the `example` property. Unbound fences retain the namespace/type or labelled `// Program.cs` structure rules. Project-bound source files and clearly contextualized excerpts use their maintained compilation context; see [example architecture](example-architecture.md). Multiple fences may describe one scenario, with each file's role and project identified.
 
 ## Extension method example template
 
@@ -406,8 +410,10 @@ Before completing documentation work, verify:
 - [ ] Missing examples are added through DocFX overwrite content included by `build.overwrite`. Namespace pages are under `api/namespaces/` and type pages are under `api/types/`.
 - [ ] The Completion Repair Loop was run after edits, and the final report has zero missing/low-quality example, symbol-ownership, namespace-prose, extension, availability, overwrite-layout, sample, and DocFX-build diagnostics.
 - [ ] Examples are realistic, copy/paste-ready, and compile unless the sample is covered by a pre-existing approved allowlist waiver.
-- [ ] Generated C# examples include a file-scoped namespace and a type declaration (class, struct, or record), or are explicitly labelled `// Program.cs`.
-- [ ] No generated C# example uses top-level statements without a `// Program.cs` label.
+- [ ] Unbound C# examples include a namespace and type declaration, or are explicitly labelled `// Program.cs`; project-bound files/excerpts match maintained source and compile in their actual context.
+- [ ] Execution classification, prerequisites, assembly/host ownership, and intended observation were established before authoring. Partial excerpts explain their omitted setup and make no standalone claim.
+- [ ] Runtime claims have actual execution evidence; compilation-only evidence is labelled accordingly. Assertions and prose establish the same contract, including registration ownership and lifecycle/pipeline behavior.
+- [ ] Optional source references reuse discovered evidence, target inspected authoritative usage and explain the additional learning value. Simple pages remain concise; runnable examples may offer depth; partial examples state limitations. Links preserve existing valid references and `Related:` sections and never substitute for required C#, executable verification or completion gates.
 - [ ] No generated C# example derives from a generic base type without concrete type arguments.
 - [ ] No generated C# example calls members that are not confirmed on the public API surface.
 - [ ] Where no compile-valid example could be generated, the overwrite file contains the appropriate omission comment, and that comment is not being misused as a diagnostic suppressor or skip waiver.

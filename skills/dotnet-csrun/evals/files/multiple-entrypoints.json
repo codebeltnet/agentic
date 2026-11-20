@@ -1,0 +1,9 @@
+{
+  "framework": "net10.0",
+  "dependsOn": [
+    "xunit.v3@4.0.3"
+  ],
+  "source": "using Xunit; public class A { public static void Main() { } [Fact] public void Value() { Assert.Equal(42, 42); } } public class B { public static void Main(string[] args) { } }",
+  "mode": "test",
+  "schemaVersion": 1
+}
