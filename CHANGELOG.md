@@ -14,8 +14,8 @@ This is a minor release that adds the `dotnet-csrun` skill for executable C# evi
 - `dotnet-docfx-digest` source-bound sample contexts that bind each C# fence to a maintained project and source file, and reject bindings that are not evaluated Compile items for the selected framework and configuration,
 - `dotnet-docfx-digest` rejection of a `ManagedApplicationFixture` entry point collapsed into a test-owned source unit, and of displayed excerpts excluded by conditional compilation for the selected framework and configuration,
 - `dotnet-docfx-digest` repository-backed one-shot examples that pin a maintained test or application project when an API requires an actual application, runner, or distinct assembly identity instead of a standalone program,
-- `dotnet-docfx-digest` optional contextual source references that link maintained source after each example's immediate explanation,
-- `dotnet-docfx-digest` `generate-run-actions` command that inventories documentation examples, resolves their published dependencies or maintained integration tests, and generates paired Native and Docker PowerShell assets with a coverage report.
+- `dotnet-docfx-digest` optional contextual source references that link maintained source after each example's outcome and execution guidance,
+- `dotnet-docfx-digest` `csrun` command (also accepted as `generate-run-actions`) that inventories documentation examples, resolves their published dependencies or maintained integration tests, and generates paired Native and Docker PowerShell assets with a coverage report.
 
 ### Changed
 
