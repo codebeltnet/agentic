@@ -53,6 +53,7 @@ $packageSource = @'
 using Codebelt.Extensions.Xunit;
 using Cuemon.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Xunit;
 
 namespace Samples;
 
@@ -72,10 +73,10 @@ public class CorrelationStore
 $packageSource += "`n`n" + @'
 public sealed class CorrelationStoreTests
 {
-    [Xunit.Fact]
+    [Fact]
     public void ResolvesTaggedInventory()
     {
-        Xunit.Assert.Equal("inventory", new CorrelationStore().Resolve());
+        Assert.Equal("inventory", new CorrelationStore().Resolve());
     }
 }
 '@
@@ -150,7 +151,7 @@ $manifests = @(foreach ($transport in @('native','docker')) {
 $resolvedManifest = $manifests[0] | ConvertFrom-Json
 if ($manifests[0] -cne $manifests[1] -or $resolved.sourceSha256 -cne $packageExample.sourceSha256 -or
     $resolved.executionSourceSha256 -cne $resolved.sourceSha256 -or $resolvedManifest.source -cne $packageSource.Replace("`r`n", "`n") -or
-    -not $resolvedManifest.source.Contains('Xunit.Assert.Equal("inventory", new CorrelationStore().Resolve())') -or
+    -not $resolvedManifest.source.Contains('Assert.Equal("inventory", new CorrelationStore().Resolve())') -or
     ($resolvedManifest.dependsOn -join '|') -cne (($packagePins + 'xunit.v3@4.0.3') -join '|')) { throw 'The generated scripts changed the displayed C#, package pins or transport parity.' }
 if ([IO.File]::ReadAllText("$work/docs/partial.md") -cne $partial) { throw 'An unsupported page with mixed line endings changed.' }
 $consoleWithAssociation = [IO.File]::ReadAllText("$work/docs/console.md")
@@ -231,7 +232,7 @@ if ((Test-Path "$work/run-actions/$($entry.id)/native.ps1") -or (Get-Content "$w
 
 # A legacy hidden harness is a failed recipe, while an intrinsic limitation has no assets.
 $invalidRecipe = $packageRecipe | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
-$invalidRecipe.harness = @{members='public sealed class HiddenTest { [Xunit.Fact] public void Hidden() {} }'}
+$invalidRecipe.harness = @{members='public sealed class HiddenTest { [Fact] public void Hidden() {} }'}
 $partialResult = $discovery | Where-Object { $_.file -match '[\\/]partial\.md$' }
 $intrinsic = @{uid=$partialResult.uid; sourceSha256=$partialResult.sourceSha256; intrinsicLimitation='Synthetic limitation for coverage classification.'}
 $customSettings = "$work/custom-settings.json"
