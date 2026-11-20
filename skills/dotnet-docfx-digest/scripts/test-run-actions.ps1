@@ -314,5 +314,12 @@ foreach ($psFile in $actualFiles) {
 if ([IO.File]::ReadAllText($assetsOnlyPage) -cne $pageBefore -or [IO.File]::ReadAllText("$work/docfx.json") -cne $configBefore) {
     throw 'BuildRunActions.ps1 must not modify Markdown or docfx.json.'
 }
+$noManifestDir = Join-Path $work 'no-manifest'
+$null = [IO.Directory]::CreateDirectory($noManifestDir)
+Copy-Item -LiteralPath "$work/BuildRunActions.ps1" -Destination (Join-Path $noManifestDir 'BuildRunActions.ps1')
+& (Join-Path $noManifestDir 'BuildRunActions.ps1') | Out-Null
+if ($LASTEXITCODE -ne 0 -or (Test-Path (Join-Path $noManifestDir 'run-actions'))) {
+    throw 'BuildRunActions.ps1 must no-op cleanly when no default run-actions.manifest.json exists.'
+}
 
 Write-Host "Run-action delivery passed: paired console, test, dependency-backed test and repository test; exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"
