@@ -73,8 +73,8 @@ function New-CsrunExecutionPair {
 if ($process.ExitCode -ne 0) { throw "csrun execution failed with exit code $($process.ExitCode). $diagnostics" }
 if ($verifyTests) { Assert-CsrunTestOutput $output }
 '@
-    $nativeCommand = if ($EnginePath) {
-        '$enginePath = ' + (Quote-Literal $EnginePath) + "`nif (-not (Test-Path -LiteralPath `$enginePath -PathType Leaf)) { throw 'csrun engine asset not found.' }"
+    $engineSetup = if ($EnginePath) {
+        '$enginePath = ' + (Quote-Literal ([IO.Path]::GetFullPath($EnginePath))) + "`nif (-not (Test-Path -LiteralPath `$enginePath -PathType Leaf)) { throw 'csrun engine asset not found.' }"
     } else {
         @'
 # Downloads and executes the latest stable csrun release with your permissions.
@@ -95,7 +95,7 @@ try {
     if ("sha256:$actualHash" -ne $asset.digest) { throw "csrun asset checksum mismatch: $actualHash" }
 '@
     }
-    $invoke = @'
+    $nativeInvoke = @'
 $startInfo = [Diagnostics.ProcessStartInfo]::new('pwsh')
 foreach ($argument in @('-NoProfile','-NonInteractive','-File')) { $startInfo.ArgumentList.Add($argument) }
 $startInfo.ArgumentList.Add($enginePath)
@@ -115,23 +115,42 @@ $diagnostics = $stderrTask.GetAwaiter().GetResult()
 Write-Output $output
 if ($diagnostics) { [Console]::Error.Write($diagnostics) }
 '@
-    if (-not $EnginePath) {
-        $nativeCommand += "`n" + $invoke + "`n" + @'
+    # The image supplies the SDK and PowerShell. Execute the same release asset as Native.
+    $dockerInvoke = @'
+$enginePayload = [Convert]::ToBase64String([IO.File]::ReadAllBytes($enginePath))
+$containerInput = $enginePayload + "`n" + $manifest
+$command = '
+$ErrorActionPreference = "Stop"
+$enginePath = Join-Path ([IO.Path]::GetTempPath()) ("csrun-release-" + [guid]::NewGuid().ToString("N") + ".ps1")
+$engineBytes = [Convert]::FromBase64String([Console]::In.ReadLine())
+[IO.File]::WriteAllBytes($enginePath, $engineBytes)
+$manifest = [Console]::In.ReadToEnd()
+& $enginePath -ManifestJson $manifest
+exit $LASTEXITCODE
+'
+$output = (@($containerInput | & docker run --rm -i --entrypoint pwsh __IMAGE__ -NoProfile -NonInteractive -Command $command) -join [Environment]::NewLine)
+$process = [pscustomobject]@{ ExitCode = $LASTEXITCODE }
+$diagnostics = ''
+Write-Output $output
+'@
+    $dockerInvoke = $dockerInvoke.Replace('__IMAGE__', (Quote-Literal $Image))
+    $engineCleanup = if (-not $EnginePath) {
+        @'
 } catch {
     [Console]::Error.WriteLine("csrun diagnostics retained in: $engineDirectory")
     throw
 } finally {
-    $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    $resolvedTemp = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath([IO.Path]::GetTempPath()))
     $resolvedEngineDirectory = [IO.Path]::GetFullPath($engineDirectory)
-    if (-not $resolvedEngineDirectory.StartsWith($resolvedTemp, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe cleanup path.' }
+    if ([IO.Path]::GetDirectoryName($resolvedEngineDirectory) -ne $resolvedTemp -or
+        [IO.Path]::GetFileName($resolvedEngineDirectory) -cnotmatch '^csrun-[a-f0-9]{32}$') { throw 'Unsafe cleanup path.' }
     if ($process -and $process.ExitCode -eq 0) { Remove-Item -LiteralPath $resolvedEngineDirectory -Recurse -Force }
 }
 '@
-    } else { $nativeCommand += "`n" + $invoke }
-    $dockerCommand = '$global:LASTEXITCODE = -1' + "`n" + '$output = (@($manifest | & docker run --rm -i ' + (Quote-Literal $Image) + ') -join [Environment]::NewLine)' + "`n" + '$dockerExitCode = $LASTEXITCODE' + "`n" + '$process = [pscustomobject]@{ ExitCode = $dockerExitCode }' + "`n`$diagnostics = ''" + "`n" + 'Write-Output $output'
+    }
     $encoding = '$OutputEncoding = [Text.UTF8Encoding]::new($false)' + "`n" + '[Console]::OutputEncoding = $OutputEncoding' + "`n"
-    $native = $prefix + $encoding + '$verifyTests = $' + $verifyTests.ToString().ToLowerInvariant() + "`n" + $script:CsrunTestVerificationTemplate + "`n" + $nativeCommand + "`n" + $suffix
-    $docker = $prefix + $encoding + '$verifyTests = $' + $verifyTests.ToString().ToLowerInvariant() + "`n" + $script:CsrunTestVerificationTemplate + "`n" + $dockerCommand + "`n" + $suffix
+    $native = $prefix + $encoding + '$verifyTests = $' + $verifyTests.ToString().ToLowerInvariant() + "`n" + $script:CsrunTestVerificationTemplate + "`n" + $engineSetup + "`n" + $nativeInvoke + "`n" + $engineCleanup + "`n" + $suffix
+    $docker = $prefix + $encoding + '$verifyTests = $' + $verifyTests.ToString().ToLowerInvariant() + "`n" + $script:CsrunTestVerificationTemplate + "`n" + $engineSetup + "`n" + $dockerInvoke + "`n" + $engineCleanup + "`n" + $suffix
     # PowerShell's interactive parser buffers an incomplete script block. Keep all
     # execution and post-execution checks inside the same complete paste unit.
     $native = "& {`n" + $native.TrimEnd() + "`n}`n"

@@ -79,13 +79,17 @@ Assert-True ((Get-CsrunSampleIdentity (Get-CsrunWrapperManifest $diverged)).Sour
 Assert-Throws { Get-CsrunWrapperManifest '$manifest = $(throw "must never execute")' } 'Nonliteral wrapper was accepted.'
 Assert-Throws { Get-CsrunWrapperManifest ($pair.Native + "`n`$manifest = '{}'" ) } 'Multiple manifest assignments were accepted.'
 
-Assert-True ($pair.Docker.Contains('$manifest | & docker run --rm -i')) 'Docker no longer streams the manifest to the image entry point.'
+Assert-True ($pair.Docker.Contains('$containerInput | & docker run --rm -i')) 'Docker no longer streams the manifest to the release script.'
 Assert-True ($pair.Native.Contains("'-ManifestJson'")) 'Native invocation no longer uses the published parameter.'
 
 # The wrapper verifies the published engine's ordinary output and status contract.
 $testManifest = @{ schemaVersion = 1; mode = 'test'; source = 'using Xunit;' } | ConvertTo-Json
 $testPair = New-CsrunExecutionPair $testManifest -Image 'codebeltnet/csrun:10' -EnginePath $fakeEngine
 $remotePair = New-CsrunExecutionPair $testManifest -Image 'codebeltnet/csrun:10'
+foreach ($transport in @('Native', 'Docker')) {
+    Assert-True ($remotePair.$transport.Contains('releases/latest') -and $remotePair.$transport.Contains('Get-FileHash')) "$transport does not verify the latest release asset."
+}
+Assert-True ($remotePair.Docker.Contains('--entrypoint pwsh') -and $remotePair.Docker.Contains('WriteAllBytes($enginePath, $engineBytes)') -and $remotePair.Docker.Contains('& $enginePath -ManifestJson')) 'Docker does not execute the verified release asset.'
 foreach ($transport in @('Native', 'Docker')) {
     Assert-True ($testPair.$transport.Contains('Assert-CsrunTestOutput')) "$transport lacks generated verification."
     Assert-True ($testPair.$transport -cnotmatch 'RequirePassingTests|ManifestStdin') "$transport uses undocumented parameters."

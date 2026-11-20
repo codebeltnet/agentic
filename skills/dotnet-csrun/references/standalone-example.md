@@ -105,20 +105,20 @@ if ($diagnostics) { [Console]::Error.Write($diagnostics) }
     [Console]::Error.WriteLine("csrun diagnostics retained in: $engineDirectory")
     throw
 } finally {
-    $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    $resolvedTemp = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath([IO.Path]::GetTempPath()))
     $resolvedEngineDirectory = [IO.Path]::GetFullPath($engineDirectory)
-    if (-not $resolvedEngineDirectory.StartsWith($resolvedTemp, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe cleanup path.' }
+    if ([IO.Path]::GetDirectoryName($resolvedEngineDirectory) -ne $resolvedTemp -or
+        [IO.Path]::GetFileName($resolvedEngineDirectory) -cnotmatch '^csrun-[a-f0-9]{32}$') { throw 'Unsafe cleanup path.' }
     if ($process -and $process.ExitCode -eq 0) { Remove-Item -LiteralPath $resolvedEngineDirectory -Recurse -Force }
 }
 if ($process.ExitCode -ne 0) { throw "csrun execution failed with exit code $($process.ExitCode). $diagnostics" }
 if ($verifyTests) { Assert-CsrunTestOutput $output }
 }
-
 ```
 
 ## Disposable Docker: PowerShell 7 and Docker with Linux containers
 
-No host .NET SDK is needed. Network access is needed for the image and dependencies. Docker is not a security sandbox for untrusted code.
+Docker provides the .NET SDK and PowerShell. This block fetches and verifies the latest csrun release using the same procedure as Native. The Docker wrapper streams the asset and manifest over stdin. The command needs network access to GitHub and NuGet.
 
 ```powershell
 & {
@@ -159,16 +159,50 @@ function Assert-CsrunTestOutput([string] $Output) {
         throw 'Tests must execute at least once, all pass, and none fail or skip.'
     }
 }
-$global:LASTEXITCODE = -1
-$output = (@($manifest | & docker run --rm -i 'codebeltnet/csrun:10') -join [Environment]::NewLine)
-$dockerExitCode = $LASTEXITCODE
-$process = [pscustomobject]@{ ExitCode = $dockerExitCode }
+# Downloads and executes the latest stable csrun release with your permissions.
+# Source and release history: https://github.com/codebeltnet/csrun
+$engineDirectory = Join-Path ([IO.Path]::GetTempPath()) ('csrun-' + [guid]::NewGuid().ToString('N'))
+$null = New-Item -ItemType Directory -Path $engineDirectory
+$enginePath = Join-Path $engineDirectory 'csrun.ps1'
+$process = $null
+try {
+    $release = Invoke-RestMethod 'https://api.github.com/repos/codebeltnet/csrun/releases/latest'
+    $assets = @($release.assets | Where-Object name -CEQ 'csrun.ps1')
+    if ($assets.Count -ne 1 -or $assets[0].digest -notmatch '^sha256:[0-9a-f]{64}$') {
+        throw "csrun release $($release.tag_name) must publish one csrun.ps1 asset with a SHA-256 digest."
+    }
+    $asset = $assets[0]
+    Invoke-WebRequest $asset.browser_download_url -OutFile $enginePath
+    $actualHash = (Get-FileHash -LiteralPath $enginePath -Algorithm SHA256).Hash
+    if ("sha256:$actualHash" -ne $asset.digest) { throw "csrun asset checksum mismatch: $actualHash" }
+$enginePayload = [Convert]::ToBase64String([IO.File]::ReadAllBytes($enginePath))
+$containerInput = $enginePayload + "`n" + $manifest
+$command = '
+$ErrorActionPreference = "Stop"
+$enginePath = Join-Path ([IO.Path]::GetTempPath()) ("csrun-release-" + [guid]::NewGuid().ToString("N") + ".ps1")
+$engineBytes = [Convert]::FromBase64String([Console]::In.ReadLine())
+[IO.File]::WriteAllBytes($enginePath, $engineBytes)
+$manifest = [Console]::In.ReadToEnd()
+& $enginePath -ManifestJson $manifest
+exit $LASTEXITCODE
+'
+$output = (@($containerInput | & docker run --rm -i --entrypoint pwsh 'codebeltnet/csrun:10' -NoProfile -NonInteractive -Command $command) -join [Environment]::NewLine)
+$process = [pscustomobject]@{ ExitCode = $LASTEXITCODE }
 $diagnostics = ''
 Write-Output $output
+} catch {
+    [Console]::Error.WriteLine("csrun diagnostics retained in: $engineDirectory")
+    throw
+} finally {
+    $resolvedTemp = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath([IO.Path]::GetTempPath()))
+    $resolvedEngineDirectory = [IO.Path]::GetFullPath($engineDirectory)
+    if ([IO.Path]::GetDirectoryName($resolvedEngineDirectory) -ne $resolvedTemp -or
+        [IO.Path]::GetFileName($resolvedEngineDirectory) -cnotmatch '^csrun-[a-f0-9]{32}$') { throw 'Unsafe cleanup path.' }
+    if ($process -and $process.ExitCode -eq 0) { Remove-Item -LiteralPath $resolvedEngineDirectory -Recurse -Force }
+}
 if ($process.ExitCode -ne 0) { throw "csrun execution failed with exit code $($process.ExitCode). $diagnostics" }
 if ($verifyTests) { Assert-CsrunTestOutput $output }
 }
-
 ```
 
 The native wrapper resolves the latest stable release each time it runs. For reproducible runs, use a reviewed local engine via the sample helper's `-EnginePath` option and pin the Docker image by digest. The focused helper tests enforce parity with the maintained manifest. [Presentation guidance](presentation.md)
