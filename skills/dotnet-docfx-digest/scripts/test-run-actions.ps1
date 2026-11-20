@@ -195,6 +195,23 @@ $nativeOnlyEntry = $nativeOnly | Where-Object id -eq $entry.id
 if ($nativeOnlyEntry.native -ne 'Verified' -or $nativeOnlyEntry.docker -ne 'Unverified') {
     throw 'Successful Native verification must not mark the unexecuted Docker transport Verified.'
 }
+$toolbarSource = Join-Path $PSScriptRoot '../assets/run-actions.js'
+$toolbarModule = "$work/template/public/run-actions.js"
+$toolbarHash = (Get-FileHash $toolbarSource).Hash
+[IO.File]::WriteAllText($toolbarModule, '// Stale toolbar from a previous skill revision.')
+$refresh = (& $generator -RepoRoot $work) | ConvertFrom-Json
+$refreshedEntry = $refresh | Where-Object id -eq $entry.id
+if ((Get-FileHash $toolbarModule).Hash -cne $toolbarHash -or
+    @($refresh | Where-Object status -eq 'unchanged').Count -ne 5 -or
+    $refreshedEntry.native -ne 'Verified' -or $refreshedEntry.docker -ne 'Unverified') {
+    throw 'Refreshing a stale toolbar must preserve the execution payloads and verification evidence.'
+}
+foreach ($script in Get-ChildItem "$work/run-actions" -Filter '*.ps1' -Recurse -File) {
+    if ($before[$script.FullName][0] -cne (Get-FileHash $script.FullName).Hash -or
+        $before[$script.FullName][1] -ne $script.LastWriteTimeUtc.Ticks) {
+        throw "Toolbar refresh rewrote $($script.FullName)"
+    }
+}
 # Actual DocFX render checks tilde links, publishing, modern template composition and C# fidelity.
 & (Get-Command docfx -CommandType Application | Select-Object -First 1).Source build "$work/docfx.json" --disableGitFeatures *> "$work/build.log"
 if ($LASTEXITCODE -ne 0) { throw "DocFX render failed: $work/build.log" }
@@ -204,6 +221,7 @@ if (-not $html.Contains('data-example-id=') -or -not $html.Contains('View Native
     throw 'The rendered sample must deliver links to both published script assets.'
 }
 if (-not (Get-Content "$work/_site/public/main.js" -Raw).Contains("import './run-actions.js'")) { throw 'Modern template module not published.' }
+if ((Get-FileHash "$work/_site/public/run-actions.js").Hash -cne $toolbarHash) { throw 'Refreshed toolbar module not published.' }
 $apiHtml = Get-ChildItem "$work/_site/api" -Filter '*.html' | Select-Object -First 1 | Get-Content -Raw
 if (-not $apiHtml.Contains('View Native Script') -or -not $apiHtml.Contains('View Docker Script') -or -not $apiHtml.Contains('ShouldBootstrapMinimalWorkerProgram')) { throw 'Paired overwrite example association did not survive API rendering.' }
 $overwriteBytes = [IO.File]::ReadAllBytes("$work/api/types/ManagedApplicationFixture-1.md")
