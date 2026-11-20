@@ -8,7 +8,7 @@ description: >
 
 Make the smallest complete example, execute it through `csrun`, and share the exact program that ran. Use .NET/C# for substantive supporting logic and PowerShell 7 for orchestration. Never substitute another execution engine or create a competing manifest format.
 
-Assess standalone suitability first. Repository-backed integration examples are a separate execution strategy, outside csrun manifest v1: preserve the original application/test graph and direct documentation work to `dotnet-docfx-digest`'s one-shot repository guidance. Do not stop at source links when a maintained targeted test can be executed in one pinned-snapshot block. Do not manufacture a csrun-compatible approximation, add multi-project fields, or claim repository execution is isolated csrun execution. Standalone native and Docker blocks remain independent and use identical source/dependencies.
+Assess standalone suitability first. Repository-backed integration examples are a separate execution strategy, outside csrun manifest v1: preserve the original application/test graph and direct documentation work to `dotnet-docfx-digest`'s one-shot repository guidance. Do not stop at source links when a maintained targeted test can be executed in one pinned-snapshot block. Do not manufacture a csrun-compatible approximation, add multi-project fields, or claim repository execution is isolated csrun execution. Standalone Native and Docker blocks remain independent and use identical source and dependencies. Both resolve and verify the latest stable csrun release asset at runtime. Docker supplies the SDK and PowerShell and executes that verified asset.
 
 ## Choose the intention
 
