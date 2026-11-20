@@ -287,4 +287,32 @@ try {
     }
     if ([IO.File]::ReadAllText($externalPage) -cne $console) { throw 'Rejected inventory changed the external page.' }
 } finally { $inventoryOverride = $null }
-Write-Host "Run-action delivery passed: paired console, test, dependency-backed test and repository test; exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup and modern DocFX render. Fixture: $work"
+
+# Standalone BuildRunActions.ps1 materializes byte-identical native/docker scripts from run-actions.manifest.json with no external dependencies.
+if (-not (Test-Path "$work/run-actions.manifest.json") -or -not (Test-Path "$work/BuildRunActions.ps1")) {
+    throw 'Generator must emit run-actions.manifest.json and BuildRunActions.ps1 beside docfx.json.'
+}
+$expectedHashes = @{}
+foreach ($psFile in Get-ChildItem -Path "$work/run-actions" -Recurse -Filter '*.ps1') {
+    $rel = [IO.Path]::GetRelativePath("$work/run-actions", $psFile.FullName).Replace('\', '/')
+    $expectedHashes[$rel] = (Get-FileHash -LiteralPath $psFile.FullName -Algorithm SHA256).Hash
+}
+if (-not $expectedHashes.Count) { throw 'Expected generated run-action scripts before testing standalone materializer.' }
+$assetsOnlyPage = "$work/docs/console.md"
+$pageBefore = [IO.File]::ReadAllText($assetsOnlyPage)
+$configBefore = [IO.File]::ReadAllText("$work/docfx.json")
+Remove-Item -LiteralPath "$work/run-actions" -Recurse -Force
+& "$work/BuildRunActions.ps1" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Standalone BuildRunActions.ps1 failed.' }
+$actualFiles = @(Get-ChildItem -Path "$work/run-actions" -Recurse -Filter '*.ps1')
+if ($actualFiles.Count -ne $expectedHashes.Count) { throw "BuildRunActions.ps1 produced $($actualFiles.Count) scripts; expected $($expectedHashes.Count)." }
+foreach ($psFile in $actualFiles) {
+    $rel = [IO.Path]::GetRelativePath("$work/run-actions", $psFile.FullName).Replace('\', '/')
+    $actualHash = (Get-FileHash -LiteralPath $psFile.FullName -Algorithm SHA256).Hash
+    if ($expectedHashes[$rel] -cne $actualHash) { throw "BuildRunActions.ps1 drifted from generator output for $rel." }
+}
+if ([IO.File]::ReadAllText($assetsOnlyPage) -cne $pageBefore -or [IO.File]::ReadAllText("$work/docfx.json") -cne $configBefore) {
+    throw 'BuildRunActions.ps1 must not modify Markdown or docfx.json.'
+}
+
+Write-Host "Run-action delivery passed: paired console, test, dependency-backed test and repository test; exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"
