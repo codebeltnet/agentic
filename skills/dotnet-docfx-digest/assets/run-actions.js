@@ -54,7 +54,7 @@ function createAction(link, report) {
     icons[transport] + '<path class="docfx-run-play" d="M21.5 1.5 27 4.8l-5.5 3.3Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
   const icon = button.firstElementChild;
   const check = document.createElement('i');
-  check.className = 'bi bi-check-lg link-success';
+  check.className = 'bi bi-check-lg';
   check.setAttribute('aria-hidden', 'true');
 
   let pending = false;
@@ -78,6 +78,20 @@ function createAction(link, report) {
           await clipboard.writeText(text);
         }
         clearTimeout(resetIcon);
+        // Measure DocFX's success markup in the same code block so template overrides apply.
+        const reference = document.createElement('a');
+        reference.className = 'btn border-0 link-success code-action';
+        reference.hidden = true;
+        reference.setAttribute('aria-hidden', 'true');
+        reference.style.transition = 'none';
+        const referenceIcon = check.cloneNode(false);
+        referenceIcon.removeAttribute('style');
+        reference.append(referenceIcon);
+        button.closest('pre').prepend(reference);
+        const appearance = getComputedStyle(referenceIcon, '::before');
+        check.style.color = appearance.color;
+        check.style.fontSize = appearance.fontSize;
+        reference.remove();
         button.replaceChildren(check);
         resetIcon = setTimeout(() => button.replaceChildren(icon), 1000);
         report(label + ' script copied.', true);
@@ -194,6 +208,9 @@ pre.docfx-runnable > .code-action,
 }
 .docfx-run-copy {
   display: inline-flex;
+}
+.docfx-run-copy .bi-check-lg {
+  pointer-events: none;
 }
 .docfx-run-copy:hover {
   background-color: var(--bs-tertiary-bg);
