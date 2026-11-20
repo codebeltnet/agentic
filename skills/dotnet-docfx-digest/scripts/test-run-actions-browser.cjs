@@ -91,6 +91,25 @@ async function checkClipboard(page, expected) {
   assert.equal(normalizeNewlines(await page.evaluate(() => navigator.clipboard.readText())), normalizeNewlines(expected));
 }
 
+function checkmarkAppearance(icon) {
+  return icon.evaluate(async node => {
+    await Promise.all(node.parentElement.getAnimations().map(animation => animation.finished));
+    const glyph = getComputedStyle(node, '::before');
+    const { width, height, x, y } = node.getBoundingClientRect();
+    const control = node.parentElement.getBoundingClientRect();
+    return {
+      content: glyph.content,
+      font: glyph.fontFamily,
+      size: glyph.fontSize,
+      color: glyph.color,
+      width,
+      height,
+      x: Math.round(x - control.x),
+      y: Math.round(y - control.y),
+    };
+  });
+}
+
 async function checkCopy(example, index, activate) {
   const { page, actions, status, sample, checkPageUnchanged } = example;
   const { label, button, asset, script } = actions[index];
@@ -100,7 +119,13 @@ async function checkCopy(example, index, activate) {
     activate(button),
   ]);
   await status.filter({ hasText: label + ' script copied.' }).waitFor();
-  await button.locator('.bi-check-lg.link-success').waitFor();
+  const check = button.locator('.bi-check-lg');
+  await check.waitFor();
+  if (example.clipboardCheckmark) {
+    const appearance = await checkmarkAppearance(check);
+    assert.deepEqual(appearance, example.clipboardCheckmark);
+    console.log(label + ' checkmark matches DocFX clipboard:', JSON.stringify(appearance));
+  }
   assert.equal(await button.locator('svg').count(), 0);
   await checkClipboard(page, script);
   assert.deepEqual(await sample.boundingBox(), block, 'copy feedback must not move or resize the code block');
@@ -148,6 +173,10 @@ async function checkCopy(example, index, activate) {
     const desktop = await openExample(context, base + '/docs/integration.html', marker);
     const { page, sample, original, toolbar, actions, status, checkPageUnchanged } = desktop;
     assert.ok(await page.evaluate(() => window.context7 === true));
+    await page.addStyleTag({ content: `
+      pre > a.code-action { color: #005fb8; }
+      [data-bs-theme="dark"] pre > a.code-action { color: #75b6f2; }
+    ` });
     const opacity = () => toolbar.evaluate(node => getComputedStyle(node).opacity);
     assert.equal(await opacity(), '0');
     await sample.hover();
@@ -156,7 +185,10 @@ async function checkCopy(example, index, activate) {
 
     const code = await sample.locator('code').innerText();
     await original.click();
-    await sample.locator('a.code-action .bi-check-lg').waitFor();
+    const clipboardCheck = original.locator('.bi-check-lg');
+    await clipboardCheck.waitFor();
+    await sample.hover({ position: { x: 5, y: 5 } });
+    desktop.clipboardCheckmark = await checkmarkAppearance(clipboardCheck);
     await checkClipboard(page, code);
     await page.evaluate(async () => (await import('../public/run-actions.js')).enhanceRunActions());
     await sample.locator('a.code-action .bi-clipboard').waitFor({ state: 'attached' });
@@ -169,6 +201,14 @@ async function checkCopy(example, index, activate) {
     assert.ok(await actions[0].button.evaluate(button => button === document.activeElement && button.matches(':focus-visible')));
     assert.equal(await opacity(), '1');
     await checkCopy(desktop, 0, button => button.press('Enter'));
+    await checkCopy(desktop, 1, button => button.click());
+    await page.evaluate(() => document.documentElement.setAttribute('data-bs-theme', 'dark'));
+    await original.click();
+    await clipboardCheck.waitFor();
+    await sample.hover({ position: { x: 5, y: 5 } });
+    desktop.clipboardCheckmark = await checkmarkAppearance(clipboardCheck);
+    console.log('DocFX dark-theme clipboard checkmark:', JSON.stringify(desktop.clipboardCheckmark));
+    await checkCopy(desktop, 0, button => button.click());
     await checkCopy(desktop, 1, button => button.click());
     await status.filter({ hasText: 'Docker script copied.' }).waitFor({ state: 'hidden' });
 
