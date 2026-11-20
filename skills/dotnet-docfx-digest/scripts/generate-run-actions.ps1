@@ -49,7 +49,6 @@ function Assert-RepositoryPath([string] $Path) {
 }
 $arguments = @('--repo-root', $root, '--run-action-inventory')
 if ($Docfx) { $arguments += @('--docfx', $Docfx) }
-if ($Settings) { $arguments += @('--run-action-settings', [IO.Path]::GetFullPath($Settings)) }
 # One inventory process per repository, never one model/process per document.
 $inventoryText = & dotnet run --file (Join-Path $PSScriptRoot 'docfx.cs') -- @arguments
 if ($LASTEXITCODE -ne 0) { throw 'DocFX example inventory failed.' }
@@ -88,7 +87,8 @@ foreach ($recipe in $recipes) {
     $recipeBySource[$key] = $recipe
 }
 foreach ($example in $inventory.examples) {
-    $source = Normalize $example.code
+    $displayedSource = Normalize $example.code
+    $source = $displayedSource
     if ($example.source) { $source = Normalize (($source -split "`n" | Select-Object -Skip 2) -join "`n") }
     $sourceHash = Hash $source
     $identity = if ($example.source) { [IO.Path]::GetRelativePath($root, $example.source).Replace('\','/') + '|' + $sourceHash } else { $sourceHash }
@@ -96,10 +96,12 @@ foreach ($example in $inventory.examples) {
     $result = [ordered]@{ id=$id; file=$example.file; uid=$example.uid; sourceSha256=$sourceHash; status='unresolved'; coverage='Unresolved'; reason=$null; native='Unverified'; docker='Unverified' }
     try {
         if ($example.contextError) { $result.reason = $example.contextError; continue }
-        if ($example.harnessError) { throw $example.harnessError }
         if ($example.sourceSha256 -and $example.sourceSha256 -cne $sourceHash) { throw 'The inventory and generator disagree on the displayed source hash.' }
 
         $recipe = $recipeBySource["$($example.uid)|$sourceHash"]
+        if ($recipe -and $recipe.PSObject.Properties['harness']) {
+            throw 'Move the executable C# into the displayed sample and update its recipe hash.'
+        }
         $strategy = 'standalone'
         # Known, inspected integration source. No API-name heuristic may substitute a different test.
         if (-not $recipe -and $sourceHash -ceq '47B0C1FBA94E7B43C8753D0A8242801B328E6B463B6EEDAEB640D4F8A262633E') {
@@ -107,7 +109,7 @@ foreach ($example in $inventory.examples) {
         }
         $isTest = $example.isTest
         if ($recipe.intrinsicLimitation) {
-            if ($recipe.manifest -or $recipe.repository -or $recipe.harness) { throw 'An intrinsic limitation cannot also supply an execution recipe.' }
+            if ($recipe.manifest -or $recipe.repository) { throw 'An intrinsic limitation cannot also supply an execution recipe.' }
             $result.status = 'unsupported'; $result.coverage = 'Intrinsically non-executable'; $result.reason = $recipe.intrinsicLimitation
             $result.native = 'Unsupported'; $result.docker = 'Unsupported'
             continue
@@ -122,10 +124,6 @@ foreach ($example in $inventory.examples) {
             continue
         }
         if ($recipe -and -not $recipe.manifest -and $strategy -ne 'repository') { throw 'A recipe must supply a standalone manifest or a pinned repository test.' }
-        if ($recipe.harness -and ($strategy -eq 'repository' -or -not $example.executionSource -or -not $recipe.explanation)) {
-            throw 'A standalone harness requires composed C# and an explanation of the added execution context.'
-        }
-        if ($recipe.harness.entryPointStatements -and $recipe.manifest.mode -ne 'console') { throw 'An existing entry point harness requires console mode.' }
         $transports = @('native','docker')
         foreach ($transport in @('native','docker')) {
             if ($recipe -and $recipe.unsupportedTransports.$transport) {
@@ -139,9 +137,8 @@ foreach ($example in $inventory.examples) {
             $result.reason = "Native: $($result.nativeReason) Docker: $($result.dockerReason)"
             continue
         }
-        $executionSource = if ($recipe.harness) { $example.executionSource } else { $source }
         $result.strategy = $strategy
-        if ($strategy -eq 'standalone') { $result.executionSourceSha256 = Hash $executionSource }
+        if ($strategy -eq 'standalone') { $result.executionSourceSha256 = Hash $displayedSource }
         $image = if ($recipe.csrunImage) { $recipe.csrunImage } else { $CsrunImage }
         $fingerprint = Hash ("$toolHash|$sourceHash|$strategy|$Framework|$image|$($result.executionSourceSha256)|" + ($recipe | ConvertTo-Json -Depth 30 -Compress))
         $prior = @($oldByFingerprint["$id|$fingerprint"] | Where-Object { $null -ne $_ })
@@ -162,8 +159,8 @@ foreach ($example in $inventory.examples) {
             $pair = New-RepositoryExamplePair -Repository $recipe.repository -Commit $recipe.commit -Project $recipe.project -Test $recipe.test -Framework $recipe.framework -Image $recipe.image
         } else {
             $manifest = if ($recipe) { $recipe.manifest | Select-Object * } else { [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) } }
-            if ($manifest.PSObject.Properties['source'] -and (Normalize $manifest.source) -cne $source) { throw 'Manifest source differs from displayed C#.' }
-            $manifest | Add-Member -NotePropertyName source -NotePropertyValue $executionSource -Force
+            if ($manifest.PSObject.Properties['source'] -and (Normalize $manifest.source) -cne $displayedSource) { throw 'Manifest source differs from displayed C#.' }
+            $manifest | Add-Member -NotePropertyName source -NotePropertyValue $displayedSource -Force
             $pair = New-CsrunExecutionPair -ManifestJson ($manifest | ConvertTo-Json -Depth 30) -Image $image
         }
         $changed = $false
@@ -190,7 +187,8 @@ foreach ($example in $inventory.examples) {
             $label = if ($_ -eq 'native') { 'Native' } else { 'Docker' }
             '<a href="~/run-actions/' + $id + '/' + $_ + '.ps1" data-transport="' + $_ + '">View ' + $label + ' Script</a>'
         })
-        $note = if ($recipe.explanation) { '<p>' + [Net.WebUtility]::HtmlEncode($recipe.explanation) + '</p>' } else { '' }
+        $note = if ($strategy -eq 'repository') { '<p>Runs the pinned repository test <code>' + [Net.WebUtility]::HtmlEncode($recipe.test) + '</code>.</p>' } else { '' }
+        $note += if ($recipe.explanation) { '<p>' + [Net.WebUtility]::HtmlEncode($recipe.explanation) + '</p>' } else { '' }
         $link = '<div class="docfx-run-actions" data-example-id="' + $id + '">' + ($links -join ' · ') + $note + '</div>'
         if (-not $associations.ContainsKey($example.file)) { $associations[$example.file] = @{} }
         $associations[$example.file][[int]$example.startLine] = "<!-- docfx-run-actions:start -->`n$link`n<!-- docfx-run-actions:end -->"

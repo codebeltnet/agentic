@@ -69,6 +69,16 @@ public class CorrelationStore
     }
 }
 '@
+$packageSource += "`n`n" + @'
+public sealed class CorrelationStoreTests
+{
+    [Xunit.Fact]
+    public void ResolvesTaggedInventory()
+    {
+        Xunit.Assert.Equal("inventory", new CorrelationStore().Resolve());
+    }
+}
+'@
 $packageUid = 'Samples.CorrelationStore'
 [IO.File]::WriteAllText("$work/docs/packages.md", "---`nuid: $packageUid`n---`n# Correlation store`n`n``````csharp`n$packageSource`n```````n")
 $null = New-Item -ItemType Directory "$work/src" -Force
@@ -120,7 +130,6 @@ $packagePins = @(([xml](Get-Content "$work/Directory.Packages.props" -Raw)).Proj
 $packageRecipe = [ordered]@{
     uid=$packageUid; sourceSha256=$packageExample.sourceSha256
     manifest=@{schemaVersion=1; mode='test'; framework='net10.0'; dependsOn=$packagePins + 'xunit.v3@4.0.3'}
-    harness=@{members='public sealed class RunExample { [Xunit.Fact] public void ResolvesTaggedInventory() { Xunit.Assert.Equal("inventory", new CorrelationStore().Resolve()); } }'}
     explanation='The test runs the displayed method and checks the correlation identifier returned from the DI container.'
 }
 $settingsPath = "$work/run-actions.settings.json"
@@ -140,9 +149,9 @@ $manifests = @(foreach ($transport in @('native','docker')) {
 })
 $resolvedManifest = $manifests[0] | ConvertFrom-Json
 if ($manifests[0] -cne $manifests[1] -or $resolved.sourceSha256 -cne $packageExample.sourceSha256 -or
-    $resolved.executionSourceSha256 -ceq $resolved.sourceSha256 -or -not $resolvedManifest.source.StartsWith($packageSource.Replace("`r`n", "`n"), [StringComparison]::Ordinal) -or
+    $resolved.executionSourceSha256 -cne $resolved.sourceSha256 -or $resolvedManifest.source -cne $packageSource.Replace("`r`n", "`n") -or
     -not $resolvedManifest.source.Contains('Xunit.Assert.Equal("inventory", new CorrelationStore().Resolve())') -or
-    ($resolvedManifest.dependsOn -join '|') -cne (($packagePins + 'xunit.v3@4.0.3') -join '|')) { throw 'The harness changed the displayed operation or lost exact source, pins or transport parity.' }
+    ($resolvedManifest.dependsOn -join '|') -cne (($packagePins + 'xunit.v3@4.0.3') -join '|')) { throw 'The generated scripts changed the displayed C#, package pins or transport parity.' }
 if ([IO.File]::ReadAllText("$work/docs/partial.md") -cne $partial) { throw 'An unsupported page with mixed line endings changed.' }
 $consoleWithAssociation = [IO.File]::ReadAllText("$work/docs/console.md")
 if (-not $consoleWithAssociation.StartsWith($console + "`n`n<!-- docfx-run-actions:start -->", [StringComparison]::Ordinal)) {
@@ -220,9 +229,9 @@ if (($limitedAgain | Where-Object id -eq $entry.id).status -ne 'unchanged') { th
 $third = (& $generator -RepoRoot $work) | ConvertFrom-Json
 if ((Test-Path "$work/run-actions/$($entry.id)/native.ps1") -or (Get-Content "$work/docs/integration.md" -Raw).Contains('data-example-id')) { throw 'Stale recipe/assets survived source change.' }
 
-# An invalid harness is a failed recipe, while a recorded intrinsic limitation has no assets.
+# A legacy hidden harness is a failed recipe, while an intrinsic limitation has no assets.
 $invalidRecipe = $packageRecipe | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
-$invalidRecipe.harness = @{members=42}
+$invalidRecipe.harness = @{members='public sealed class HiddenTest { [Xunit.Fact] public void Hidden() {} }'}
 $partialResult = $discovery | Where-Object { $_.file -match '[\\/]partial\.md$' }
 $intrinsic = @{uid=$partialResult.uid; sourceSha256=$partialResult.sourceSha256; intrinsicLimitation='Synthetic limitation for coverage classification.'}
 $customSettings = "$work/custom-settings.json"
@@ -230,7 +239,8 @@ $customSettings = "$work/custom-settings.json"
 $classified = (& $generator -RepoRoot $work -Settings $customSettings) | ConvertFrom-Json
 $invalid = $classified | Where-Object id -eq $resolved.id
 $limitedPartial = $classified | Where-Object id -eq $partialResult.id
-if ($LASTEXITCODE -ne 1 -or $invalid.coverage -ne 'Unresolved' -or $invalid.reason -notlike '*C# must be a string*' -or
+if ($LASTEXITCODE -ne 1 -or $invalid.coverage -ne 'Unresolved' -or $invalid.reason -notlike '*Move the executable C# into the displayed sample*' -or
+    (Test-Path "$work/run-actions/$($resolved.id)/native.ps1") -or (Test-Path "$work/run-actions/$($resolved.id)/docker.ps1") -or
     $limitedPartial.coverage -ne 'Intrinsically non-executable' -or $limitedPartial.native -ne 'Unsupported' -or
     $limitedPartial.docker -ne 'Unsupported' -or (Test-Path "$work/run-actions/$($limitedPartial.id)/native.ps1")) {
     throw 'A malformed recipe or demonstrated intrinsic limitation was misclassified.'
@@ -258,4 +268,4 @@ try {
     }
     if ([IO.File]::ReadAllText($externalPage) -cne $console) { throw 'Rejected inventory changed the external page.' }
 } finally { $inventoryOverride = $null }
-Write-Host "Run-action delivery passed: paired console, test, dependency-backed harness and repository test; exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup and modern DocFX render. Fixture: $work"
+Write-Host "Run-action delivery passed: paired console, test, dependency-backed test and repository test; exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup and modern DocFX render. Fixture: $work"
