@@ -1,7 +1,7 @@
 ---
 name: dotnet-docfx-digest
 description: >
-  Use when the user wants to create, repair, audit, or complete DocFX docs for .NET public APIs, or has changed public API that needs namespace pages, XML comments, overwrite files, extension-member tables, examples, or build verification. Use `dotnet-docfx-digest csrun` to generate Native and Docker run actions for DocFX examples. Exclude private/internal APIs.
+  Use when the user wants to create, repair, audit, or complete DocFX docs for .NET public APIs, or has changed public API that needs namespace pages, XML comments, overwrite files, extension-member tables, examples, or build verification. Also use when the user wants Native and Docker run actions for DocFX examples. Exclude private/internal APIs.
 ---
 
 # .NET DocFX Digest Steward
