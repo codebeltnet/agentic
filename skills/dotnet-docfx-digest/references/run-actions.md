@@ -10,6 +10,12 @@ The command uses `docfx.cs --run-action-inventory`, sharing discovery from `buil
 
 Programs that resolve against the platform and simple xUnit examples can generate immediately through `New-CsrunExecutionPair` and manifest v1. Defaults are `net10.0` and `codebeltnet/csrun:10`. A recipe can set `csrunImage` for a different reviewed tag. Both wrappers download and verify the publisher's latest stable csrun release at execution time. Docker uses the selected image for its SDK and PowerShell.
 
+## Refresh an existing site's toolbar
+
+Use the generator from the skill revision that contains the requested UI change. Its sibling `assets/run-actions.js` is the source copied into the target's effective template. Run the command above even when the C# examples and their recipes are already current. Each example's `unchanged` status describes its PowerShell payloads. The same run still refreshes the toolbar module beside the effective template's `public/main.js`.
+
+Compare the skill asset with that generated template module, rebuild the active DocFX configuration, and verify that the built site's `public/run-actions.js` matches. For a browser check, reload the rebuilt site with caching disabled and exercise the changed control. Report the toolbar refresh separately from script generation and runtime verification. For a toolbar-only request, keep existing C#, recipes, intact scripts and their verification evidence.
+
 ## Resolve the outstanding examples
 
 1. Review each `Unresolved` result with `docfx.cs --repo-root <repository> --run-action-inventory`. Pass the same `--docfx` if applicable. The inventory includes C#, UID, maintained source context, owner project candidates, metadata frameworks and shared build input paths.

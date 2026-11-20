@@ -16,6 +16,8 @@ Create and maintain developer-friendly DocFX documentation digests for .NET publ
 
 For `dotnet-docfx-digest csrun` (also accepted as `dotnet-docfx-digest generate-run-actions`), read [run actions](references/run-actions.md). Run the deterministic generator across the active DocFX repository, then resolve its outstanding examples in bounded project batches within the same skill invocation. Inspect source projects, evaluated references, published package assets and maintained tests, persist source-bound recipes, and regenerate until every example is paired or has a demonstrated technical limitation. Keep C#, source links and template customizations readable. Runtime verification is opt-in and independent for each transport. The generator uses the existing csrun contract and runs without model calls.
 
+For an existing site, always run the current skill's generator, including for toolbar-only updates. An `unchanged` example status applies to its PowerShell scripts. Verify the template's refreshed `public/run-actions.js` against the skill asset, then rebuild and verify the JavaScript in the site output. For a UI-only refresh, preserve existing examples, recipes and script verification evidence.
+
 ## Critical
 
 - Prefer complete standalone programs and genuine xUnit v3 tests, delivered through existing `dotnet-csrun` native and Docker one-shot blocks with identical source/dependencies. For APIs requiring an actual application, runner or distinct assembly identity, inspect the maintained example, test and project graph, then provide a pinned repository-backed one-shot test instead. Read [one-shot examples](references/one-shot-examples.md) before publishing execution instructions. Do not expand csrun manifest v1 or manufacture a substitute host.
