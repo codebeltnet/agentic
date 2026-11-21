@@ -235,6 +235,27 @@ if ($refreshEntry.native -ne 'Verified' -or $refreshEntry.docker -ne 'Unverified
     $refreshEntry.nativeEvidence -cne $nativeOnlyEntry.nativeEvidence -or -not (Test-Path -LiteralPath $refreshEntry.nativeEvidence)) {
     throw 'Toolbar refresh lost independent verification evidence.'
 }
+$cacheDirectory = Split-Path $refreshEntry.nativeEvidence -Parent
+$cacheRecord = Get-ChildItem -LiteralPath $cacheDirectory -Filter "*-$($entry.id)-native-$($refreshEntry.nativeSha256).json" |
+    Where-Object { ([IO.File]::ReadAllText($_.FullName) | ConvertFrom-Json).log -eq (Split-Path $refreshEntry.nativeEvidence -Leaf) } |
+    Select-Object -First 1
+if (-not $cacheRecord) { throw 'Verification record and log must share the private cache.' }
+$originalRecord = [IO.File]::ReadAllText($cacheRecord.FullName)
+$outsideLog = Join-Path $work (Split-Path $refreshEntry.nativeEvidence -Leaf)
+[IO.File]::WriteAllText($outsideLog, 'untrusted verification log')
+try {
+    [IO.File]::WriteAllText($cacheRecord.FullName, (@{ state = 'Verified'; log = $outsideLog } | ConvertTo-Json))
+    $untrusted = ((& $generator -RepoRoot $work) | ConvertFrom-Json) | Where-Object id -eq $entry.id
+    if ($untrusted.native -ne 'Unverified' -or $untrusted.nativeEvidence) { throw 'Verification trusted a log outside the private cache.' }
+
+    [IO.File]::WriteAllText($cacheRecord.FullName, $originalRecord)
+    $linkedLog = Join-Path $cacheDirectory ('linked-' + [guid]::NewGuid().ToString('N') + '.log')
+    $null = New-Item -ItemType HardLink -Path $linkedLog -Target $refreshEntry.nativeEvidence
+    try {
+        $untrusted = ((& $generator -RepoRoot $work) | ConvertFrom-Json) | Where-Object id -eq $entry.id
+        if ($untrusted.native -ne 'Unverified' -or $untrusted.nativeEvidence) { throw 'Verification trusted a hard-linked log.' }
+    } finally { [IO.File]::Delete($linkedLog) }
+} finally { [IO.File]::WriteAllText($cacheRecord.FullName, $originalRecord) }
 foreach ($script in Get-ChildItem "$work/run-actions" -Filter '*.ps1' -Recurse -File) {
     if ($before[$script.FullName][0] -cne (Get-FileHash $script.FullName).Hash -or
         $before[$script.FullName][1] -ne $script.LastWriteTimeUtc.Ticks) {

@@ -17,6 +17,42 @@ if (-not (Test-Path $helpers)) { throw "Install dotnet-csrun beside this skill: 
 Set-StrictMode -Off
 function Hash([string] $Text) { [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Text))) }
 function Normalize([string] $Text) { $Text.Replace("`r`n", "`n").TrimEnd("`n", "`r") }
+function Get-UnixCacheMetadata([string] $Path) {
+    $statArgs = if ($IsMacOS) { @('-f', '%u %l %p', $Path) } else { @('-c', '%u %h %f', '--', $Path) }
+    $metadata = & stat @statArgs 2>$null
+    if ($LASTEXITCODE -ne 0 -or $metadata -notmatch '\A(\d+) (\d+) ([0-9a-f]+)\z') { return }
+    $radix = if ($IsMacOS) { 8 } else { 16 }
+    return @{ Owner = $Matches[1]; Links = [int]$Matches[2]; Mode = [Convert]::ToInt32($Matches[3], $radix) }
+}
+function Test-PrivateCacheItem([string] $Path, [switch] $Directory) {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item -or $item.PSIsContainer -ne $Directory.IsPresent -or
+        $item.LinkType -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+    if ($IsWindows) {
+        try { return (Get-Acl -LiteralPath $Path).GetOwner([Security.Principal.SecurityIdentifier]).Value -eq $cacheOwner }
+        catch { return $false }
+    }
+    $metadata = Get-UnixCacheMetadata $Path
+    return $metadata.Owner -eq $cacheOwner -and ($metadata.Mode -band 63) -eq 0 -and
+        ($Directory -or (($metadata.Mode -band 0xF000) -eq 0x8000 -and $metadata.Links -eq 1))
+}
+function Get-PrivateCacheDirectory([string] $BasePath) {
+    if (-not $BasePath -or -not [IO.Path]::IsPathFullyQualified($BasePath)) { return }
+    for ($ancestor = [IO.DirectoryInfo]::new($BasePath); $ancestor; $ancestor = $ancestor.Parent) {
+        $item = Get-Item -LiteralPath $ancestor.FullName -Force -ErrorAction SilentlyContinue
+        if (-not $item -or -not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
+        if (-not $IsWindows) {
+            $metadata = Get-UnixCacheMetadata $ancestor.FullName
+            if (-not $metadata -or $metadata.Owner -notin @($cacheOwner, '0') -or ($metadata.Mode -band 18)) { return }
+        }
+    }
+    $path = Join-Path $BasePath '.docfx-run-verification'
+    if ($Verify -ne 'None' -and -not (Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue)) {
+        if ($IsWindows) { $null = [IO.Directory]::CreateDirectory($path) }
+        else { & (Get-Command mkdir -CommandType Application | Select-Object -First 1).Source -m 700 -- $path 2>$null }
+    }
+    if (Test-PrivateCacheItem $path -Directory) { return $path }
+}
 function Write-Changed([string] $Path, [string] $Text) {
     Assert-RepositoryPath $Path
     if ((Test-Path -LiteralPath $Path) -and [IO.File]::ReadAllText($Path) -ceq $Text) { return $false }
@@ -57,7 +93,10 @@ $configPath = $inventory.config
 $workspace = Split-Path $configPath -Parent
 Assert-RepositoryPath $configPath
 $manifestPath = Join-Path $workspace 'run-actions.manifest.json'
-$evidenceDirectory = Join-Path ([IO.Path]::GetTempPath()) ('docfx-run-verification-' + (Hash $configPath))
+$cacheOwner = if ($IsWindows) { [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } else { & id -u }
+$cacheBase = if ($IsWindows) { [Environment]::GetFolderPath('LocalApplicationData') } else { $HOME }
+$evidenceDirectory = Get-PrivateCacheDirectory $cacheBase
+$configHash = Hash $configPath
 $oldManifestById = @{}
 if (Test-Path -LiteralPath $manifestPath) {
     $oldManifestDoc = Get-Content $manifestPath -Raw | ConvertFrom-Json
@@ -153,21 +192,23 @@ foreach ($example in $inventory.examples) {
             if ($errors.Count) { throw "Generated $transport script has syntax errors: $errors" }
             $scriptHash = Hash $script
             $result["${transport}Sha256"] = $scriptHash
-            $evidencePath = Join-Path $evidenceDirectory "$id-$transport-$scriptHash.json"
+            $evidencePath = if ($evidenceDirectory) { Join-Path $evidenceDirectory "$configHash-$id-$transport-$scriptHash.json" }
             if ($Verify -eq 'Both' -or $Verify -eq $transport) {
-                $tempScript = Join-Path ([IO.Path]::GetTempPath()) ("docfx-run-$id-$transport-" + [guid]::NewGuid().ToString('N') + '.ps1')
-                $log = Join-Path ([IO.Path]::GetTempPath()) ("docfx-run-$id-$transport-" + [guid]::NewGuid().ToString('N') + '.log')
+                if (-not $evidencePath) { throw 'A private, user-owned directory is required to record run-action verification.' }
+                $runName = "docfx-run-$id-$transport-" + [guid]::NewGuid().ToString('N')
+                $tempScript = Join-Path $evidenceDirectory "$runName.ps1"
+                $log = Join-Path $evidenceDirectory "$runName.log"
                 try {
                     [IO.File]::WriteAllText($tempScript, $script, [Text.UTF8Encoding]::new($false))
                     [IO.File]::WriteAllText($log, '')
                     & pwsh -NoProfile -NonInteractive -File $tempScript *> $log
                     $result[$transport] = if ($LASTEXITCODE -eq 0) { 'Verified' } else { 'Failed' }
                     $result["${transport}Evidence"] = $log
-                    $null = [IO.Directory]::CreateDirectory($evidenceDirectory)
-                    $pendingEvidence = "$evidencePath.$([guid]::NewGuid().ToString('N')).tmp"
+                    $pendingEvidence = Join-Path $evidenceDirectory "$runName.tmp"
                     try {
-                        $evidence = @{ state = $result[$transport]; log = $log }
+                        $evidence = @{ state = $result[$transport]; log = "$runName.log" }
                         [IO.File]::WriteAllText($pendingEvidence, ($evidence | ConvertTo-Json -Compress))
+                        if (-not $IsWindows) { & chmod 600 -- $pendingEvidence $log }
                         [IO.File]::Move($pendingEvidence, $evidencePath, $true)
                     } finally {
                         [IO.File]::Delete($pendingEvidence)
@@ -175,13 +216,17 @@ foreach ($example in $inventory.examples) {
                 } finally {
                     if (Test-Path -LiteralPath $tempScript) { Remove-Item -LiteralPath $tempScript -Force }
                 }
-            } elseif (Test-Path -LiteralPath $evidencePath -PathType Leaf) {
+            } elseif ($evidencePath) {
                 try {
+                    if (-not (Test-PrivateCacheItem $evidencePath)) { continue }
                     $evidence = [IO.File]::ReadAllText($evidencePath) | ConvertFrom-Json
                     if ($evidence.state -in @('Verified', 'Failed') -and
-                        $evidence.log -and (Test-Path -LiteralPath $evidence.log -PathType Leaf)) {
-                        $result[$transport] = $evidence.state
-                        $result["${transport}Evidence"] = $evidence.log
+                        $evidence.log -cmatch "\Adocfx-run-$id-$transport-[a-f0-9]{32}\.log\z") {
+                        $log = Join-Path $evidenceDirectory $evidence.log
+                        if (Test-PrivateCacheItem $log) {
+                            $result[$transport] = $evidence.state
+                            $result["${transport}Evidence"] = $log
+                        }
                     }
                 } catch {
                     Write-Verbose "Could not read $transport verification evidence for $id"
