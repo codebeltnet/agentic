@@ -552,4 +552,40 @@ foreach ($variant in $buildImageVariants) {
     } finally { $inventoryOverride = $null }
 }
 
+# Template ordering: templates/modern must come before templates/ms-style, with templates/ms-style always last.
+$templateOrderCases = @(
+    @{
+        Name = 'ms-style-without-modern'
+        Initial = @('default', 'modern', 'templates/ms-style')
+        CreateModernMain = $false
+        Expected = @('default', 'modern', 'templates/modern', 'templates/ms-style')
+    }
+    @{
+        Name = 'ms-style-before-existing-modern'
+        Initial = @('default', 'modern', 'templates/ms-style', 'templates/modern')
+        CreateModernMain = $true
+        Expected = @('default', 'modern', 'templates/modern', 'templates/ms-style')
+    }
+)
+foreach ($case in $templateOrderCases) {
+    $caseRoot = Join-Path $work ("template-order-" + $case.Name)
+    $null = [IO.Directory]::CreateDirectory($caseRoot)
+    $caseConfig = Join-Path $caseRoot 'docfx.json'
+    [IO.File]::WriteAllText($caseConfig, (@{ build = @{ template = $case.Initial } } | ConvertTo-Json -Depth 5 -Compress))
+    if ($case.CreateModernMain) {
+        $modernPublic = Join-Path $caseRoot 'templates/modern/public'
+        $null = [IO.Directory]::CreateDirectory($modernPublic)
+        [IO.File]::WriteAllText((Join-Path $modernPublic 'main.js'), "export default {};`n")
+    }
+    $inventoryOverride = @{ config = $caseConfig; examples = @() } | ConvertTo-Json -Depth 5
+    try {
+        $null = & $generator -RepoRoot $caseRoot
+        if ($LASTEXITCODE -ne 0) { throw "Generator failed for template-order case $($case.Name)." }
+        $actualTemplates = @((Get-Content $caseConfig -Raw | ConvertFrom-Json).build.template)
+        if (($actualTemplates -join ',') -cne ($case.Expected -join ',')) {
+            throw "Template order case $($case.Name) expected [$($case.Expected -join ', ')], got [$($actualTemplates -join ', ')]."
+        }
+    } finally { $inventoryOverride = $null }
+}
+
 Write-Host "Run-action delivery passed: paired console, test, dependency-backed test and repository test; exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"
