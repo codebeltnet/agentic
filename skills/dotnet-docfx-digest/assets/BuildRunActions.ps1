@@ -372,15 +372,19 @@ try {
         }
         if (-not $probed) { throw "Host probe '$($payload.probeMethod) $($payload.probePath)' timed out after $($payload.timeoutSeconds)s. Last error: $lastError" }
     } else {
-        $delayRemainingMs = [int][Math]::Ceiling(($deadline - [DateTimeOffset]::UtcNow).TotalMilliseconds)
-        $sleepMs = [Math]::Min([int]$payload.startupDelayMs, [Math]::Max($delayRemainingMs, 0))
-        if ($sleepMs -gt 0) { Start-Sleep -Milliseconds $sleepMs }
+        $requiredDelayMs = [Math]::Max([int]$payload.startupDelayMs, 0)
+        $delayRemainingMs = [int][Math]::Floor(($deadline - [DateTimeOffset]::UtcNow).TotalMilliseconds)
+        $sleepMs = [Math]::Min($requiredDelayMs, [Math]::Max($delayRemainingMs, 0))
+        if ($sleepMs -gt 0) { $null = $hostProcess.WaitForExit($sleepMs) }
         if ($hostProcess.HasExited -and $hostProcess.ExitCode -ne 0) {
             $stdOut = $stdoutTask.GetAwaiter().GetResult()
             $errOut = $stderrTask.GetAwaiter().GetResult()
             throw "Host exited with code $($hostProcess.ExitCode). $stdOut $errOut"
         }
-        Write-Output "Host started cleanly and ran for $($payload.startupDelayMs)ms."
+        if ($delayRemainingMs -lt $requiredDelayMs) {
+            throw "Host startup observation (${requiredDelayMs}ms) timed out after $($payload.timeoutSeconds)s with only $([Math]::Max($delayRemainingMs, 0))ms remaining."
+        }
+        Write-Output "Host started cleanly and ran for ${requiredDelayMs}ms."
     }
 } finally {
     if ($buildProcess) {
