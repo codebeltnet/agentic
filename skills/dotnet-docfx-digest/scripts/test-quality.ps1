@@ -2793,6 +2793,12 @@ example: [*content]
 ---
 The ``Spinner`` formats progress labels for command-line tools. The following example creates a spinner and prints the formatted status text to standard output:
 
+    ### Example
+
+<!--
+### Examples
+-->
+
 $sampleCode
 "@
     $flowClean = Invoke-Validator -Workspace $headingWorkspace
@@ -2903,7 +2909,42 @@ $sampleCode
     Assert-NoDiagnostic $formBValid 'EXAMPLE_MISSING'
     Assert-NoDiagnostic $formBValid 'EXAMPLE_REDUNDANT_HEADING'
 
-    Write-Host 'DocFX example: [*content] and redundant Example heading regression passed.'
+    $includeNamespace = Join-Path $headingWorkspace '.docfx/api/namespaces/Acme.Widgets.md'
+    $include = '[!INCLUDE [availability](../../includes/availability.md)]'
+    Write-Utf8File $includeNamespace @"
+$include
+
+## Examples
+
+$sampleCode
+
+<!-- $include -->
+"@
+    Write-Utf8File $spinnerPage @'
+---
+uid: Acme.Widgets.Spinner
+summary: *content
+---
+Write the directive as `[!INCLUDE [availability](example.md)]`.
+
+<!--
+[!INCLUDE [availability](example.md)]
+-->
+
+    [!INCLUDE [availability](example.md)]
+'@
+    $literalIncludes = Invoke-Validator -Workspace $headingWorkspace
+    Assert-NoDiagnostic $literalIncludes 'API_INCLUDE_OUTSIDE_NAMESPACES'
+
+    [IO.File]::AppendAllText($includeNamespace, "`n`n$include`n")
+    $lateInclude = Invoke-Validator -Workspace $headingWorkspace
+    Assert-DiagnosticMessageContains $lateInclude 'API_INCLUDE_OUTSIDE_NAMESPACES' 'after the examples begin'
+
+    [IO.File]::AppendAllText($spinnerPage, "`n`n$include`n")
+    $typeInclude = Invoke-Validator -Workspace $headingWorkspace
+    Assert-DiagnosticMessageContains $typeInclude 'API_INCLUDE_OUTSIDE_NAMESPACES' 'outside'
+
+    Write-Host 'DocFX example: [*content], heading, and include placement regressions passed.'
 } finally {
     if (Test-Path $headingWorkspace) { Remove-Item -LiteralPath $headingWorkspace -Recurse -Force }
 }

@@ -4483,66 +4483,31 @@ internal static class DocfxValidator
                 continue;
             }
 
-            if (fullPath.StartsWith(namespacesRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
+            var isNamespace = fullPath.StartsWith(namespacesRoot, StringComparison.OrdinalIgnoreCase);
             var text = workspace.ReadMarkdown(md);
             if (!text.Contains("[!INCLUDE", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-            var inFence = false;
-            var fenceChar = '\0';
-            var fenceLength = 0;
-
-            for (var i = 0; i < lines.Length; i++)
+            var afterExamples = false;
+            foreach (var (line, offset, fenceInfo) in ScanMarkdownLines(text))
             {
-                var trimmed = lines[i].TrimStart();
-                if (!inFence)
+                afterExamples |= IsExampleHeading(line) || fenceInfo is "cs" or "csharp";
+                if ((isNamespace && !afterExamples) ||
+                    !Regex.IsMatch(line, @"(?<!\\)\[!INCLUDE[ \t]+\[[^\]\r\n]*\]\([^)\r\n]+\)\]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                 {
-                    if (trimmed.StartsWith("```", StringComparison.Ordinal) || trimmed.StartsWith("~~~", StringComparison.Ordinal))
-                    {
-                        fenceChar = trimmed[0];
-                        fenceLength = 0;
-                        while (fenceLength < trimmed.Length && trimmed[fenceLength] == fenceChar)
-                        {
-                            fenceLength++;
-                        }
-                        inFence = true;
-                        continue;
-                    }
-                }
-                else
-                {
-                    if (trimmed.Length >= fenceLength && trimmed[0] == fenceChar)
-                    {
-                        var count = 0;
-                        while (count < trimmed.Length && trimmed[count] == fenceChar)
-                        {
-                            count++;
-                        }
-                        if (count >= fenceLength && string.IsNullOrWhiteSpace(trimmed[count..]))
-                        {
-                            inFence = false;
-                        }
-                    }
                     continue;
                 }
 
-                if (trimmed.Contains("[!INCLUDE", StringComparison.OrdinalIgnoreCase))
-                {
-                    report.Errors.Add(new Diagnostic(
-                        "API_INCLUDE_OUTSIDE_NAMESPACES",
-                        Rel(repoRoot, md),
-                        null,
-                        $"Line {i + 1} uses a `[!INCLUDE ...]` directive outside `api/namespaces/`. " +
-                        "Under `.docfx/api/`, `[!INCLUDE ...]` directives (including availability includes) are only allowed on namespace overview pages under `.docfx/api/namespaces/*` — never on type pages (`.docfx/api/types/*`) or after examples."));
-                    break;
-                }
+                var placement = isNamespace ? "after the examples begin" : "outside `api/namespaces/`";
+                report.Errors.Add(new Diagnostic(
+                    "API_INCLUDE_OUTSIDE_NAMESPACES",
+                    Rel(repoRoot, md),
+                    null,
+                    $"Line {offset + 1} uses a `[!INCLUDE ...]` directive {placement}. " +
+                    "Under `.docfx/api/`, directives are only allowed before examples on namespace overview pages."));
+                break;
             }
         }
     }
@@ -6412,55 +6377,88 @@ internal static class DocfxValidator
             return false;
         }
 
-        var lines = body.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
-        var inFence = false;
-        var fenceChar = '\0';
-        var fenceLength = 0;
-
-        for (var i = 0; i < lines.Length; i++)
+        foreach (var (line, offset, _) in ScanMarkdownLines(body))
         {
-            var trimmed = lines[i].TrimStart();
-            if (!inFence)
+            if (IsExampleHeading(line))
             {
-                if (trimmed.StartsWith("```", StringComparison.Ordinal) || trimmed.StartsWith("~~~", StringComparison.Ordinal))
-                {
-                    fenceChar = trimmed[0];
-                    fenceLength = 0;
-                    while (fenceLength < trimmed.Length && trimmed[fenceLength] == fenceChar)
-                    {
-                        fenceLength++;
-                    }
-                    inFence = true;
-                    continue;
-                }
-            }
-            else
-            {
-                if (trimmed.Length >= fenceLength && trimmed[0] == fenceChar)
-                {
-                    var count = 0;
-                    while (count < trimmed.Length && trimmed[count] == fenceChar)
-                    {
-                        count++;
-                    }
-                    if (count >= fenceLength && string.IsNullOrWhiteSpace(trimmed[count..]))
-                    {
-                        inFence = false;
-                    }
-                }
-                continue;
-            }
-
-            if (Regex.IsMatch(trimmed, @"^#{1,6}\s+Examples?:?(?:\s+#+)?\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
-            {
-                relativeLineOffset = i;
-                headingLine = trimmed.TrimEnd();
+                relativeLineOffset = offset;
+                headingLine = line.Trim();
                 return true;
             }
         }
 
         return false;
     }
+
+    private static bool IsExampleHeading(string line) =>
+        Regex.IsMatch(line, @"^ {0,3}#{1,6}\s+Examples?:?(?:\s+#+)?\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static IEnumerable<(string Text, int Offset, string? FenceInfo)> ScanMarkdownLines(string text)
+    {
+        var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+        var inComment = false;
+        var fenceChar = '\0';
+        var fenceLength = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (!inComment)
+            {
+                var fence = Regex.Match(line, @"^ {0,3}(?<marker>`{3,}|~{3,})(?<info>.*)$");
+                if (fenceLength != 0)
+                {
+                    if (fence.Success && fence.Groups["marker"].Value[0] == fenceChar &&
+                        fence.Groups["marker"].Length >= fenceLength && string.IsNullOrWhiteSpace(fence.Groups["info"].Value))
+                    {
+                        fenceLength = 0;
+                    }
+                    continue;
+                }
+                if (fence.Success)
+                {
+                    fenceChar = fence.Groups["marker"].Value[0];
+                    fenceLength = fence.Groups["marker"].Length;
+                    yield return (string.Empty, i, fence.Groups["info"].Value.Trim().ToLowerInvariant());
+                    continue;
+                }
+                if (Regex.IsMatch(line, @"^(?: {4}| {0,3}\t)"))
+                {
+                    continue;
+                }
+            }
+
+            // Consume inline code and comments in source order, so delimiters inside either are literal.
+            var visible = new StringBuilder();
+            var start = 0;
+            while (start < line.Length)
+            {
+                if (inComment)
+                {
+                    var close = line.IndexOf("-->", start, StringComparison.Ordinal);
+                    if (close < 0) break;
+                    inComment = false;
+                    start = close + 3;
+                    continue;
+                }
+
+                var token = MarkdownLiteral.Match(line, start);
+                if (!token.Success)
+                {
+                    visible.Append(line.AsSpan(start));
+                    break;
+                }
+                visible.Append(line.AsSpan(start, token.Index - start));
+                inComment = token.Value == "<!--";
+                if (!inComment) visible.Append('\uFFFD');
+                start = token.Index + token.Length;
+            }
+            yield return (visible.ToString(), i, null);
+        }
+    }
+
+    private static readonly Regex MarkdownLiteral = new(
+        @"<!--|(?<![`\\])(?<ticks>`+)(?!`).*?(?<!`)\k<ticks>(?!`)", RegexOptions.CultureInvariant);
 
     private static bool IsMappedToExample(string yaml)
     {
