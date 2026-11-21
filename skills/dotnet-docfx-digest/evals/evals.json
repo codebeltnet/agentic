@@ -1339,6 +1339,19 @@
         "Source, overwrite UIDs, template customizations and no-JavaScript fallback remain intact",
         "Repeated generation is incremental, source changes invalidate assets and generation does not claim Verified"
       ]
+    },
+    {
+      "id": 125,
+      "prompt": "Use dotnet-docfx-digest csrun deterministically on a large multi-package DocFX repository with unresolved wrapper classes (`wrapper-clean` and `wrapper-members`), parameterized DI setup methods (`ConfigureServices(IServiceCollection)`), a multi-fence page (`ServiceCollectionExtensions.md`), an orphaned recipe whose fence only had trailing whitespace trimmed, a split-package namespace where types live in a different package or collide with `System.Xml.XmlConvert`, and a blocking ASP.NET Core host example (`AppTagHelperOptions`). Verify offline with a cached `csrun.ps1` without risking the last good manifest.",
+      "expected_output": "Runs `--run-action-plan --json` and `--explain <uid>` to get deterministic Roslyn categories, convertibility, blocking constructs/lines, and stable `uid#<ordinal>` IDs; runs `--check-recipes --json` to classify `moved`, `duplicate-uid`, and `orphaned` (`whitespace-only` vs `semantic`) recipes with suggested updates; runs `--resolve-dependencies <uid>` to get assembly/type-owned `dependsOn` pins and `missing-package`/`ambiguous-type` preflight diagnostics; validates convertible candidates in OS temp with `--validate-run-action <uid>` before `--apply-run-action <uid>` (which refuses unless validation passed and preserves sibling-fence recipes); uses `mode: host` / `hostHarness` for blocking ASP.NET Core hosts instead of `intrinsicLimitation`; and runs `--verify Native|Docker` / `--verify-changed` / `--verify --id <uid>` with `--engine-path` and `--summary-json` so verification runs offline and preserves `run-actions.manifest.json` atomically on failure.",
+      "expectations": [
+        "Uses `--run-action-plan --json` (and `--explain <uid>`) rather than regex heuristics to classify `wrapper-clean`, `wrapper-members`, `host-blocking`, `host-parameterized`, `no-entry`, `top-level`, `already-standalone`, and `intrinsic` examples with exact blocking construct and line",
+        "Uses stable `uid#<ordinal>` example IDs and `--check-recipes --json` to detect `moved`, `duplicate-uid`, and `orphaned` (`whitespace-only` vs `semantic`) recipes without overwriting a recipe that matches another fence",
+        "Uses `--resolve-dependencies <uid>` to resolve split-package type ownership and surface `missing-package` or `ambiguous-type` preflight diagnostics instead of guessing package IDs from namespace strings",
+        "Validates candidates via `--validate-run-action <uid>` in temp workspace (requiring exit 0 and non-empty console output) before `--apply-run-action <uid>` and reports the generated recipe hash",
+        "Uses a `mode: host` / `hostHarness` recipe with timeout and clean shutdown for blocking ASP.NET Core host examples, reserving `intrinsicLimitation` strictly for code with no observable behavior",
+        "Uses `--engine-path`, `--summary-json`, `--verify-changed`, and `--verify --id <uid>` with atomic manifest writes that preserve the previous manifest and emit `failureReason` (e.g. `github-403-no-cached-engine`) if verification fails"
+      ]
     }
   ]
 }

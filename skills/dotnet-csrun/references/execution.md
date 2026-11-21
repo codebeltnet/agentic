@@ -13,6 +13,19 @@ Never fix a mismatch by changing the target. The engine validates support agains
 
 The paired wrappers fetch the latest stable csrun release from GitHub and check the asset SHA-256 digest before execution. The Docker wrapper streams the verified asset and UTF-8 manifest over stdin and runs the asset in a Linux image that provides PowerShell and the target SDK. Metadata and uncached NuGet restores need network access.
 
+## Cached engine resolution for skill verification
+
+During skill-driven verification, repairs, and multi-example or parallel sweeps, do not execute the GitHub-fetching wrapper repeatedly per example: `GET https://api.github.com/repos/codebeltnet/csrun/releases/latest` is subject to GitHub's 60-requests/hour unauthenticated REST rate limit and burst abuse detection. Instead, resolve the verified engine once with `Resolve-CsrunEngine` from `scripts/sample-tools.ps1`, then pass `-EnginePath $engine.Path` to `New-CsrunExecutionPair` for verification execution only:
+
+```powershell
+. '<resolved-skill-dir>/scripts/sample-tools.ps1'
+$engine = Resolve-CsrunEngine
+$verifyPair = New-CsrunExecutionPair -ManifestJson $manifest -Image 'codebeltnet/csrun:10' -EnginePath $engine.Path
+$publishedPair = New-CsrunExecutionPair -ManifestJson $manifest -Image 'codebeltnet/csrun:10'
+```
+
+`Resolve-CsrunEngine` fetches the latest stable `csrun.ps1`, verifies its SHA-256 digest against the release asset metadata, and caches it with its tag, digest, ETag, and timestamp in a private user-owned cache outside any repository (`%LOCALAPPDATA%/codebeltnet/csrun-cache` on Windows, `$HOME/.cache/codebeltnet/csrun-cache` on Unix; override with `-CacheDirectory` or `CSRUN_CACHE_DIR`). Subsequent calls within the freshness window (default 60 minutes) re-verify the local file's SHA-256 and reuse it with zero GitHub calls. Expired entries revalidate with `If-None-Match` (`304 Not Modified` does not consume GitHub REST quota), concurrent callers serialize on a cache lock, and rate-limited (`403`/`429`) revalidations fall back to an existing SHA-256-verified cached copy with a warning citing the cached tag and digest. Always generate final developer-facing and published artifacts **without** `-EnginePath` so they remain self-contained and continue to fetch and verify from GitHub.
+
 Record `docker image inspect codebeltnet/csrun:10 --format '{{json .Config.Labels}}'` and `docker image inspect codebeltnet/csrun:10 --format '{{json .RepoDigests}}'` where reproducibility matters. Tags are mutable and cached images persist until updated. A registry-confirmed digest pin improves identity; never invent one. Engine release/hash labels and SDK/runtime inventories are separate identities. Use `docker run --rm --entrypoint dotnet codebeltnet/csrun:10 --list-sdks` and `--list-runtimes` to inspect them.
 
 ## Independent environment selection

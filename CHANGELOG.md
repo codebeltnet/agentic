@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-11-22
+
+This is a minor release that adds local SHA-256-verified `csrun.ps1` caching with ETag revalidation and rate-limit fallback in `dotnet-csrun`, extends `dotnet-docfx-digest` with deterministic Roslyn AST run-action planning, assembly/type-ownership dependency resolution, multi-fence `uid#<ordinal>` recipe health checks, validation-gated candidate application, first-class `mode: host` / `hostHarness` execution, atomic manifest writes, and scoped offline verification, and updates both skills' guidance, catalog entries, evals, and offline test suites.
+
+### Added
+
+- `dotnet-csrun` `Resolve-CsrunEngine` helper in `scripts/sample-tools.ps1` that fetches the latest stable `csrun.ps1` release once, verifies its SHA-256 digest, caches it with `engine.json` metadata in a private user-owned directory (`%LOCALAPPDATA%/codebeltnet/csrun-cache` on Windows, `$HOME/.cache/codebeltnet/csrun-cache` on Unix, or `CSRUN_CACHE_DIR`) with ownership, reparse-point, and `engine.lock` checks, revalidates expired entries via `If-None-Match` (`304 Not Modified`), and falls back to the verified cache on HTTP `403`/`429` rate-limit responses,
+- `dotnet-docfx-digest` `generate-run-actions.ps1` `-EnginePath` / `--engine-path` parameter and one-time `Resolve-CsrunEngine` verification preflight for standalone examples, recording `engineSha256` and optional `engineTag` in verification evidence and failing with `failureReason` (`github-403-no-cached-engine`, `github-429-no-cached-engine`, `engine-path-not-found`, or `engine-resolution-failed`) while keeping `run-actions.manifest.json`, `BuildRunActions.ps1`, materialized `native.ps1`/`docker.ps1` artifacts, and cache hashes bound to the GitHub-referencing scripts,
+- `dotnet-docfx-digest` deterministic Roslyn AST run-action classification and planning via `docfx.cs --run-action-inventory` (`ClassifyRunActionExample`, `BuildConvertedConsoleSource`) and `generate-run-actions.ps1` `--run-action-plan` (`-RunActionPlan`) / `--explain <uid>` (`-Explain`) with `--json`, categorizing fences (`already-standalone`, `top-level`, `wrapper-clean`, `wrapper-members`, `host-blocking`, `host-parameterized`, `no-entry`, `syntax-error`, `intrinsic`) and reporting `convertible`, `suggestedMode`, `entryPoint`, 1-based `blockingConstruct`/`blockingLine`, `manualHarness`, and convertible `candidateSource`,
+- `dotnet-docfx-digest` assembly and type-ownership dependency resolution (`BuildRunActionDependencyIndex`, `ResolveRunActionDependencies`) and `--resolve-dependencies <uid>` (`-ResolveDependencies`), resolving `dependsOn` pins, `sdk`, and `frameworkReferences` from `.csproj`, `Directory.Packages.props`, `Directory.Build.props`, existing recipe pins, local NuGet cache, git SemVer tags, and `TRUSTED_PLATFORM_ASSEMBLIES` BCL metadata while surfacing `missing-package` and `ambiguous-type` preflight diagnostics,
+- `dotnet-docfx-digest` stable multi-fence `<uid>#<ordinal>` identity (`exampleId`, `fenceOrdinal`, `whitespaceSha256`) and `--check-recipes` (`-CheckRecipes`) health checks detecting `moved`, `duplicate-uid`, and `orphaned` (`whitespace-only` vs `semantic`, `uid-removed`, or `unknown`) recipes,
+- `dotnet-docfx-digest` validation-gated candidate workflow via `--validate-run-action <uid>` (`-ValidateRunAction`), which builds and runs convertible candidates in an isolated OS temp workspace with `--timeout-seconds` (default `60`) and stores a hash-bound validation receipt, paired with `--apply-run-action <uid>` (`-ApplyRunAction`), which refuses unvalidated edits with `validation-required` before surgically updating only the target fence and atomically updating `run-actions.settings.json` without overwriting recipes matching sibling fences,
+- `dotnet-docfx-digest` first-class `mode: host` / `hostHarness` execution (`strategy: "host"`) in `scripts/integration-example.ps1` (`New-HostExamplePair`), `assets/BuildRunActions.ps1` (`New-HostPair`), and `generate-run-actions.ps1`, binding an ephemeral loopback port, building and launching the host, executing an HTTP probe or startup delay within `timeoutSeconds`, and shutting down the host process tree across Native and Docker transports,
+- `dotnet-docfx-digest` `generate-run-actions.ps1` GNU-style `--*` CLI flag parsing, schema v2 `--summary-json` reporting, `--verify-changed` reuse of cached `Verified` evidence for unchanged manifest entries, `--id <uid>` (`-TargetId`) scoped verification, atomic `Write-AtomicChanged` manifest writes preserving `run-actions.manifest.json` (`manifestPreserved`) on verification failure, and documented exit codes (`0` clean, `1` failure, `2` unresolved, `3` invalid arguments/selector).
+
+### Changed
+
+- `dotnet-csrun` and `dotnet-docfx-digest` skill guidance (`SKILL.md` and `references/`), `README.md` catalog summaries, `dotnet-docfx-digest` evals (`evals/evals.json` case `125`), and offline PowerShell regression suites (`test-sample-tools.ps1` and `test-run-actions.ps1`) now cover one-time cached `csrun.ps1` resolution via `-EnginePath`, deterministic run-action planning, type-owned dependency preflight, multi-fence `uid#<ordinal>` recipe checks, validation-gated apply, `mode: host` harnesses, atomic manifest preservation, and scoped verification while restricting `intrinsicLimitation` strictly to code with no observable runtime behavior.
+
 ## [0.13.1] - 2026-11-21
 
 This is a minor release that adds a standalone run-action materializer to `dotnet-docfx-digest`, so the generated Native and Docker wrapper scripts are rebuilt at DocFX build time from a committed manifest instead of being committed themselves, and it adds validator gates for API include placement and redundant example headings, together with fixes to run-action toolbar fallback and sample build parallelism.
@@ -856,6 +875,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.13.2]: https://github.com/codebeltnet/agentic/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/codebeltnet/agentic/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/codebeltnet/agentic/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/codebeltnet/agentic/compare/v0.12.0...v0.12.1

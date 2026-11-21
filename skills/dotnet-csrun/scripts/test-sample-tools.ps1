@@ -1,4 +1,4 @@
-#requires -Version 7.0
+﻿#requires -Version 7.0
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'sample-tools.ps1')
 $root = Split-Path $PSScriptRoot -Parent
@@ -132,4 +132,153 @@ try {
     if (-not $resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe cleanup path.' }
     Remove-Item -LiteralPath $resolved -Recurse -Force
 }
+
+# Offline tests for Resolve-CsrunEngine: single-fetch caching, TTL hit, ETag 304, tamper rejection, checksum mismatch, rate-limit fallback, and symlink rejection.
+$cacheTemp = Join-Path ([IO.Path]::GetTempPath()) ('csrun-cache-test-' + [guid]::NewGuid().ToString('N'))
+$null = New-Item -ItemType Directory -Path $cacheTemp
+try {
+    $cacheDir = Join-Path $cacheTemp 'cache'
+    $enginePayloadV1 = "param([string]`$ManifestJson)`n# v0.2.1`n[Console]::Write(`$ManifestJson)"
+    $engineShaV1 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($enginePayloadV1))).ToLowerInvariant()
+    $script:mockApiCalls = 0
+    $script:mockDownloadCalls = 0
+    $script:mockLastIfNoneMatch = $null
+    $script:mockMode = 'ok'
+    $script:mockPayload = $enginePayloadV1
+    $script:mockDigest = "sha256:$engineShaV1"
+    $script:mockTag = 'v0.2.1'
+    $script:mockEtag = '"etag-v0.2.1"'
+
+    function Invoke-WebRequest {
+        param([string] $Uri, [hashtable] $Headers, [switch] $SkipHttpErrorCheck, [string] $OutFile)
+        if ($OutFile) {
+            $script:mockDownloadCalls++
+            [IO.File]::WriteAllText($OutFile, $script:mockPayload, [Text.UTF8Encoding]::new($false))
+            return
+        }
+        $script:mockApiCalls++
+        $script:mockLastIfNoneMatch = if ($Headers -and $Headers.ContainsKey('If-None-Match')) { $Headers['If-None-Match'] } else { $null }
+        if ($script:mockMode -eq '304') {
+            return [pscustomobject]@{ StatusCode = 304; Headers = @{ ETag = @($script:mockEtag) }; Content = '' }
+        }
+        if ($script:mockMode -eq '403' -or $script:mockMode -eq '429') {
+            return [pscustomobject]@{ StatusCode = [int] $script:mockMode; Headers = @{}; Content = '{"message":"API rate limit exceeded"}' }
+        }
+        $body = @{
+            tag_name = $script:mockTag
+            assets = @(@{
+                name = 'csrun.ps1'
+                digest = $script:mockDigest
+                browser_download_url = 'https://example.invalid/csrun.ps1'
+            })
+        } | ConvertTo-Json -Depth 5
+        return [pscustomobject]@{ StatusCode = 200; Headers = @{ ETag = @($script:mockEtag) }; Content = $body }
+    }
+
+    try {
+        $first = Resolve-CsrunEngine -CacheDirectory $cacheDir
+        Assert-True ($first.Source -eq 'GitHub' -and $first.Tag -eq 'v0.2.1' -and $first.Sha256 -ceq $engineShaV1.ToUpperInvariant()) 'Initial Resolve-CsrunEngine did not fetch and verify release.'
+        Assert-True ($script:mockApiCalls -eq 1 -and $script:mockDownloadCalls -eq 1) 'Initial Resolve-CsrunEngine made unexpected network calls.'
+
+        # Subsequent call within TTL reuses local verified cache without hitting GitHub.
+        $second = Resolve-CsrunEngine -CacheDirectory $cacheDir
+        Assert-True ($second.Source -eq 'Cache' -and $second.Path -ceq $first.Path -and $second.Sha256 -ceq $first.Sha256) 'Warm cache call did not reuse verified engine.'
+        Assert-True ($script:mockApiCalls -eq 1 -and $script:mockDownloadCalls -eq 1) 'Warm cache call still hit GitHub.'
+
+        # Execution pair with cached -EnginePath skips GitHub while preserving manifest parity with the published GitHub-referencing artifact.
+        $verifyPair = New-CsrunExecutionPair $console -Image 'codebeltnet/csrun:10' -EnginePath $second.Path
+        $publishedPair = New-CsrunExecutionPair $console -Image 'codebeltnet/csrun:10'
+        foreach ($transport in @('Native', 'Docker')) {
+            Assert-True (-not $verifyPair.$transport.Contains('releases/latest') -and $verifyPair.$transport.Contains($second.Path)) "$transport verification block did not use cached engine."
+            Assert-True ($publishedPair.$transport.Contains('releases/latest')) "$transport published block lost GitHub reference."
+            Assert-True ((Get-CsrunWrapperManifest $verifyPair.$transport) -ceq (Get-CsrunWrapperManifest $publishedPair.$transport)) "$transport verification and published manifests diverged."
+        }
+
+        # Revalidation sends ETag and handles 304 Not Modified without re-downloading.
+        $script:mockMode = '304'
+        $revalidated = Resolve-CsrunEngine -CacheDirectory $cacheDir -ForceRefresh
+        Assert-True ($revalidated.Source -eq 'NotModified' -and $script:mockLastIfNoneMatch -ceq $script:mockEtag) 'ForceRefresh did not revalidate with cached ETag.'
+        Assert-True ($script:mockApiCalls -eq 2 -and $script:mockDownloadCalls -eq 1) 'HTTP 304 re-downloaded csrun.ps1 unnecessarily.'
+
+        # Rate-limit responses (403/429) reuse the verified local cache with a warning.
+        foreach ($code in @('403', '429')) {
+            $script:mockMode = $code
+            $warnings = $null
+            $fallback = Resolve-CsrunEngine -CacheDirectory $cacheDir -ForceRefresh -WarningVariable warnings -WarningAction SilentlyContinue
+            Assert-True ($fallback.Source -eq 'StaleCacheFallback' -and $fallback.Sha256 -ceq $first.Sha256 -and @($warnings).Count -ge 1) "HTTP $code did not fall back cleanly to verified cache."
+        }
+
+        # Rate-limit response with no cached engine fails clearly.
+        $emptyCacheDir = Join-Path $cacheTemp 'empty-cache'
+        $script:mockMode = '403'
+        Assert-Throws { Resolve-CsrunEngine -CacheDirectory $emptyCacheDir } 'Rate-limited cold cache succeeded unexpectedly.'
+
+        # Tampering with cached csrun.ps1 invalidates the cache and forces a fresh verified download.
+        $script:mockMode = 'ok'
+        [IO.File]::WriteAllText($first.Path, '# tampered', [Text.UTF8Encoding]::new($false))
+        $repaired = Resolve-CsrunEngine -CacheDirectory $cacheDir
+        Assert-True ($repaired.Source -eq 'GitHub' -and $script:mockDownloadCalls -eq 2 -and ([IO.File]::ReadAllText($repaired.Path) -ceq $enginePayloadV1)) 'Tampered cache file was trusted instead of re-fetched.'
+
+        # Checksum mismatch on download throws without corrupting existing verified cache.
+        $badCacheDir = Join-Path $cacheTemp 'bad-digest'
+        $script:mockDigest = 'sha256:' + ('0' * 64)
+        Assert-Throws { Resolve-CsrunEngine -CacheDirectory $badCacheDir } 'Checksum mismatch was accepted.'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $badCacheDir 'csrun.ps1'))) 'Failed checksum download left csrun.ps1 behind.'
+        $script:mockDigest = "sha256:$engineShaV1"
+
+        # Reparse-point / symlinked cache directory is rejected before trusting or writing scripts.
+        $linkedCacheDir = Join-Path $cacheTemp 'linked-cache'
+        $linkType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+        $null = New-Item -ItemType $linkType -Path $linkedCacheDir -Target $cacheDir
+        Assert-Throws { Resolve-CsrunEngine -CacheDirectory $linkedCacheDir } 'Linked cache directory was accepted.'
+
+        if ($IsWindows) {
+            # Newly created cache directory must have protected ACL without untrusted write access.
+            $createdAcl = Get-Acl -LiteralPath $cacheDir
+            Assert-True ($createdAcl.AreAccessRulesProtected) 'Newly created Windows cache directory did not disable ACL inheritance.'
+
+            # A pre-existing cache directory inheriting write access for another untrusted account (e.g. BUILTIN\Users) must be rejected.
+            $sharedParent = Join-Path $cacheTemp 'shared-parent'
+            $inheritedCacheDir = Join-Path $sharedParent 'inherited-cache'
+            $null = [IO.Directory]::CreateDirectory($inheritedCacheDir)
+            $usersSid = [Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::BuiltinUsersSid, $null)
+            $inheritFlags = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+            $usersWriteRule = [Security.AccessControl.FileSystemAccessRule]::new(
+                $usersSid,
+                [Security.AccessControl.FileSystemRights]::Modify,
+                $inheritFlags,
+                [Security.AccessControl.PropagationFlags]::None,
+                [Security.AccessControl.AccessControlType]::Allow
+            )
+            $parentInfo = [IO.DirectoryInfo]::new($sharedParent)
+            $parentAcl = [IO.FileSystemAclExtensions]::GetAccessControl($parentInfo, [Security.AccessControl.AccessControlSections]::Access)
+            $parentAcl.AddAccessRule($usersWriteRule)
+            [IO.FileSystemAclExtensions]::SetAccessControl($parentInfo, $parentAcl)
+            Assert-Throws { Resolve-CsrunEngine -CacheDirectory $inheritedCacheDir } 'Windows cache directory inheriting write access for BUILTIN\Users was accepted.'
+
+            # Adding write access for an untrusted account on cached csrun.ps1 invalidates the cache hit rather than trusting it.
+            $fileAclTestDir = Join-Path $cacheTemp 'file-acl-cache'
+            $fileAclFirst = Resolve-CsrunEngine -CacheDirectory $fileAclTestDir
+            $fileInfo = [IO.FileInfo]::new($fileAclFirst.Path)
+            $fileAcl = [IO.FileSystemAclExtensions]::GetAccessControl($fileInfo, [Security.AccessControl.AccessControlSections]::Access)
+            $fileWriteRule = [Security.AccessControl.FileSystemAccessRule]::new(
+                $usersSid,
+                [Security.AccessControl.FileSystemRights]::Write,
+                [Security.AccessControl.AccessControlType]::Allow
+            )
+            $fileAcl.AddAccessRule($fileWriteRule)
+            [IO.FileSystemAclExtensions]::SetAccessControl($fileInfo, $fileAcl)
+            $callsBeforeFileAcl = $script:mockApiCalls
+            $fileAclSecond = Resolve-CsrunEngine -CacheDirectory $fileAclTestDir
+            Assert-True ($fileAclSecond.Source -eq 'GitHub' -and $script:mockApiCalls -gt $callsBeforeFileAcl) 'Cached csrun.ps1 writable by BUILTIN\Users was trusted on cache hit.'
+        }
+    } finally {
+        Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+    }
+} finally {
+    $resolvedCacheTemp = [IO.Path]::GetFullPath($cacheTemp)
+    if (-not $resolvedCacheTemp.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe cleanup path.' }
+    Remove-Item -LiteralPath $resolvedCacheTemp -Recurse -Force
+}
+
 Write-Host "dotnet-csrun sample tools passed: $checks checks (offline transport doubles are not sample verification)."
