@@ -261,6 +261,30 @@ $null = Write-Changed $configPath (($config | ConvertTo-Json -Depth 100) + "`n")
 $sortedManifest = @($manifestEntries | Sort-Object { $_.id })
 $null = Write-Changed $manifestPath (([ordered]@{ schemaVersion = 1; examples = $sortedManifest } | ConvertTo-Json -Depth 30) + "`n")
 $null = Write-Changed (Join-Path $workspace 'BuildRunActions.ps1') ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../assets/BuildRunActions.ps1')))
+$buildImagePath = Join-Path $workspace 'BuildDocfxImage.ps1'
+if (Test-Path -LiteralPath $buildImagePath) {
+    Assert-RepositoryPath $buildImagePath
+    $buildImageOriginal = [IO.File]::ReadAllText($buildImagePath)
+    $buildImageNewline = if ($buildImageOriginal.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $buildImageUpdated = $buildImageOriginal
+    if (-not $buildImageUpdated.Contains('BuildRunActions.ps1')) {
+        $invokeLine = "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')$buildImageNewline"
+        if ($buildImageUpdated -match '(?m)^[ \t]*try\s*\{') {
+            $buildImageUpdated = [regex]::Replace($buildImageUpdated, '(?m)^([ \t]*try\s*\{)', "$invokeLine`$1", 1)
+        } elseif ($buildImageUpdated -match '(?m)^[ \t]*docker\s+buildx\s+build\b') {
+            $buildImageUpdated = [regex]::Replace($buildImageUpdated, '(?m)^([ \t]*docker\s+buildx\s+build\b)', "$invokeLine`$1", 1)
+        }
+    }
+    if (-not $buildImageUpdated.Contains("'run-actions'") -and -not $buildImageUpdated.Contains('"run-actions"') -and
+        $buildImageUpdated -match '(?s)(finally\s*\{.*?)(\r?\n[ \t]*\})') {
+        $cleanup = $buildImageNewline +
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {" + $buildImageNewline +
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force" + $buildImageNewline +
+            "    }"
+        $buildImageUpdated = [regex]::Replace($buildImageUpdated, '(?s)(finally\s*\{.*?)(\r?\n[ \t]*\})', "`$1$cleanup`$2", 1)
+    }
+    Write-Page $buildImagePath $buildImageOriginal $buildImageUpdated
+}
 if ($results.Count) { $results | ConvertTo-Json -Depth 30 } else { '[]' }
 if (@($results | Where-Object { $_.status -eq 'failed' -or $_.native -eq 'Failed' -or $_.docker -eq 'Failed' }).Count) { exit 1 }
 if (@($results | Where-Object coverage -eq 'Unresolved').Count) { exit 2 }

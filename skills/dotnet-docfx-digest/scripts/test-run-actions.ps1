@@ -47,6 +47,7 @@ $partial = "# Partial`r`n`n``````csharp`nvar fixture = new ManagedApplicationFix
 [IO.File]::WriteAllText("$work/docs/partial.md", $partial)
 $null = New-Item -ItemType Directory "$work/template/public" -Force
 [IO.File]::WriteAllText("$work/template/public/main.js", "// Context7 customization`nexport default { start() { window.context7 = true; } };`n")
+[IO.File]::WriteAllText("$work/BuildDocfxImage.ps1", "`$version = minver -i -t v -v w`ndocfx metadata docfx.json`ntry {`n    docker buildx build -t sample-docfx:`$version -f Dockerfile.docfx .`n}`nfinally {`n    get-childItem -recurse -path api -include *.yml, .manifest | remove-item`n}`n")
 [IO.File]::WriteAllText("$work/docfx.json", '{"build":{"content":[{"files":["docs/*.md"]}],"template":["default","modern","template"],"dest":"_site"}}')
 [IO.File]::WriteAllText("$work/docs/test.md", "# Test`n`n``````csharp`nusing Xunit;`npublic class ExampleTest { [Fact] public void ParsesInventoryCount() { Assert.Equal(42, int.Parse(`"42`")); } }`n```````n")
 $packageSource = @'
@@ -177,6 +178,11 @@ if (-not $association.Success -or $transports.Count -ne 2 -or 'native' -notin $t
     throw 'Both runnable assets must be delivered in one association with the same C# sample.'
 }
 if (-not (Get-Content "$work/template/public/main.js" -Raw).Contains('window.context7 = true')) { throw 'Existing template was overwritten.' }
+$buildImageText = Get-Content "$work/BuildDocfxImage.ps1" -Raw
+if (-not $buildImageText.Contains("& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')") -or
+    -not $buildImageText.Contains("Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force")) {
+    throw 'Generator must wire BuildRunActions.ps1 and finally cleanup into BuildDocfxImage.ps1.'
+}
 $files = @(Get-ChildItem $work -Recurse -File)
 $before = @{}
 foreach ($file in $files) { $before[$file.FullName] = @((Get-FileHash $file.FullName).Hash, $file.LastWriteTimeUtc.Ticks) }
