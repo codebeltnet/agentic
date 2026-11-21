@@ -231,6 +231,47 @@ try {
         $linkType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
         $null = New-Item -ItemType $linkType -Path $linkedCacheDir -Target $cacheDir
         Assert-Throws { Resolve-CsrunEngine -CacheDirectory $linkedCacheDir } 'Linked cache directory was accepted.'
+
+        if ($IsWindows) {
+            # Newly created cache directory must have protected ACL without untrusted write access.
+            $createdAcl = Get-Acl -LiteralPath $cacheDir
+            Assert-True ($createdAcl.AreAccessRulesProtected) 'Newly created Windows cache directory did not disable ACL inheritance.'
+
+            # A pre-existing cache directory inheriting write access for another untrusted account (e.g. BUILTIN\Users) must be rejected.
+            $sharedParent = Join-Path $cacheTemp 'shared-parent'
+            $inheritedCacheDir = Join-Path $sharedParent 'inherited-cache'
+            $null = [IO.Directory]::CreateDirectory($inheritedCacheDir)
+            $usersSid = [Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::BuiltinUsersSid, $null)
+            $inheritFlags = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+            $usersWriteRule = [Security.AccessControl.FileSystemAccessRule]::new(
+                $usersSid,
+                [Security.AccessControl.FileSystemRights]::Modify,
+                $inheritFlags,
+                [Security.AccessControl.PropagationFlags]::None,
+                [Security.AccessControl.AccessControlType]::Allow
+            )
+            $parentInfo = [IO.DirectoryInfo]::new($sharedParent)
+            $parentAcl = [IO.FileSystemAclExtensions]::GetAccessControl($parentInfo, [Security.AccessControl.AccessControlSections]::Access)
+            $parentAcl.AddAccessRule($usersWriteRule)
+            [IO.FileSystemAclExtensions]::SetAccessControl($parentInfo, $parentAcl)
+            Assert-Throws { Resolve-CsrunEngine -CacheDirectory $inheritedCacheDir } 'Windows cache directory inheriting write access for BUILTIN\Users was accepted.'
+
+            # Adding write access for an untrusted account on cached csrun.ps1 invalidates the cache hit rather than trusting it.
+            $fileAclTestDir = Join-Path $cacheTemp 'file-acl-cache'
+            $fileAclFirst = Resolve-CsrunEngine -CacheDirectory $fileAclTestDir
+            $fileInfo = [IO.FileInfo]::new($fileAclFirst.Path)
+            $fileAcl = [IO.FileSystemAclExtensions]::GetAccessControl($fileInfo, [Security.AccessControl.AccessControlSections]::Access)
+            $fileWriteRule = [Security.AccessControl.FileSystemAccessRule]::new(
+                $usersSid,
+                [Security.AccessControl.FileSystemRights]::Write,
+                [Security.AccessControl.AccessControlType]::Allow
+            )
+            $fileAcl.AddAccessRule($fileWriteRule)
+            [IO.FileSystemAclExtensions]::SetAccessControl($fileInfo, $fileAcl)
+            $callsBeforeFileAcl = $script:mockApiCalls
+            $fileAclSecond = Resolve-CsrunEngine -CacheDirectory $fileAclTestDir
+            Assert-True ($fileAclSecond.Source -eq 'GitHub' -and $script:mockApiCalls -gt $callsBeforeFileAcl) 'Cached csrun.ps1 writable by BUILTIN\Users was trusted on cache hit.'
+        }
     } finally {
         Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
     }
