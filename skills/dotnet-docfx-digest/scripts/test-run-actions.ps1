@@ -1400,6 +1400,79 @@ if (Test-Path -LiteralPath $childPidFile) {
     }
 }
 
+# 10. Empty probePath must fail with timeout when full startupDelayMs cannot finish before deadline (and match BuildRunActions.ps1).
+$runArgsPattern = "foreach (`$a in @('run','--no-build','-c','Release','--project',`$csprojPath)) { `$startInfo.ArgumentList.Add(`$a) }"
+$truncatedDelayPair = New-HostExamplePair -Source 'Console.WriteLine("worker");' -Framework 'net10.0' -Sdk 'Microsoft.NET.Sdk.Worker' -ProbePath '' -TimeoutSeconds 3 -StartupDelayMs 10000
+if (-not $truncatedDelayPair.Native.Contains($runArgsPattern)) {
+    throw 'Host runner script no longer launches dotnet run via ProcessStartInfo.'
+}
+$truncatedDelayScript = $truncatedDelayPair.Native.Replace(
+    $buildArgsPattern,
+    "`$buildStartInfo.FileName = '$escapedPwsh'; foreach (`$a in @('-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Milliseconds 500')) { `$buildStartInfo.ArgumentList.Add(`$a) }"
+).Replace(
+    $runArgsPattern,
+    "`$startInfo.FileName = '$escapedPwsh'; foreach (`$a in @('-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 30')) { `$startInfo.ArgumentList.Add(`$a) }"
+)
+$truncatedDelayScriptPath = Join-Path $work 'truncated-delay-host.ps1'
+[IO.File]::WriteAllText($truncatedDelayScriptPath, $truncatedDelayScript, [Text.UTF8Encoding]::new($false))
+$swDelay = [Diagnostics.Stopwatch]::StartNew()
+$truncatedDelayOut = & $pwshExe -NoProfile -NonInteractive -File $truncatedDelayScriptPath 2>&1 | Out-String
+$truncatedDelayExit = $LASTEXITCODE
+$swDelay.Stop()
+if ($truncatedDelayExit -eq 0 -or $truncatedDelayOut -notlike '*Host startup observation (10000ms) timed out after 3s*' -or $truncatedDelayOut -like '*Host started cleanly*' -or $swDelay.Elapsed.TotalSeconds -ge 15) {
+    throw "Truncated startupDelayMs observation window did not fail with timeout (exit=$truncatedDelayExit, elapsed=$([Math]::Round($swDelay.Elapsed.TotalSeconds,2))s): $truncatedDelayOut"
+}
+
+$fullDelayPair = New-HostExamplePair -Source 'Console.WriteLine("worker");' -Framework 'net10.0' -Sdk 'Microsoft.NET.Sdk.Worker' -ProbePath '' -TimeoutSeconds 5 -StartupDelayMs 200
+$fullDelayScript = $fullDelayPair.Native.Replace(
+    $buildArgsPattern,
+    "`$buildStartInfo.FileName = '$escapedPwsh'; foreach (`$a in @('-NoProfile', '-NonInteractive', '-Command', 'exit 0')) { `$buildStartInfo.ArgumentList.Add(`$a) }"
+).Replace(
+    $runArgsPattern,
+    "`$startInfo.FileName = '$escapedPwsh'; foreach (`$a in @('-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 30')) { `$startInfo.ArgumentList.Add(`$a) }"
+)
+$fullDelayScriptPath = Join-Path $work 'full-delay-host.ps1'
+[IO.File]::WriteAllText($fullDelayScriptPath, $fullDelayScript, [Text.UTF8Encoding]::new($false))
+$fullDelayOut = & $pwshExe -NoProfile -NonInteractive -File $fullDelayScriptPath 2>&1 | Out-String
+$fullDelayExit = $LASTEXITCODE
+if ($fullDelayExit -ne 0 -or $fullDelayOut -notlike '*Host started cleanly and ran for 200ms.*') {
+    throw "Full startupDelayMs observation window did not succeed cleanly (exit=$fullDelayExit): $fullDelayOut"
+}
+
+$emptyProbeDir = Join-Path $work 'empty-probe-parity'
+$null = [IO.Directory]::CreateDirectory($emptyProbeDir)
+$emptyProbeManifest = [ordered]@{
+    schemaVersion = 1
+    examples = @([ordered]@{
+        id = 'abcdef0123456789abcdef01'
+        strategy = 'host'
+        source = 'Console.WriteLine("worker");'
+        image = 'codebeltnet/csrun:10'
+        transports = @('native', 'docker')
+        hostHarness = [ordered]@{
+            sdk = 'Microsoft.NET.Sdk.Worker'
+            framework = 'net10.0'
+            probePath = ''
+            timeoutSeconds = 3
+            startupDelayMs = 10000
+        }
+    })
+}
+$emptyProbeManifestPath = Join-Path $emptyProbeDir 'run-actions.manifest.json'
+$emptyProbeOutRoot = Join-Path $emptyProbeDir 'run-actions'
+[IO.File]::WriteAllText($emptyProbeManifestPath, ($emptyProbeManifest | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+$global:LASTEXITCODE = 0
+& (Join-Path $PSScriptRoot '../assets/BuildRunActions.ps1') -ManifestPath $emptyProbeManifestPath -OutputRoot $emptyProbeOutRoot | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'BuildRunActions.ps1 failed for empty-probePath host parity check.' }
+foreach ($t in @('native', 'docker')) {
+    $expectedProp = if ($t -eq 'native') { 'Native' } else { 'Docker' }
+    $expectedNorm = $truncatedDelayPair.$expectedProp.Replace("`r`n", "`n").TrimEnd("`n", "`r")
+    $actualNorm = ([IO.File]::ReadAllText((Join-Path $emptyProbeOutRoot "abcdef0123456789abcdef01/$t.ps1"))).Replace("`r`n", "`n").TrimEnd("`n", "`r")
+    if ($actualNorm -cne $expectedNorm) {
+        throw "BuildRunActions.ps1 drifted from integration-example.ps1 for empty-probePath host $t transport."
+    }
+}
+
 $global:LASTEXITCODE = 0
 Write-Host "Run-action delivery passed: paired console, test, dependency-backed test, repository test and host harness; deterministic plan/explain, type-owned dependency resolution/preflight, validation-gated apply, multi-fence uid#ordinal identity, whitespace/semantic recipe check, atomic manifest preservation, --summary-json/--verify-changed/--verify --id, exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"
 exit 0
