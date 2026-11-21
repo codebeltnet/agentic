@@ -248,11 +248,24 @@ foreach ($template in $templates) {
     $candidate = Join-Path $workspace "$template/public/main.js"
     if (Test-Path $candidate) { $main=$candidate }
 }
+$templatesChanged = $false
 if (-not $main) {
     $main = Join-Path $workspace 'templates/modern/public/main.js'
     $null = Write-Changed $main "export default {};`n"
-    if ('templates/modern' -notin $templates) { $config.build.template = $templates + @('templates/modern') }
+    if ('templates/modern' -notin $templates) {
+        $templates = $templates + @('templates/modern')
+        $templatesChanged = $true
+    }
 }
+$msStyleTemplates = @($templates | Where-Object { $_ -eq 'templates/ms-style' })
+if ($msStyleTemplates.Count -gt 0) {
+    $reorderedTemplates = @($templates | Where-Object { $_ -ne 'templates/ms-style' }) + $msStyleTemplates
+    if (($reorderedTemplates -join "`0") -ne ($templates -join "`0")) {
+        $templates = $reorderedTemplates
+        $templatesChanged = $true
+    }
+}
+if ($templatesChanged) { $config.build.template = $templates }
 Assert-RepositoryPath $main
 $mainText = [IO.File]::ReadAllText($main)
 if (-not $mainText.Contains("import './run-actions.js';")) { $null = Write-Changed $main ($mainText + "`nimport './run-actions.js';`n") }
