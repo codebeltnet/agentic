@@ -493,14 +493,14 @@
     },
     {
       "id": 38,
-      "prompt": "A developer created a DocFX overwrite for `Acme.Widgets.Spinner` using `example: *content` front matter but accidentally added a `### Examples` heading before the csharp fence. Confirm that the validator still passes (the redundant heading is tolerated by the validator) and that the prose guidance advises removing it to prevent a duplicate heading on the rendered page.",
-      "expected_output": "The validator runs and does not emit EXAMPLE_MISSING because the csharp fence is present regardless of the redundant heading. The agent flags the redundant heading as producing a duplicate 'Examples' section on the rendered DocFX page and advises removing it, citing the Form A guidance. The validator result is a pass; the rendered-page duplication is a separate documentation quality concern.",
+      "prompt": "A developer created a DocFX overwrite for `Acme.Widgets.Spinner` using `example: [*content]` front matter (or `example: *content` / `example:\\n- *content`) and also added a `### Example` heading before the complementary prose and csharp fence. Confirm how the validator handles this and how to fix it so DocFX does not render duplicate headings.",
+      "expected_output": "The validator recognizes `example: [*content]` as Form A (MappedToExample=true), does not emit EXAMPLE_MISSING, and rejects the manual `### Example` heading with `EXAMPLE_REDUNDANT_HEADING` because DocFX already renders the `Examples` section heading automatically from the front matter. The agent removes the manual `### Example` heading and keeps the complementary explanatory prose directly before the csharp fence.",
       "expectations": [
-        "Validator does not emit EXAMPLE_MISSING because a csharp fence is present",
-        "Agent identifies the `### Examples` heading as redundant for Form A (example: *content) overwrites",
-        "Agent explains that DocFX adds the section header automatically, so the manual heading causes a duplicate on the rendered page",
-        "Agent recommends removing the heading to avoid the duplicate-heading rendering defect",
-        "Validator exit code is 0 (or non-EXAMPLE_MISSING failure) — the redundant heading does not itself cause a validation error"
+        "Validator recognizes `example: [*content]` (alongside `example: *content` and `example:\\n- *content`) as an `example:`-mapped overwrite section and does not emit EXAMPLE_MISSING",
+        "Validator emits `EXAMPLE_REDUNDANT_HEADING` for the manual `### Example` or `### Examples` heading inside the `example:`-mapped body",
+        "Agent explains that DocFX renders the `Examples` section heading automatically from front matter, so a manual `Example`/`Examples` heading produces duplicate headings on the rendered page",
+        "Agent removes the manual `### Example` heading and keeps the complementary explanatory prose directly before the csharp fence",
+        "After removing the manual heading, validator no longer emits `EXAMPLE_REDUNDANT_HEADING`"
       ]
     },
     {

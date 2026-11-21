@@ -343,7 +343,7 @@ public class WidgetFactory
 ```
 ````
 
-Do not include a manual `### Examples` heading in the body. DocFX renders that heading automatically for the `example` property. Unbound fences retain the namespace/type or labelled `// Program.cs` structure rules. Project-bound source files and clearly contextualized excerpts use their maintained compilation context; see [example architecture](example-architecture.md). Multiple fences may describe one scenario, with each file's role and project identified.
+Do not include a manual `## Example`, `### Example`, `## Examples`, or `### Examples` heading in the body when front matter maps `example` (`example: *content`, `example: [*content]`, or `example:\n- *content`). DocFX renders the `Examples` heading automatically for the `example` property, and `docfx.cs` rejects manual `Example`/`Examples` headings inside `example:`-mapped bodies with `EXAMPLE_REDUNDANT_HEADING`. Place only the complementary explanatory prose directly before the C# fence. Unbound fences retain the namespace/type or labelled `// Program.cs` structure rules. Project-bound source files and clearly contextualized excerpts use their maintained compilation context; see [example architecture](example-architecture.md). Multiple fences may describe one scenario, with each file's role and project identified.
 
 ## Extension method example template
 
@@ -404,6 +404,7 @@ Before completing documentation work, verify:
 - [ ] Every inventory row names exact evidence paths and a consumer task; generated metadata and the target overwrite file are not the sole evidence.
 - [ ] The example inventory maps each required public type and extension method to its example file, UID, source evidence, and chosen scenario.
 - [ ] Every example has a human-written fly-in immediately before the C# fence; advanced examples explain setup, prerequisites, or workflow outcome before the code.
+- [ ] Overwrite sections mapped via `example:` (`example: *content`, `example: [*content]`, or `example:\n- *content`) contain no manual `## Example`, `### Example`, or `### Examples` heading in the body (`EXAMPLE_REDUNDANT_HEADING`); complementary explanatory prose sits directly before the C# fence.
 - [ ] Examples show a coherent consumer workflow, use related public types when helpful, and avoid placeholder-only `Consumer`/`MyNamespace` shells when a domain name is available.
 - [ ] No example is reflection-only, metadata-only, duplicated by UID, or built from `DocumentedTypeExample`, `DocumentedExtensionExample`, or generic `Describe()` scaffolding.
 - [ ] The C# fence itself uses the documented type or invokes the documented extension method; prose, comments, and strings are not counted as usage.

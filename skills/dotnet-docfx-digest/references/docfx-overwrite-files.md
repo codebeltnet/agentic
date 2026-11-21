@@ -43,17 +43,17 @@ Console.WriteLine(value);
 ```
 ```
 
-`example: - *content` maps the Markdown body to the first slot of the `example` string array. DocFX renders this as the "Examples" section on the type page **alongside** the auto-generated constructors, methods, and other members — it does not replace them. The `example` property has **Replace** overwrite behavior, so setting it via an overwrite replaces any example already present in generated metadata.
+`example: - *content` (as well as the equivalent inline `example: *content` and flow-sequence `example: [*content]` forms) maps the Markdown body to the `example` property. DocFX renders this as the "Examples" section on the type page **alongside** the auto-generated constructors, methods, and other members — it does not replace them. The `example` property has **Replace** overwrite behavior, so setting it via an overwrite replaces any example already present in generated metadata.
 
-Do **not** include a `### Examples` heading in the body. DocFX adds the section header automatically from the template.
+Do **not** include a manual `## Example`, `### Example`, `## Examples`, or `### Examples` heading in the body. DocFX adds the `Examples` section header automatically from the template, so a manual heading renders duplicate `Examples` / `Example` headings on the page. Place only the complementary explanatory prose directly before the C# fence.
 
 > The validator distinguishes two example forms by the front matter, not by headings in the body. Do not rely on a body heading to make the validator happy.
 >
-> **Form A — front matter `example: *content` (or the `- *content` list form).** This is the recommended form for type pages and extension-class pages. The body must contain at least one fenced `csharp` (or `cs`) block. Do **not** add a `## Example` or `### Example` heading; DocFX renders the section header automatically and a manual heading produces a duplicate "Examples" heading on the rendered page.
+> **Form A — front matter `example: *content`, `example: [*content]`, or `example:\n- *content`.** This is the recommended form for type pages and extension-class pages. The body must contain complementary explanatory prose directly before at least one fenced `csharp` (or `cs`) block. Do **not** add a `## Example`, `### Example`, `## Examples`, or `### Examples` heading; DocFX renders the `Examples` section header automatically, and `docfx.cs` rejects a manual `Example`/`Examples` heading inside an `example:`-mapped section with `EXAMPLE_REDUNDANT_HEADING`.
 >
 > **Form B — front matter `summary: *content`.** The body must contain a `## Example` or `### Example` heading followed by a fenced `csharp` (or `cs`) block. This form is only for the rare case where the example is embedded inside conceptual content.
 >
-> The validator recognizes Form A by the YAML anchor, not by a body heading; Form B by the body heading. Mixing them produces duplicate sections or validator failures.
+> The validator recognizes Form A by the YAML `example:` anchor (scalar, flow sequence, or block sequence), not by a body heading; Form B by the body heading. Mixing them produces duplicate rendered headings and fails validation with `EXAMPLE_REDUNDANT_HEADING`.
 
 Do **not** use `summary: *content` for type example files. That replaces only the summary text and does nothing to add a visible Examples section to the page.
 
