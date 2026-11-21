@@ -1,4 +1,4 @@
-#requires -Version 7.0
+﻿#requires -Version 7.0
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string] $RepoRoot,
@@ -17,6 +17,42 @@ if (-not (Test-Path $helpers)) { throw "Install dotnet-csrun beside this skill: 
 Set-StrictMode -Off
 function Hash([string] $Text) { [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Text))) }
 function Normalize([string] $Text) { $Text.Replace("`r`n", "`n").TrimEnd("`n", "`r") }
+function Get-UnixCacheMetadata([string] $Path) {
+    $statArgs = if ($IsMacOS) { @('-f', '%u %l %p', $Path) } else { @('-c', '%u %h %f', '--', $Path) }
+    $metadata = & stat @statArgs 2>$null
+    if ($LASTEXITCODE -ne 0 -or $metadata -notmatch '\A(\d+) (\d+) ([0-9a-f]+)\z') { return }
+    $radix = if ($IsMacOS) { 8 } else { 16 }
+    return @{ Owner = $Matches[1]; Links = [int]$Matches[2]; Mode = [Convert]::ToInt32($Matches[3], $radix) }
+}
+function Test-PrivateCacheItem([string] $Path, [switch] $Directory) {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item -or $item.PSIsContainer -ne $Directory.IsPresent -or
+        $item.LinkType -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+    if ($IsWindows) {
+        try { return (Get-Acl -LiteralPath $Path).GetOwner([Security.Principal.SecurityIdentifier]).Value -eq $cacheOwner }
+        catch { return $false }
+    }
+    $metadata = Get-UnixCacheMetadata $Path
+    return $metadata.Owner -eq $cacheOwner -and ($metadata.Mode -band 63) -eq 0 -and
+        ($Directory -or (($metadata.Mode -band 0xF000) -eq 0x8000 -and $metadata.Links -eq 1))
+}
+function Get-PrivateCacheDirectory([string] $BasePath) {
+    if (-not $BasePath -or -not [IO.Path]::IsPathFullyQualified($BasePath)) { return }
+    for ($ancestor = [IO.DirectoryInfo]::new($BasePath); $ancestor; $ancestor = $ancestor.Parent) {
+        $item = Get-Item -LiteralPath $ancestor.FullName -Force -ErrorAction SilentlyContinue
+        if (-not $item -or -not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
+        if (-not $IsWindows) {
+            $metadata = Get-UnixCacheMetadata $ancestor.FullName
+            if (-not $metadata -or $metadata.Owner -notin @($cacheOwner, '0') -or ($metadata.Mode -band 18)) { return }
+        }
+    }
+    $path = Join-Path $BasePath '.docfx-run-verification'
+    if ($Verify -ne 'None' -and -not (Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue)) {
+        if ($IsWindows) { $null = [IO.Directory]::CreateDirectory($path) }
+        else { & (Get-Command mkdir -CommandType Application | Select-Object -First 1).Source -m 700 -- $path 2>$null }
+    }
+    if (Test-PrivateCacheItem $path -Directory) { return $path }
+}
 function Write-Changed([string] $Path, [string] $Text) {
     Assert-RepositoryPath $Path
     if ((Test-Path -LiteralPath $Path) -and [IO.File]::ReadAllText($Path) -ceq $Text) { return $false }
@@ -56,30 +92,27 @@ $inventory = ($inventoryText -join "`n") | ConvertFrom-Json
 $configPath = $inventory.config
 $workspace = Split-Path $configPath -Parent
 Assert-RepositoryPath $configPath
-$assetRoot = Join-Path $workspace 'run-actions'
-Assert-RepositoryPath $assetRoot
-$indexPath = Join-Path $assetRoot 'index.json'
-$old = @()
-if (Test-Path $indexPath) { $old = @((Get-Content $indexPath -Raw | ConvertFrom-Json).examples) }
+$manifestPath = Join-Path $workspace 'run-actions.manifest.json'
+$cacheOwner = if ($IsWindows) { [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } else { & id -u }
+$cacheBase = if ($IsWindows) { [Environment]::GetFolderPath('LocalApplicationData') } else { $HOME }
+$evidenceDirectory = Get-PrivateCacheDirectory $cacheBase
+$configHash = Hash $configPath
+$oldManifestById = @{}
+if (Test-Path -LiteralPath $manifestPath) {
+    $oldManifestDoc = Get-Content $manifestPath -Raw | ConvertFrom-Json
+    foreach ($entry in @($oldManifestDoc.examples)) {
+        if ($entry.id) { $oldManifestById[$entry.id] = ($entry | ConvertTo-Json -Depth 30 -Compress) }
+    }
+}
 $recipes = @()
 if (-not $Settings) { $Settings = Join-Path $workspace 'run-actions.settings.json' }
 if (Test-Path $Settings) { $recipes = @((Get-Content $Settings -Raw | ConvertFrom-Json).examples) }
 $toolHash = Hash ((Get-Content $PSCommandPath -Raw) + (Get-Content (Join-Path $PSScriptRoot 'docfx.cs') -Raw) + (Get-Content (Join-Path $PSScriptRoot 'integration-example.ps1') -Raw) + (Get-Content $helpers -Raw) + $script:Csrun021Asset + $script:Csrun021Sha256 + $script:CsrunTestVerificationTemplate)
 $results = [Collections.Generic.List[object]]::new()
+$manifestEntries = [Collections.Generic.List[object]]::new()
 $associations = [hashtable]::new([StringComparer]::Ordinal)
-$previousPages = foreach ($entry in $old) {
-    if (-not $entry.file) { continue }
-    $path = [IO.Path]::GetFullPath($entry.file, $root)
-    # Legacy indexes stored absolute paths. After moving the checkout, only current
-    # inventory paths and prior paths inside this checkout can own associations.
-    if ($path.StartsWith($rootPrefix, [StringComparison]::Ordinal)) { $path }
-}
-$pages = @(@($inventory.examples.file) + @($previousPages) | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
+$pages = @((@($inventory.examples.file) + @($inventory.associatedPages)) | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
 foreach ($page in $pages) { Assert-RepositoryPath $page }
-$oldByFingerprint = @{}
-foreach ($entry in $old) {
-    if ($entry.fingerprint) { $oldByFingerprint["$($entry.id)|$($entry.fingerprint)"] = $entry }
-}
 $recipeBySource = [hashtable]::new([StringComparer]::Ordinal)
 foreach ($recipe in $recipes) {
     $key = "$($recipe.uid)|$($recipe.sourceSha256.ToUpperInvariant())"
@@ -141,48 +174,93 @@ foreach ($example in $inventory.examples) {
         if ($strategy -eq 'standalone') { $result.executionSourceSha256 = Hash $displayedSource }
         $image = if ($recipe.csrunImage) { $recipe.csrunImage } else { $CsrunImage }
         $fingerprint = Hash ("$toolHash|$sourceHash|$strategy|$Framework|$image|$($result.executionSourceSha256)|" + ($recipe | ConvertTo-Json -Depth 30 -Compress))
-        $prior = @($oldByFingerprint["$id|$fingerprint"] | Where-Object { $null -ne $_ })
-        $dir = Join-Path $assetRoot $id
-        $reusable = $prior.Count -eq 1
-        foreach ($transport in $transports) {
-            $path = Join-Path $dir "$transport.ps1"
-            if (-not (Test-Path $path) -or -not $reusable -or (Hash ([IO.File]::ReadAllText($path))) -cne $prior[0]."${transport}Sha256") { $reusable = $false }
+        $manifestObject = $null
+        if ($strategy -eq 'standalone') {
+            $manifestObject = if ($recipe) { $recipe.manifest | Select-Object * } else { [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) } }
+            if ($manifestObject.PSObject.Properties['source'] -and (Normalize $manifestObject.source) -cne $displayedSource) { throw 'Manifest source differs from displayed C#.' }
+            $manifestObject | Add-Member -NotePropertyName source -NotePropertyValue $displayedSource -Force
         }
-        if ($reusable) {
-            $pair = @{}
-            foreach ($transport in $transports) {
-                $pair[$transport] = [IO.File]::ReadAllText((Join-Path $dir "$transport.ps1"))
-                if ($prior[0]."${transport}Evidence") { $result["${transport}Evidence"] = $prior[0]."${transport}Evidence" }
-            }
-            $result.native = $prior[0].native; $result.docker = $prior[0].docker
-        } elseif ($strategy -eq 'repository') {
+        if ($strategy -eq 'repository') {
             $pair = New-RepositoryExamplePair -Repository $recipe.repository -Commit $recipe.commit -Project $recipe.project -Test $recipe.test -Framework $recipe.framework -Image $recipe.image
         } else {
-            $manifest = if ($recipe) { $recipe.manifest | Select-Object * } else { [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) } }
-            if ($manifest.PSObject.Properties['source'] -and (Normalize $manifest.source) -cne $displayedSource) { throw 'Manifest source differs from displayed C#.' }
-            $manifest | Add-Member -NotePropertyName source -NotePropertyValue $displayedSource -Force
-            $pair = New-CsrunExecutionPair -ManifestJson ($manifest | ConvertTo-Json -Depth 30) -Image $image
+            $pair = New-CsrunExecutionPair -ManifestJson ($manifestObject | ConvertTo-Json -Depth 30) -Image $image
         }
-        $changed = $false
         foreach ($transport in $transports) {
             $script = Normalize $pair.$transport
             $tokens=$null; $errors=$null
             $null = [Management.Automation.Language.Parser]::ParseInput($script,[ref]$tokens,[ref]$errors)
             if ($errors.Count) { throw "Generated $transport script has syntax errors: $errors" }
-            $path = Join-Path $dir "$transport.ps1"
-            $changed = (Write-Changed $path $script) -or $changed
-            $result["${transport}Sha256"] = Hash $script
+            $scriptHash = Hash $script
+            $result["${transport}Sha256"] = $scriptHash
+            $evidencePath = if ($evidenceDirectory) { Join-Path $evidenceDirectory "$configHash-$id-$transport-$scriptHash.json" }
             if ($Verify -eq 'Both' -or $Verify -eq $transport) {
-                $log = Join-Path ([IO.Path]::GetTempPath()) ("docfx-run-$id-$transport-" + [guid]::NewGuid().ToString('N') + '.log')
-                & pwsh -NoProfile -NonInteractive -File $path *> $log
-                $result[$transport] = if ($LASTEXITCODE -eq 0) { 'Verified' } else { 'Failed' }
-                $result["${transport}Evidence"] = $log
+                if (-not $evidencePath) { throw 'A private, user-owned directory is required to record run-action verification.' }
+                $runName = "docfx-run-$id-$transport-" + [guid]::NewGuid().ToString('N')
+                $tempScript = Join-Path $evidenceDirectory "$runName.ps1"
+                $log = Join-Path $evidenceDirectory "$runName.log"
+                try {
+                    [IO.File]::WriteAllText($tempScript, $script, [Text.UTF8Encoding]::new($false))
+                    [IO.File]::WriteAllText($log, '')
+                    & pwsh -NoProfile -NonInteractive -File $tempScript *> $log
+                    $result[$transport] = if ($LASTEXITCODE -eq 0) { 'Verified' } else { 'Failed' }
+                    $result["${transport}Evidence"] = $log
+                    $pendingEvidence = Join-Path $evidenceDirectory "$runName.tmp"
+                    try {
+                        $evidence = @{ state = $result[$transport]; log = "$runName.log" }
+                        [IO.File]::WriteAllText($pendingEvidence, ($evidence | ConvertTo-Json -Compress))
+                        if (-not $IsWindows) { & chmod 600 -- $pendingEvidence $log }
+                        [IO.File]::Move($pendingEvidence, $evidencePath, $true)
+                    } finally {
+                        [IO.File]::Delete($pendingEvidence)
+                    }
+                } finally {
+                    if (Test-Path -LiteralPath $tempScript) { Remove-Item -LiteralPath $tempScript -Force }
+                }
+            } elseif ($evidencePath) {
+                try {
+                    if (-not (Test-PrivateCacheItem $evidencePath)) { continue }
+                    $evidence = [IO.File]::ReadAllText($evidencePath) | ConvertFrom-Json
+                    if ($evidence.state -in @('Verified', 'Failed') -and
+                        $evidence.log -cmatch "\Adocfx-run-$id-$transport-[a-f0-9]{32}\.log\z") {
+                        $log = Join-Path $evidenceDirectory $evidence.log
+                        if (Test-PrivateCacheItem $log) {
+                            $result[$transport] = $evidence.state
+                            $result["${transport}Evidence"] = $log
+                        }
+                    }
+                } catch {
+                    Write-Verbose "Could not read $transport verification evidence for $id"
+                }
             }
         }
+        $manifestEntry = if ($strategy -eq 'repository') {
+            [ordered]@{
+                id = $id
+                strategy = 'repository'
+                transports = @($transports)
+                repository = $recipe.repository
+                commit = $recipe.commit
+                project = $recipe.project
+                test = $recipe.test
+                framework = $recipe.framework
+                image = $recipe.image
+            }
+        } else {
+            [ordered]@{
+                id = $id
+                strategy = 'standalone'
+                transports = @($transports)
+                image = $image
+                manifest = $manifestObject
+            }
+        }
+        $manifestEntryJson = $manifestEntry | ConvertTo-Json -Depth 30 -Compress
+        $changed = -not $oldManifestById.ContainsKey($id) -or ($oldManifestById[$id] -cne $manifestEntryJson)
         $result.status = if ($changed) { 'generated' } else { 'unchanged' }
         $result.coverage = if ($transports.Count -eq 2) { 'Paired' } else { 'Partially supported' }
         if ($recipe.explanation) { $result.explanation = $recipe.explanation }
         $result.fingerprint = $fingerprint
+        $manifestEntries.Add($manifestEntry)
         $links = @($transports | ForEach-Object {
             $label = if ($_ -eq 'native') { 'Native' } else { 'Docker' }
             '<a href="~/run-actions/' + $id + '/' + $_ + '.ps1" data-transport="' + $_ + '">View ' + $label + ' Script</a>'
@@ -200,7 +278,7 @@ foreach ($page in $pages) {
     if (-not (Test-Path -LiteralPath $page)) { continue }
     $original = [IO.File]::ReadAllText($page)
     $edits = [Collections.Generic.List[object]]::new()
-    foreach ($block in [regex]::Matches($original, '(?s)(?:\r\n|\n|\r){2}<!-- docfx-run-actions:start -->.*?<!-- docfx-run-actions:end -->')) {
+    foreach ($block in [regex]::Matches($original, '(?s)(?:\A|(?:\r\n|\n|\r){1,2})<!-- docfx-run-actions:start -->.*?<!-- docfx-run-actions:end -->')) {
         $edits.Add(@{ Offset = $block.Index; Length = $block.Length; Text = '' })
     }
     if ($associations.ContainsKey($page)) {
@@ -226,26 +304,6 @@ foreach ($page in $pages) {
     }
     Write-Page $page $original $updated
 }
-# Remove only assets owned by the previous index. Never recursively delete user directories.
-foreach ($entry in $results) {
-    foreach ($transport in @('native','docker')) {
-        if ($entry.$transport -eq 'Unsupported' -and $entry.id -match '^[a-f0-9]{24}$') {
-            $path = Join-Path $assetRoot "$($entry.id)/$transport.ps1"
-            Assert-RepositoryPath $path
-            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
-        }
-    }
-}
-$active = @($results | Where-Object { $_.status -in @('generated','unchanged') } | ForEach-Object id)
-foreach ($previous in $old) {
-    if ($previous.id -match '^[a-f0-9]{24}$' -and $previous.id -notin $active) {
-        foreach ($name in @('native.ps1','docker.ps1')) {
-            $path = Join-Path $assetRoot "$($previous.id)/$name"
-            Assert-RepositoryPath $path
-            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
-        }
-    }
-}
 $config = Get-Content $configPath -Raw | ConvertFrom-Json -AsHashtable
 if (-not $config.build) { throw 'docfx.json requires build configuration.' }
 $resources = @($config.build.resource)
@@ -259,23 +317,255 @@ foreach ($template in $templates) {
     $candidate = Join-Path $workspace "$template/public/main.js"
     if (Test-Path $candidate) { $main=$candidate }
 }
+$templatesChanged = $false
 if (-not $main) {
-    $main = Join-Path $workspace 'run-actions-template/public/main.js'
+    $main = Join-Path $workspace 'templates/modern/public/main.js'
     $null = Write-Changed $main "export default {};`n"
-    if ('run-actions-template' -notin $templates) { $config.build.template = $templates + @('run-actions-template') }
+    if ('templates/modern' -notin $templates) {
+        $templates = $templates + @('templates/modern')
+        $templatesChanged = $true
+    }
 }
+$msStyleTemplates = @($templates | Where-Object { $_ -eq 'templates/ms-style' })
+if ($msStyleTemplates.Count -gt 0) {
+    $reorderedTemplates = @($templates | Where-Object { $_ -ne 'templates/ms-style' }) + $msStyleTemplates
+    if (($reorderedTemplates -join "`0") -ne ($templates -join "`0")) {
+        $templates = $reorderedTemplates
+        $templatesChanged = $true
+    }
+}
+if ($templatesChanged) { $config.build.template = $templates }
 Assert-RepositoryPath $main
 $mainText = [IO.File]::ReadAllText($main)
 if (-not $mainText.Contains("import './run-actions.js';")) { $null = Write-Changed $main ($mainText + "`nimport './run-actions.js';`n") }
 $null = Write-Changed (Join-Path (Split-Path $main -Parent) 'run-actions.js') ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../assets/run-actions.js')))
 $null = Write-Changed $configPath (($config | ConvertTo-Json -Depth 100) + "`n")
-$persisted = @($results | ForEach-Object {
-    $entry = $_ | Select-Object *
-    $entry.file = [IO.Path]::GetRelativePath($root, $entry.file).Replace('\','/')
-    if ($entry.status -in @('generated','unchanged')) { $entry.status = 'ready' }
-    $entry
-})
-$null = Write-Changed $indexPath (([ordered]@{ examples=$persisted } | ConvertTo-Json -Depth 30) + "`n")
+$sortedManifest = @($manifestEntries | Sort-Object { $_.id })
+$null = Write-Changed $manifestPath (([ordered]@{ schemaVersion = 1; examples = $sortedManifest } | ConvertTo-Json -Depth 30) + "`n")
+$null = Write-Changed (Join-Path $workspace 'BuildRunActions.ps1') ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../assets/BuildRunActions.ps1')))
+function Test-DockerBuildCommand($CommandAst) {
+    if ($CommandAst.CommandElements.Count -lt 2) { return $false }
+    $cmdName = $CommandAst.GetCommandName()
+    if (-not $cmdName -or $cmdName -inotmatch '(^|[\\/])docker(\.exe)?$') { return $false }
+    $firstArg = $CommandAst.CommandElements[1].Extent.Text.Trim("'`"")
+    if ($firstArg -ieq 'build') { return $true }
+    if ($firstArg -ieq 'buildx' -and $CommandAst.CommandElements.Count -ge 3) {
+        return $CommandAst.CommandElements[2].Extent.Text.Trim("'`"") -ieq 'build'
+    }
+    return $false
+}
+function Test-ApiCleanupPipeline($PipelineAst) {
+    if ($PipelineAst -isnot [Management.Automation.Language.PipelineAst]) { return $false }
+    if ($PipelineAst.PipelineElements.Count -ne 2) { return $false }
+    $first = $PipelineAst.PipelineElements[0] -as [Management.Automation.Language.CommandAst]
+    $second = $PipelineAst.PipelineElements[1] -as [Management.Automation.Language.CommandAst]
+    if (-not $first -or -not $second) { return $false }
+    $firstName = $first.GetCommandName()
+    $secondName = $second.GetCommandName()
+    return ($firstName -ieq 'Get-ChildItem' -or $firstName -ieq 'gci') -and
+           ($secondName -ieq 'Remove-Item' -or $secondName -ieq 'ri') -and
+           ($PipelineAst.Extent.Text -match '(?i)\bapi\b')
+}
+function Get-LineIndent([string] $Text, [int] $Offset) {
+    if ($Offset -eq 0) { return '' }
+    $lineStart = $Text.LastIndexOf("`n", $Offset - 1)
+    $lineStart = if ($lineStart -lt 0) { 0 } else { $lineStart + 1 }
+    $prefix = $Text.Substring($lineStart, $Offset - $lineStart)
+    if ($prefix -notmatch '^[ \t]*$') { return $null }
+    return $prefix
+}
+function Update-BuildDocfxImageScript([string] $Original) {
+    $standardFlatPattern = '(?i)\A\s*(?<version>\$version\s*=\s*minver[^\r\n]*)(?:\r?\n[ \t]*)+(?<metadata>docfx\s+metadata[^\r\n]*)(?:\r?\n[ \t]*)+(?:&\s*\(Join-Path\s+\$PSScriptRoot\s+[''"]BuildRunActions\.ps1[''"]\)(?:\r?\n[ \t]*)+)?(?<docker>docker\s+buildx\s+build[^\r\n]*)(?:\r?\n[ \t]*)+(?<cleanup>get-childitem\b[^\r\n]*\|\s*remove-item[^\r\n]*)\s*\z'
+    $standardTryPattern = '(?i)\A\s*(?<version>\$version\s*=\s*minver[^\r\n]*)(?:\r?\n[ \t]*)+(?<metadata>docfx\s+metadata[^\r\n]*)(?:\r?\n[ \t]*)+(?:&\s*\(Join-Path\s+\$PSScriptRoot\s+[''"]BuildRunActions\.ps1[''"]\)(?:\r?\n[ \t]*)+)?try\s*\{(?:\r?\n[ \t]*)+(?<docker>docker\s+buildx\s+build[^\r\n]*)(?:\r?\n[ \t]*)+\}(?:\r?\n[ \t]*)+finally\s*\{(?:\r?\n[ \t]*)+(?<cleanup>get-childitem\b[^\r\n]*\|\s*remove-item[^\r\n]*)(?:(?:\r?\n[ \t]*)+if\s*\(\s*Test-Path\s+-LiteralPath\s+\(Join-Path\s+\$PSScriptRoot\s+[''"]run-actions[''"]\)\s*\)\s*\{(?:\r?\n[ \t]*)+Remove-Item\s+-LiteralPath\s+\(Join-Path\s+\$PSScriptRoot\s+[''"]run-actions[''"]\)\s+-Recurse\s+-Force(?:\r?\n[ \t]*)+\})?(?:\r?\n[ \t]*)+\}\s*\z'
+    $nl = if ($Original.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $trailingNewline = if ($Original -match '\r?\n\z') { $nl } else { '' }
+    $match = [regex]::Match($Original, $standardFlatPattern)
+    if (-not $match.Success) { $match = [regex]::Match($Original, $standardTryPattern) }
+    if ($match.Success) {
+        return (@(
+            $match.Groups['version'].Value.Trim()
+            $match.Groups['metadata'].Value.Trim()
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            ('    ' + $match.Groups['docker'].Value.Trim())
+            '}'
+            'finally {'
+            ('    ' + $match.Groups['cleanup'].Value.Trim())
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+        ) -join $nl) + $trailingNewline
+    }
+
+    $tokens = $null; $parseErrors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseInput($Original, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count) { return $Original }
+
+    $hasInvoke = $null -ne $ast.Find({
+        param($node)
+        if ($node -isnot [Management.Automation.Language.CommandAst]) { return $false }
+        if ($node.GetCommandName() -match '(^|[\\/])BuildRunActions\.ps1$') { return $true }
+        if ($node.InvocationOperator -notin @('Ampersand', 'Dot')) { return $false }
+        $target = $node.CommandElements[0]
+        if ($target -is [Management.Automation.Language.ParenExpressionAst] -and $target.Pipeline.PipelineElements.Count -eq 1) {
+            $join = $target.Pipeline.PipelineElements[0]
+            if ($join -is [Management.Automation.Language.CommandAst] -and $join.GetCommandName() -eq 'Join-Path') {
+                return $null -ne ($join.CommandElements | Where-Object {
+                    $_ -is [Management.Automation.Language.StringConstantExpressionAst] -and $_.Value -ieq 'BuildRunActions.ps1'
+                } | Select-Object -First 1)
+            }
+        }
+        return $target.Extent.Text -match '\A"\$(?:PSScriptRoot|\{PSScriptRoot\})[\\/]BuildRunActions\.ps1"\z'
+    }, $true)
+    $hasCleanup = $Original -match "(?i)['""]run-actions['""]"
+    if ($hasInvoke -and $hasCleanup) { return $Original }
+
+    $dockerCommands = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] -and (Test-DockerBuildCommand $n) }, $true))
+    if (-not $dockerCommands.Count) { return $Original }
+
+    $enclosingTries = [Collections.Generic.List[object]]::new()
+    $directStmts = [Collections.Generic.List[object]]::new()
+    foreach ($cmd in $dockerCommands) {
+        $tryNode = $null
+        $stmtNode = $null
+        for ($cur = $cmd; $cur; $cur = $cur.Parent) {
+            if (-not $stmtNode -and $cur -is [Management.Automation.Language.StatementAst] -and
+                ($cur.Parent -is [Management.Automation.Language.StatementBlockAst] -or $cur.Parent -is [Management.Automation.Language.NamedBlockAst])) {
+                $stmtNode = $cur
+            }
+            if ($cur.Parent -is [Management.Automation.Language.TryStatementAst] -and [object]::ReferenceEquals($cur, $cur.Parent.Body)) {
+                $tryNode = $cur.Parent
+                break
+            }
+        }
+        $enclosingTries.Add($tryNode)
+        $directStmts.Add($stmtNode)
+    }
+
+    $edits = [Collections.Generic.List[object]]::new()
+    $allInSameTry = ($null -ne $enclosingTries[0]) -and (@($enclosingTries | Where-Object { -not [object]::ReferenceEquals($_, $enclosingTries[0]) }).Count -eq 0)
+    if ($allInSameTry) {
+        $tryAst = $enclosingTries[0]
+        $tryIndent = Get-LineIndent $Original $tryAst.Extent.StartOffset
+        if ($null -eq $tryIndent) { return $Original }
+        if (-not $hasInvoke) {
+            $edits.Add(@{
+                Offset = $tryAst.Extent.StartOffset
+                Length = 0
+                Text = "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')$nl$tryIndent"
+            })
+        }
+        if (-not $hasCleanup) {
+            if ($tryAst.Finally) {
+                $bodyIndent = $tryIndent + '    '
+                if ($tryAst.Finally.Statements.Count -gt 0) {
+                    $lastFinallyIndent = Get-LineIndent $Original $tryAst.Finally.Statements[-1].Extent.StartOffset
+                    if ($null -ne $lastFinallyIndent) { $bodyIndent = $lastFinallyIndent }
+                }
+                $cleanupLines = @(
+                    "${bodyIndent}if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+                    "${bodyIndent}    Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+                    "${bodyIndent}}"
+                ) -join $nl
+                $closeOffset = $tryAst.Finally.Extent.EndOffset - 1
+                $closeIndent = Get-LineIndent $Original $closeOffset
+                if ($null -ne $closeIndent) {
+                    $insertAt = $closeOffset - $closeIndent.Length
+                    $edits.Add(@{ Offset = $insertAt; Length = 0; Text = $cleanupLines + $nl })
+                } else {
+                    $edits.Add(@{ Offset = $closeOffset; Length = 0; Text = $nl + $cleanupLines + $nl + $tryIndent })
+                }
+            } else {
+                $finallyBlock = @(
+                    "${tryIndent}finally {"
+                    "${tryIndent}    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+                    "${tryIndent}        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+                    "${tryIndent}    }"
+                    "${tryIndent}}"
+                ) -join $nl
+                $edits.Add(@{ Offset = $tryAst.Extent.EndOffset; Length = 0; Text = $nl + $finallyBlock })
+            }
+        }
+    } else {
+        $parentBlock = if ($directStmts[0]) { $directStmts[0].Parent } else { $null }
+        $allInSameBlock = ($null -ne $parentBlock) -and (@($directStmts | Where-Object { $null -eq $_ -or -not [object]::ReferenceEquals($_.Parent, $parentBlock) }).Count -eq 0)
+        if (-not $allInSameBlock) { return $Original }
+        $orderedStmts = @($directStmts | Sort-Object { $_.Extent.StartOffset } -Unique)
+        $firstStmt = $orderedStmts[0]
+        $lastStmt = $orderedStmts[-1]
+        $indent = Get-LineIndent $Original $firstStmt.Extent.StartOffset
+        if ($null -eq $indent) { return $Original }
+        if ($hasCleanup) {
+            if (-not $hasInvoke) {
+                $edits.Add(@{
+                    Offset = $firstStmt.Extent.StartOffset
+                    Length = 0
+                    Text = "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')$nl$indent"
+                })
+            }
+        } else {
+            $dockerSlice = $Original.Substring($firstStmt.Extent.StartOffset, $lastStmt.Extent.EndOffset - $firstStmt.Extent.StartOffset)
+            $indentedDocker = (@($dockerSlice -split '\r?\n' | ForEach-Object {
+                if ($_ -match '^[ \t]*$') { '' }
+                elseif ($indent.Length -gt 0 -and $_.StartsWith($indent, [StringComparison]::Ordinal)) { $indent + '    ' + $_.Substring($indent.Length) }
+                else { $indent + '    ' + $_ }
+            }) -join $nl)
+            $replaceEnd = $lastStmt.Extent.EndOffset
+            $cleanupBody = [Collections.Generic.List[string]]::new()
+            $stmtList = @($parentBlock.Statements)
+            $lastIdx = -1
+            for ($i = 0; $i -lt $stmtList.Count; $i++) {
+                if ([object]::ReferenceEquals($stmtList[$i], $lastStmt)) { $lastIdx = $i; break }
+            }
+            if ($lastIdx -ge 0 -and ($lastIdx + 1) -lt $stmtList.Count) {
+                $nextStmt = $stmtList[$lastIdx + 1]
+                $gap = $Original.Substring($lastStmt.Extent.EndOffset, $nextStmt.Extent.StartOffset - $lastStmt.Extent.EndOffset)
+                if ($gap -match '^\s*$' -and (Test-ApiCleanupPipeline $nextStmt)) {
+                    $cleanupBody.Add($indent + '    ' + $nextStmt.Extent.Text.Trim())
+                    $replaceEnd = $nextStmt.Extent.EndOffset
+                }
+            }
+            $cleanupBody.Add("${indent}    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {")
+            $cleanupBody.Add("${indent}        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force")
+            $cleanupBody.Add("${indent}    }")
+            $replacementLines = [Collections.Generic.List[string]]::new()
+            if (-not $hasInvoke) {
+                $replacementLines.Add("& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')")
+                $replacementLines.Add("${indent}try {")
+            } else {
+                $replacementLines.Add('try {')
+            }
+            $replacementLines.Add($indentedDocker)
+            $replacementLines.Add("${indent}}")
+            $replacementLines.Add("${indent}finally {")
+            foreach ($line in $cleanupBody) { $replacementLines.Add($line) }
+            $replacementLines.Add("${indent}}")
+            $edits.Add(@{
+                Offset = $firstStmt.Extent.StartOffset
+                Length = $replaceEnd - $firstStmt.Extent.StartOffset
+                Text = ($replacementLines -join $nl)
+            })
+        }
+    }
+
+    if (-not $edits.Count) { return $Original }
+    $updated = $Original
+    foreach ($edit in $edits | Sort-Object -Property Offset, Length -Descending) {
+        $updated = $updated.Remove($edit.Offset, $edit.Length).Insert($edit.Offset, $edit.Text)
+    }
+    $verifyTokens = $null; $verifyErrors = $null
+    $null = [Management.Automation.Language.Parser]::ParseInput($updated, [ref]$verifyTokens, [ref]$verifyErrors)
+    if ($verifyErrors.Count) { return $Original }
+    return $updated
+}
+$buildImagePath = Join-Path $workspace 'BuildDocfxImage.ps1'
+if (Test-Path -LiteralPath $buildImagePath) {
+    Assert-RepositoryPath $buildImagePath
+    $buildImageOriginal = [IO.File]::ReadAllText($buildImagePath)
+    $buildImageUpdated = Update-BuildDocfxImageScript $buildImageOriginal
+    Write-Page $buildImagePath $buildImageOriginal $buildImageUpdated
+}
 if ($results.Count) { $results | ConvertTo-Json -Depth 30 } else { '[]' }
 if (@($results | Where-Object { $_.status -eq 'failed' -or $_.native -eq 'Failed' -or $_.docker -eq 'Failed' }).Count) { exit 1 }
 if (@($results | Where-Object coverage -eq 'Unresolved').Count) { exit 2 }

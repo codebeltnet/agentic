@@ -117,6 +117,7 @@ internal static class DocfxValidator
                 var platformReferences = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
                     .Where(p => Path.GetFileName(p).StartsWith("System.", StringComparison.Ordinal) || Path.GetFileName(p) is "netstandard.dll" or "mscorlib.dll")
                     .Select(p => MetadataReference.CreateFromFile(p)).ToArray();
+                var associatedPages = files.Where(file => workspace.ReadMarkdown(file).Contains("<!-- docfx-run-actions:start -->", StringComparison.Ordinal));
                 var examples = files.SelectMany(file =>
                 {
                     var sections = ExtractOverwriteSections(file);
@@ -152,7 +153,7 @@ internal static class DocfxValidator
                         .Select(g => g.Properties.GetValueOrDefault("TargetFramework")).Where(f => f is not null).Distinct(),
                     BuildInputs = RunActionProjectInputs(root, p.Path)
                 });
-                Console.WriteLine(JsonSerializer.Serialize(new { config, examples, projects = projectEvidence, warnings = report.Warnings }, JsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new { config, examples, associatedPages, projects = projectEvidence, warnings = report.Warnings }, JsonOptions));
                 return 0;
             }
             if (options.WriteOverwriteRequestPath is not null)
@@ -485,6 +486,7 @@ internal static class DocfxValidator
         phaseTimer.Restart();
         ValidateXrefMemberLinks(repoRoot, markdownFiles, workspace,
             ReadDocfxSiteBaseUrl(docfxPath), api, apiModelSource, report);
+        ValidateApiIncludePlacement(repoRoot, docfxWorkspace, markdownFiles, workspace, report);
         WritePhase(options, report, "xref link validation", phaseTimer.Elapsed);
 
         // 8. Verify mandatory examples exist before compiling the examples that were found.
@@ -1452,6 +1454,21 @@ internal static class DocfxValidator
             CopyDirectory(repoRoot, tempRoot, cancellationToken);
             var relativeDocfxPath = Path.GetRelativePath(repoRoot, docfxPath);
             var tempDocfxPath = Path.Combine(tempRoot, relativeDocfxPath);
+            var tempDocfxDir = Path.GetDirectoryName(tempDocfxPath) ?? tempRoot;
+            var buildRunActionsScript = Path.Combine(tempDocfxDir, "BuildRunActions.ps1");
+            var runActionsManifest = Path.Combine(tempDocfxDir, "run-actions.manifest.json");
+            if (File.Exists(buildRunActionsScript) && File.Exists(runActionsManifest))
+            {
+                var materialize = RunProcess("pwsh", $"-NoProfile -NonInteractive -File \"{buildRunActionsScript}\"",
+                    tempDocfxDir, null, ProcessPermission.DocfxBuild, cancellationToken,
+                    new ProcessProgress("Materialize run-actions", "isolated temp workspace"));
+                if (materialize.ExitCode != 0)
+                {
+                    return new DocfxVerificationResult(false,
+                        $"BuildRunActions.ps1 failed in a temp workspace (exit {materialize.ExitCode}).\n{Trim(materialize.StdOut + materialize.StdErr)}",
+                        stopwatch.Elapsed, materialize.ExitCode == -2);
+                }
+            }
             var environment = hasStrongNameKey
                 ? null
                 : new Dictionary<string, string> { ["SkipSignAssembly"] = "true" };
@@ -4445,6 +4462,56 @@ internal static class DocfxValidator
         return Regex.IsMatch(body, @"(?im)^\s*Availability\s*:");
     }
 
+    private static void ValidateApiIncludePlacement(
+        string repoRoot,
+        string docfxWorkspace,
+        IReadOnlyList<string> markdownFiles,
+        ValidationWorkspace workspace,
+        Report report)
+    {
+        var apiRoot = Path.GetFullPath(Path.Combine(docfxWorkspace, "api"))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var namespacesRoot = Path.GetFullPath(Path.Combine(docfxWorkspace, "api", "namespaces"))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+        foreach (var md in markdownFiles)
+        {
+            var fullPath = Path.GetFullPath(md);
+            if (!fullPath.StartsWith(apiRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                // Rule applies strictly under .docfx/api/; Markdown outside .docfx/api/ is allowed to use includes freely.
+                continue;
+            }
+
+            var isNamespace = fullPath.StartsWith(namespacesRoot, StringComparison.OrdinalIgnoreCase);
+            var text = workspace.ReadMarkdown(md);
+            if (!text.Contains("[!INCLUDE", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var afterExamples = false;
+            foreach (var (line, offset, fenceInfo) in ScanMarkdownLines(text))
+            {
+                afterExamples |= IsExampleHeading(line) || fenceInfo is "cs" or "csharp";
+                if ((isNamespace && !afterExamples) ||
+                    !Regex.IsMatch(line, @"(?<!\\)\[!INCLUDE[ \t]+\[[^\]\r\n]*\]\([^)\r\n]+\)\]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                {
+                    continue;
+                }
+
+                var placement = isNamespace ? "after the examples begin" : "outside `api/namespaces/`";
+                report.Errors.Add(new Diagnostic(
+                    "API_INCLUDE_OUTSIDE_NAMESPACES",
+                    Rel(repoRoot, md),
+                    null,
+                    $"Line {offset + 1} uses a `[!INCLUDE ...]` directive {placement}. " +
+                    "Under `.docfx/api/`, directives are only allowed before examples on namespace overview pages."));
+                break;
+            }
+        }
+    }
+
     // ----------------------------------------------------------------------
     // Xref member/method link validation
     // ----------------------------------------------------------------------
@@ -4611,6 +4678,33 @@ internal static class DocfxValidator
                 .ToList();
             report.Errors.Add(new Diagnostic("EXAMPLE_UID_DUPLICATE", string.Join(", ", paths), NamespaceFromUid(duplicate.Key),
                 $"UID `{duplicate.Key}` is mapped to {duplicate.Count()} example sections. Keep one coherent, scenario-led example for a UID; merge or remove the duplicate `example: *content` sections."));
+        }
+
+        foreach (var section in sections
+                     .Where(section => section.MappedToExample)
+                     .Where(section => !options.ChangedOnly || changedFiles is null ||
+                                       changedFiles.Contains(Path.GetFullPath(section.File)) ||
+                                       changedFiles.Any(IsChangedDocfxConfig)))
+        {
+            var sectionNs = NamespaceFromUid(section.Uid);
+            var declaringNs = NamespaceFromUid(DeclaringTypeUidFromMethodUid(section.Uid));
+            if (scope.ScopeRestricted &&
+                !scope.IncludesNamespace(sectionNs) &&
+                !scope.IncludesNamespace(declaringNs))
+            {
+                continue;
+            }
+
+            if (TryFindRedundantExampleHeading(section.Body, out var lineOffset, out var headingLine))
+            {
+                report.Errors.Add(new Diagnostic(
+                    "EXAMPLE_REDUNDANT_HEADING",
+                    Rel(repoRoot, section.File),
+                    sectionNs,
+                    $"Line {section.BodyStartLine + lineOffset} in UID `{section.Uid}` includes a redundant `{headingLine}` heading inside an `example:`-mapped overwrite section (`example: *content`, `example: [*content]`, or `example:\\n- *content`). " +
+                    "DocFX renders the `Examples` section heading automatically from the front matter, so adding a manual `Example`/`Examples` heading produces duplicate headings on the rendered page. Remove the heading and keep the complementary explanatory prose directly before the C# fence.",
+                    uid: section.Uid));
+            }
         }
 
         var exampleFingerprints = new List<(string SectionUid, string Path, string Fingerprint)>();
@@ -5954,11 +6048,16 @@ internal static class DocfxValidator
         // Actual Csc arguments and native project terminal events establish context evidence.
         // ProjectImports=None keeps source/import archives out of the disposable binary log.
         var binaryLog = framework is null ? string.Empty : $" \"-bl:{Path.Combine(tempRoot, "samples.binlog")};ProjectImports=None\"";
+        // Passing -p:TargetFramework on a solution build causes MSBuild to evaluate direct solution
+        // projects with TargetFramework in global properties while ProjectReference edges strip it
+        // via GlobalPropertiesToRemove. With -m:>1, MSBuild schedules both instances concurrently
+        // against the same bin/obj paths (e.g. GenerateDepsFile IOException on *.deps.json).
+        var batchParallelism = framework is null ? parallelism : 1;
         return RunProcess("dotnet",
-            $"build \"{solutionPath}\" -c {configuration} --nologo -m:{parallelism}{signingProperty}{frameworkProperty}{contextIsolation}{binaryLog}",
+            $"build \"{solutionPath}\" -c {configuration} --nologo -m:{batchParallelism}{signingProperty}{frameworkProperty}{contextIsolation}{binaryLog}",
             tempRoot, permission: ProcessPermission.SampleCompile,
             progress: new ProcessProgress("sample compilation",
-                $"{workers.Count} sample project(s), {parallelism} runner(s)"));
+                $"{workers.Count} sample project(s), {batchParallelism} runner(s)"));
     }
 
     private static List<SampleProjectBuildEvidence> ReadSampleBuildEvidence(string path, out string? error)
@@ -6269,22 +6368,152 @@ internal static class DocfxValidator
         return line;
     }
 
+    private static bool TryFindRedundantExampleHeading(string body, out int relativeLineOffset, out string headingLine)
+    {
+        relativeLineOffset = 0;
+        headingLine = string.Empty;
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return false;
+        }
+
+        foreach (var (line, offset, _) in ScanMarkdownLines(body))
+        {
+            if (IsExampleHeading(line))
+            {
+                relativeLineOffset = offset;
+                headingLine = line.Trim();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsExampleHeading(string line) =>
+        Regex.IsMatch(line, @"^ {0,3}#{1,6}\s+Examples?:?(?:\s+#+)?\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static IEnumerable<(string Text, int Offset, string? FenceInfo)> ScanMarkdownLines(string text)
+    {
+        var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+        var inComment = false;
+        var fenceChar = '\0';
+        var fenceLength = 0;
+        var fenceListDepth = 0;
+        var listIndents = new Stack<int>();
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (!inComment)
+            {
+                var leadingLength = 0;
+                var indent = 0;
+                while (leadingLength < line.Length && line[leadingLength] is ' ' or '\t')
+                {
+                    indent += line[leadingLength++] == '\t' ? 4 - indent % 4 : 1;
+                }
+                if (leadingLength < line.Length)
+                {
+                    while (listIndents.TryPeek(out var listIndent) && indent < listIndent)
+                    {
+                        listIndents.Pop();
+                    }
+                    if (listIndents.Count < fenceListDepth)
+                    {
+                        fenceLength = 0;
+                        fenceListDepth = 0;
+                    }
+                    var contentIndent = indent - (listIndents.TryPeek(out var activeIndent) ? activeIndent : 0);
+                    var content = line[leadingLength..];
+                    var marker = fenceLength == 0 && contentIndent < 4
+                        ? Regex.Match(content, @"^(?:[-+*]|[0-9]{1,9}[.)]) {1,4}(?=\S)")
+                        : Match.Empty;
+                    if (marker.Success)
+                    {
+                        listIndents.Push(indent + marker.Length);
+                        line = content[marker.Length..];
+                    }
+                    else
+                    {
+                        line = new string(' ', contentIndent) + content;
+                    }
+                }
+                var fence = Regex.Match(line, @"^ {0,3}(?<marker>`{3,}|~{3,})(?<info>.*)$");
+                if (fenceLength != 0)
+                {
+                    if (fence.Success && fence.Groups["marker"].Value[0] == fenceChar &&
+                        fence.Groups["marker"].Length >= fenceLength && string.IsNullOrWhiteSpace(fence.Groups["info"].Value))
+                    {
+                        fenceLength = 0;
+                        fenceListDepth = 0;
+                    }
+                    continue;
+                }
+                if (fence.Success)
+                {
+                    fenceChar = fence.Groups["marker"].Value[0];
+                    fenceLength = fence.Groups["marker"].Length;
+                    fenceListDepth = listIndents.Count;
+                    yield return (string.Empty, i, fence.Groups["info"].Value.Trim().ToLowerInvariant());
+                    continue;
+                }
+                if (Regex.IsMatch(line, @"^(?: {4}| {0,3}\t)"))
+                {
+                    continue;
+                }
+            }
+
+            // Consume inline code and comments in source order, so delimiters inside either are literal.
+            var visible = new StringBuilder();
+            var start = 0;
+            while (start < line.Length)
+            {
+                if (inComment)
+                {
+                    var close = line.IndexOf("-->", start, StringComparison.Ordinal);
+                    if (close < 0) break;
+                    inComment = false;
+                    start = close + 3;
+                    continue;
+                }
+
+                var token = MarkdownLiteral.Match(line, start);
+                if (!token.Success)
+                {
+                    visible.Append(line.AsSpan(start));
+                    break;
+                }
+                visible.Append(line.AsSpan(start, token.Index - start));
+                inComment = token.Value == "<!--";
+                if (!inComment) visible.Append('\uFFFD');
+                start = token.Index + token.Length;
+            }
+            yield return (visible.ToString(), i, null);
+        }
+    }
+
+    private static readonly Regex MarkdownLiteral = new(
+        @"<!--|(?<![`\\])(?<ticks>`+)(?!`).*?(?<!`)\k<ticks>(?!`)", RegexOptions.CultureInvariant);
+
     private static bool IsMappedToExample(string yaml)
     {
-        // Form A: example: *content  (inline scalar)
-        if (ReadYamlScalar(yaml, "example") is "*content")
+        // Form A: example: *content (inline scalar) or example: [*content] (flow sequence)
+        var scalar = ReadYamlScalar(yaml, "example");
+        if (scalar is "*content" ||
+            (scalar is not null && Regex.IsMatch(scalar, @"^\[\s*\*content\s*\]$")))
         {
             return true;
         }
 
-        // Form B: example:\n  - *content  (sequence / list form)
+        // Form B: example:\n  - *content (block sequence / list form)
         var lines = yaml.Split('\n');
         for (var i = 0; i < lines.Length - 1; i++)
         {
             if (lines[i].Trim() == "example:")
             {
                 var next = lines[i + 1].Trim();
-                if (next == "- *content")
+                if (Regex.IsMatch(next, @"^-\s+\*content$"))
                 {
                     return true;
                 }
@@ -6833,16 +7062,17 @@ internal static class DocfxValidator
 
         // Only repositories enriched by the explicit run-action command have these deliverables.
         // This is a path check, never generation or runtime verification on the fast path.
-        if (File.Exists(Path.Combine(docfxWorkspace, "run-actions", "index.json")))
+        if (File.Exists(Path.Combine(docfxWorkspace, "run-actions", "index.json")) ||
+            File.Exists(Path.Combine(docfxWorkspace, "run-actions.manifest.json")))
         {
             var relative = Path.GetRelativePath(docfxWorkspace, candidate).Replace('\\', '/');
-            if (relative is "run-actions/index.json" or "run-actions.settings.json" ||
+            if (relative is "run-actions/index.json" or "run-actions.settings.json" or "run-actions.manifest.json" or "BuildRunActions.ps1" ||
                 Regex.IsMatch(relative, @"^run-actions/[a-f0-9]{24}/(?:native|docker)\.ps1$")) { return true; }
             using var config = JsonDocument.Parse(File.ReadAllText(docfxPath));
             if (config.RootElement.TryGetProperty("build", out var build) && build.TryGetProperty("template", out var templates) &&
                 templates.ValueKind == JsonValueKind.Array && templates.EnumerateArray().Any(t => t.ValueKind == JsonValueKind.String &&
                     (PathsEqual(candidate, Path.Combine(docfxWorkspace, t.GetString()!, "public", "run-actions.js")) ||
-                     (t.GetString() == "run-actions-template" && PathsEqual(candidate, Path.Combine(docfxWorkspace, "run-actions-template", "public", "main.js")))))) { return true; }
+                     (t.GetString() == "templates/modern" && PathsEqual(candidate, Path.Combine(docfxWorkspace, "templates/modern", "public", "main.js")))))) { return true; }
         }
 
         return IsKnownNamespaceMarkdown(candidate, docfxWorkspace, ws, knownNamespaces) ||
@@ -8944,6 +9174,7 @@ internal static class DocfxValidator
             var action = diagnostic.Code switch
             {
                 "EXAMPLE_UID_DUPLICATE" => "Merge the duplicate mappings into one coherent example section for the UID, then rerun validation.",
+                "EXAMPLE_REDUNDANT_HEADING" => "Remove the manual `Example`/`Examples` heading from the `example:`-mapped overwrite body (DocFX renders `Examples` automatically) and keep the complementary explanatory prose directly before the C# fence.",
                 "EXAMPLE_PLACEHOLDER" or "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or
                 "EXAMPLE_DEFAULT_PLACEHOLDER" or "EXAMPLE_NO_OBSERVABLE_OUTCOME" or "EXAMPLE_FORWARDING_SCAFFOLD" or
                 "EXAMPLE_RUNTIME_TYPE_NAME_OUTCOME" or "EXAMPLE_EMPTY_ENTRY_POINT_STUB" =>
@@ -8972,7 +9203,7 @@ internal static class DocfxValidator
 
     private static bool IsExampleQualityDiagnostic(Diagnostic diagnostic)
     {
-        return diagnostic.Code is "EXAMPLE_MISSING" or "EXAMPLE_UID_DUPLICATE" or "EXAMPLE_PLACEHOLDER" or
+        return diagnostic.Code is "EXAMPLE_MISSING" or "EXAMPLE_UID_DUPLICATE" or "EXAMPLE_REDUNDANT_HEADING" or "EXAMPLE_PLACEHOLDER" or
             "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or "EXTENSION_EXAMPLE_NOT_INVOKED" or
             "EXAMPLE_DEFAULT_PLACEHOLDER" or "EXAMPLE_NO_OBSERVABLE_OUTCOME" or "EXAMPLE_FORWARDING_SCAFFOLD" or
             "EXAMPLE_RUNTIME_TYPE_NAME_OUTCOME" or "EXAMPLE_EMPTY_ENTRY_POINT_STUB" or

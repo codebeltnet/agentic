@@ -47,6 +47,7 @@ $partial = "# Partial`r`n`n``````csharp`nvar fixture = new ManagedApplicationFix
 [IO.File]::WriteAllText("$work/docs/partial.md", $partial)
 $null = New-Item -ItemType Directory "$work/template/public" -Force
 [IO.File]::WriteAllText("$work/template/public/main.js", "// Context7 customization`nexport default { start() { window.context7 = true; } };`n")
+[IO.File]::WriteAllText("$work/BuildDocfxImage.ps1", "`$version = minver -i -t v -v w`ndocfx metadata docfx.json`ndocker buildx build -t xunit-docfx:`$version --platform linux/arm64,linux/amd64 --load -f Dockerfile.docfx .`nget-childItem -recurse -path api -include *.yml, .manifest | remove-item`n")
 [IO.File]::WriteAllText("$work/docfx.json", '{"build":{"content":[{"files":["docs/*.md"]}],"template":["default","modern","template"],"dest":"_site"}}')
 [IO.File]::WriteAllText("$work/docs/test.md", "# Test`n`n``````csharp`nusing Xunit;`npublic class ExampleTest { [Fact] public void ParsesInventoryCount() { Assert.Equal(42, int.Parse(`"42`")); } }`n```````n")
 $packageSource = @'
@@ -137,6 +138,10 @@ $settingsPath = "$work/run-actions.settings.json"
 [IO.File]::WriteAllText($settingsPath, (@{examples=@($packageRecipe)} | ConvertTo-Json -Depth 20))
 $first = (& $generator -RepoRoot $work) | ConvertFrom-Json
 if ($LASTEXITCODE -ne 2 -or @($first | Where-Object coverage -eq 'Paired').Count -ne 5 -or @($first | Where-Object coverage -eq 'Unresolved').Count -ne 1) { throw "Unexpected generation: $($first | ConvertTo-Json -Depth 10)" }
+if (Test-Path -LiteralPath "$work/run-actions") { throw 'Generator must not physically create run-actions/ in the working tree; BuildRunActions.ps1 owns materialization.' }
+$global:LASTEXITCODE = 0
+& "$work/BuildRunActions.ps1" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'BuildRunActions.ps1 failed to materialize scripts from run-actions.manifest.json.' }
 $resolved = $first | Where-Object uid -ceq $packageUid
 # The same envelope assets/run-actions.js accepts: one complete paste unit, so execution and verification run together.
 $completeScript = '\A& \{\r?\n#requires -Version 7\.0\r?\n[\s\S]*\r?\n\}\r?\n?\z'
@@ -173,6 +178,27 @@ if (-not $association.Success -or $transports.Count -ne 2 -or 'native' -notin $t
     throw 'Both runnable assets must be delivered in one association with the same C# sample.'
 }
 if (-not (Get-Content "$work/template/public/main.js" -Raw).Contains('window.context7 = true')) { throw 'Existing template was overwritten.' }
+$buildImageText = Get-Content "$work/BuildDocfxImage.ps1" -Raw
+$expectedBuildImage = @(
+    '$version = minver -i -t v -v w'
+    'docfx metadata docfx.json'
+    "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+    'try {'
+    '    docker buildx build -t xunit-docfx:$version --platform linux/arm64,linux/amd64 --load -f Dockerfile.docfx .'
+    '}'
+    'finally {'
+    '    get-childItem -recurse -path api -include *.yml, .manifest | remove-item'
+    "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+    "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+    '    }'
+    '}'
+) -join "`n"
+if ($buildImageText -cne ($expectedBuildImage + "`n")) {
+    throw "Generator must rewrite an uncustomized BuildDocfxImage.ps1 to run BuildRunActions.ps1 and clean up run-actions in finally. Actual:`n$buildImageText"
+}
+$buildImageTokens = $null; $buildImageParseErrors = $null
+$null = [Management.Automation.Language.Parser]::ParseInput($buildImageText, [ref]$buildImageTokens, [ref]$buildImageParseErrors)
+if ($buildImageParseErrors.Count) { throw "Rewritten BuildDocfxImage.ps1 is not valid PowerShell: $buildImageParseErrors" }
 $files = @(Get-ChildItem $work -Recurse -File)
 $before = @{}
 foreach ($file in $files) { $before[$file.FullName] = @((Get-FileHash $file.FullName).Hash, $file.LastWriteTimeUtc.Ticks) }
@@ -184,7 +210,7 @@ foreach ($file in Get-ChildItem $work -Recurse -File) {
 # Mock only the fresh-process result to exercise independent status bookkeeping without running generated code.
 function pwsh {
     $fileIndex = [Array]::IndexOf($args, '-File')
-    if ($fileIndex -lt 0 -or [string]$args[$fileIndex + 1] -notmatch '[\\/]native\.ps1$') { throw 'The focused verification should invoke Native only.' }
+    if ($fileIndex -lt 0 -or [string]$args[$fileIndex + 1] -notmatch '-native-[a-f0-9]{32}\.ps1$') { throw 'The focused verification should invoke Native only.' }
     $global:LASTEXITCODE = 0
 }
 try {
@@ -200,12 +226,36 @@ $toolbarModule = "$work/template/public/run-actions.js"
 $toolbarHash = (Get-FileHash $toolbarSource).Hash
 [IO.File]::WriteAllText($toolbarModule, '// Stale toolbar from a previous skill revision.')
 $refresh = (& $generator -RepoRoot $work) | ConvertFrom-Json
-$refreshedEntry = $refresh | Where-Object id -eq $entry.id
 if ((Get-FileHash $toolbarModule).Hash -cne $toolbarHash -or
-    @($refresh | Where-Object status -eq 'unchanged').Count -ne 5 -or
-    $refreshedEntry.native -ne 'Verified' -or $refreshedEntry.docker -ne 'Unverified') {
-    throw 'Refreshing a stale toolbar must preserve the execution payloads and verification evidence.'
+    @($refresh | Where-Object status -eq 'unchanged').Count -ne 5) {
+    throw 'Refreshing a stale toolbar must preserve the manifest payloads.'
 }
+$refreshEntry = $refresh | Where-Object id -eq $entry.id
+if ($refreshEntry.native -ne 'Verified' -or $refreshEntry.docker -ne 'Unverified' -or
+    $refreshEntry.nativeEvidence -cne $nativeOnlyEntry.nativeEvidence -or -not (Test-Path -LiteralPath $refreshEntry.nativeEvidence)) {
+    throw 'Toolbar refresh lost independent verification evidence.'
+}
+$cacheDirectory = Split-Path $refreshEntry.nativeEvidence -Parent
+$cacheRecord = Get-ChildItem -LiteralPath $cacheDirectory -Filter "*-$($entry.id)-native-$($refreshEntry.nativeSha256).json" |
+    Where-Object { ([IO.File]::ReadAllText($_.FullName) | ConvertFrom-Json).log -eq (Split-Path $refreshEntry.nativeEvidence -Leaf) } |
+    Select-Object -First 1
+if (-not $cacheRecord) { throw 'Verification record and log must share the private cache.' }
+$originalRecord = [IO.File]::ReadAllText($cacheRecord.FullName)
+$outsideLog = Join-Path $work (Split-Path $refreshEntry.nativeEvidence -Leaf)
+[IO.File]::WriteAllText($outsideLog, 'untrusted verification log')
+try {
+    [IO.File]::WriteAllText($cacheRecord.FullName, (@{ state = 'Verified'; log = $outsideLog } | ConvertTo-Json))
+    $untrusted = ((& $generator -RepoRoot $work) | ConvertFrom-Json) | Where-Object id -eq $entry.id
+    if ($untrusted.native -ne 'Unverified' -or $untrusted.nativeEvidence) { throw 'Verification trusted a log outside the private cache.' }
+
+    [IO.File]::WriteAllText($cacheRecord.FullName, $originalRecord)
+    $linkedLog = Join-Path $cacheDirectory ('linked-' + [guid]::NewGuid().ToString('N') + '.log')
+    $null = New-Item -ItemType HardLink -Path $linkedLog -Target $refreshEntry.nativeEvidence
+    try {
+        $untrusted = ((& $generator -RepoRoot $work) | ConvertFrom-Json) | Where-Object id -eq $entry.id
+        if ($untrusted.native -ne 'Unverified' -or $untrusted.nativeEvidence) { throw 'Verification trusted a hard-linked log.' }
+    } finally { [IO.File]::Delete($linkedLog) }
+} finally { [IO.File]::WriteAllText($cacheRecord.FullName, $originalRecord) }
 foreach ($script in Get-ChildItem "$work/run-actions" -Filter '*.ps1' -Recurse -File) {
     if ($before[$script.FullName][0] -cne (Get-FileHash $script.FullName).Hash -or
         $before[$script.FullName][1] -ne $script.LastWriteTimeUtc.Ticks) {
@@ -239,14 +289,113 @@ $settings = [ordered]@{ examples=@($packageRecipe, [ordered]@{
 [IO.File]::WriteAllText("$work/run-actions.settings.json", ($settings | ConvertTo-Json -Depth 20))
 $limited = (& $generator -RepoRoot $work) | ConvertFrom-Json
 $limitedEntry = $limited | Where-Object id -eq $entry.id
+$global:LASTEXITCODE = 0
+& "$work/BuildRunActions.ps1" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'BuildRunActions.ps1 failed after single-transport update.' }
 if ($limitedEntry.coverage -ne 'Partially supported' -or $limitedEntry.docker -ne 'Unsupported' -or -not (Test-Path "$work/run-actions/$($entry.id)/native.ps1") -or (Test-Path "$work/run-actions/$($entry.id)/docker.ps1")) { throw 'Single-transport limitation was misrepresented.' }
 if ((Get-Content "$work/docs/integration.md" -Raw).Contains('View Docker Script')) { throw 'Unsupported Docker still has a control.' }
 $limitedAgain = (& $generator -RepoRoot $work) | ConvertFrom-Json
 if (($limitedAgain | Where-Object id -eq $entry.id).status -ne 'unchanged') { throw 'Single-transport cache requires the unsupported script.' }
-# Mutating the principal source invalidates its recipe and removes both associations and owned scripts.
+
+# Standalone BuildRunActions.ps1 materializes byte-identical native/docker scripts from run-actions.manifest.json
+# (including recipe-provided standalone manifests with custom package pins and single-transport examples) and prunes stale generated scripts.
+if (-not (Test-Path "$work/run-actions.manifest.json") -or -not (Test-Path "$work/BuildRunActions.ps1")) {
+    throw 'Generator must emit run-actions.manifest.json and BuildRunActions.ps1 beside docfx.json.'
+}
+$expectedHashes = @{}
+foreach ($example in $limitedAgain) {
+    foreach ($transport in @('native', 'docker')) {
+        $hash = $example."${transport}Sha256"
+        if ($hash) { $expectedHashes["$($example.id)/$transport.ps1"] = $hash }
+    }
+}
+if (-not $expectedHashes.ContainsKey("$($resolved.id)/native.ps1") -or
+    -not $expectedHashes.ContainsKey("$($resolved.id)/docker.ps1") -or
+    -not $expectedHashes.ContainsKey("$($entry.id)/native.ps1") -or
+    $expectedHashes.ContainsKey("$($entry.id)/docker.ps1")) {
+    throw 'Expected recipe-backed standalone scripts and single-transport repository script before testing standalone materializer.'
+}
+$assetsOnlyPage = "$work/docs/console.md"
+$pageBefore = [IO.File]::ReadAllText($assetsOnlyPage)
+$configBefore = [IO.File]::ReadAllText("$work/docfx.json")
+Get-ChildItem -LiteralPath "$work/run-actions" -Directory | Remove-Item -Recurse -Force
+$staleExampleDir = "$work/run-actions/deadbeefdeadbeefdeadbeef"
+$null = [IO.Directory]::CreateDirectory($staleExampleDir)
+[IO.File]::WriteAllText("$staleExampleDir/native.ps1", '# stale example native')
+[IO.File]::WriteAllText("$staleExampleDir/docker.ps1", '# stale example docker')
+$staleTransportDir = "$work/run-actions/$($entry.id)"
+$null = [IO.Directory]::CreateDirectory($staleTransportDir)
+$staleTransportPath = "$staleTransportDir/docker.ps1"
+[IO.File]::WriteAllText($staleTransportPath, '# stale transport')
+$unrelatedRootFile = "$work/run-actions/unrelated.txt"
+[IO.File]::WriteAllText($unrelatedRootFile, 'keep root')
+$unrelatedDir = "$work/run-actions/custom"
+$null = [IO.Directory]::CreateDirectory($unrelatedDir)
+$unrelatedDirScript = "$unrelatedDir/native.ps1"
+[IO.File]::WriteAllText($unrelatedDirScript, '# unrelated script')
+$mixedExampleDir = "$work/run-actions/0123456789abcdef01234567"
+$null = [IO.Directory]::CreateDirectory($mixedExampleDir)
+[IO.File]::WriteAllText("$mixedExampleDir/native.ps1", '# stale mixed native')
+$mixedKeepFile = "$mixedExampleDir/keep.txt"
+[IO.File]::WriteAllText($mixedKeepFile, 'keep inside example dir')
+$global:LASTEXITCODE = 0
+& "$work/BuildRunActions.ps1" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Standalone BuildRunActions.ps1 failed.' }
+if ((Test-Path -LiteralPath $staleExampleDir) -or
+    (Test-Path -LiteralPath $staleTransportPath) -or
+    (Test-Path -LiteralPath "$mixedExampleDir/native.ps1")) {
+    throw 'BuildRunActions.ps1 left stale generated scripts or empty stale directories behind.'
+}
+if (-not (Test-Path -LiteralPath $unrelatedRootFile) -or
+    -not (Test-Path -LiteralPath $unrelatedDirScript) -or
+    -not (Test-Path -LiteralPath $mixedKeepFile)) {
+    throw 'BuildRunActions.ps1 deleted unrelated files.'
+}
+Remove-Item -LiteralPath $unrelatedRootFile, $unrelatedDir, $mixedExampleDir -Recurse -Force
+$actualFiles = @(Get-ChildItem -Path "$work/run-actions" -Recurse -Filter '*.ps1')
+if ($actualFiles.Count -ne $expectedHashes.Count) { throw "BuildRunActions.ps1 produced $($actualFiles.Count) scripts; expected $($expectedHashes.Count)." }
+foreach ($psFile in $actualFiles) {
+    $rel = [IO.Path]::GetRelativePath("$work/run-actions", $psFile.FullName).Replace('\', '/')
+    $actualHash = (Get-FileHash -LiteralPath $psFile.FullName -Algorithm SHA256).Hash
+    if ($expectedHashes[$rel] -cne $actualHash) { throw "BuildRunActions.ps1 drifted from generator output for $rel." }
+}
+if ([IO.File]::ReadAllText($assetsOnlyPage) -cne $pageBefore -or [IO.File]::ReadAllText("$work/docfx.json") -cne $configBefore) {
+    throw 'BuildRunActions.ps1 must not modify Markdown or docfx.json.'
+}
+$noManifestDir = Join-Path $work 'no-manifest'
+$null = [IO.Directory]::CreateDirectory($noManifestDir)
+Copy-Item -LiteralPath "$work/BuildRunActions.ps1" -Destination (Join-Path $noManifestDir 'BuildRunActions.ps1')
+$global:LASTEXITCODE = 0
+& (Join-Path $noManifestDir 'BuildRunActions.ps1') | Out-Null
+if ($LASTEXITCODE -ne 0 -or (Test-Path (Join-Path $noManifestDir 'run-actions'))) {
+    throw 'BuildRunActions.ps1 must no-op cleanly when no default run-actions.manifest.json exists.'
+}
+
+# A changed script under the same example ID must discard that transport's verification.
+$retargeted = (& $generator -RepoRoot $work -Framework net9.0) | ConvertFrom-Json
+$verifiedConsole = $nativeOnly | Where-Object { $_.file -like '*console.md' }
+$retargetedConsole = $retargeted | Where-Object id -eq $verifiedConsole.id
+if (-not $retargetedConsole.nativeSha256 -or $retargetedConsole.nativeSha256 -ceq $verifiedConsole.nativeSha256 -or
+    $retargetedConsole.native -ne 'Unverified' -or $retargetedConsole.nativeEvidence) {
+    throw 'A changed Native script reused stale verification evidence.'
+}
+
+# Mutating the principal source invalidates its recipe and removes both associations and manifest entries.
 [IO.File]::WriteAllText("$work/docs/integration.md", $updated.Replace('Bootstrapper Minimal Worker', 'Changed assertion'))
 $third = (& $generator -RepoRoot $work) | ConvertFrom-Json
+$global:LASTEXITCODE = 0
+& "$work/BuildRunActions.ps1" | Out-Null
 if ((Test-Path "$work/run-actions/$($entry.id)/native.ps1") -or (Get-Content "$work/docs/integration.md" -Raw).Contains('data-example-id')) { throw 'Stale recipe/assets survived source change.' }
+
+# Deleting the only fence must remove its association even when the page no longer has inventory entries.
+$consolePage = "$work/docs/console.md"
+$consoleWithActions = [IO.File]::ReadAllText($consolePage)
+[IO.File]::WriteAllText($consolePage, [regex]::Replace($consoleWithActions, '(?s)\x60{3}csharp.*?\x60{3}', ''))
+$withoutConsole = (& $generator -RepoRoot $work) | ConvertFrom-Json
+if (($withoutConsole | Where-Object file -eq $consolePage) -or [IO.File]::ReadAllText($consolePage).Contains('docfx-run-actions:start')) {
+    throw 'Removing the last C# fence left a stale association.'
+}
+[IO.File]::WriteAllText($consolePage, $consoleWithActions)
 
 # A legacy hidden harness is a failed recipe, while an intrinsic limitation has no assets.
 $invalidRecipe = $packageRecipe | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
@@ -256,9 +405,12 @@ $intrinsic = @{uid=$partialResult.uid; sourceSha256=$partialResult.sourceSha256;
 $customSettings = "$work/custom-settings.json"
 [IO.File]::WriteAllText($customSettings, (@{examples=@($invalidRecipe,$intrinsic)} | ConvertTo-Json -Depth 20))
 $classified = (& $generator -RepoRoot $work -Settings $customSettings) | ConvertFrom-Json
+$classifiedExit = $LASTEXITCODE
+$global:LASTEXITCODE = 0
+& "$work/BuildRunActions.ps1" | Out-Null
 $invalid = $classified | Where-Object id -eq $resolved.id
 $limitedPartial = $classified | Where-Object id -eq $partialResult.id
-if ($LASTEXITCODE -ne 1 -or $invalid.coverage -ne 'Unresolved' -or $invalid.reason -notlike '*Move the executable C# into the displayed sample*' -or
+if ($classifiedExit -ne 1 -or $invalid.coverage -ne 'Unresolved' -or $invalid.reason -notlike '*Move the executable C# into the displayed sample*' -or
     (Test-Path "$work/run-actions/$($resolved.id)/native.ps1") -or (Test-Path "$work/run-actions/$($resolved.id)/docker.ps1") -or
     $limitedPartial.coverage -ne 'Intrinsically non-executable' -or $limitedPartial.native -ne 'Unsupported' -or
     $limitedPartial.docker -ne 'Unsupported' -or (Test-Path "$work/run-actions/$($limitedPartial.id)/native.ps1")) {
@@ -287,4 +439,201 @@ try {
     }
     if ([IO.File]::ReadAllText($externalPage) -cne $console) { throw 'Rejected inventory changed the external page.' }
 } finally { $inventoryOverride = $null }
-Write-Host "Run-action delivery passed: paired console, test, dependency-backed test and repository test; exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup and modern DocFX render. Fixture: $work"
+
+# Verify BuildDocfxImage.ps1 variants: standard try/finally, partially-wired CRLF flat script, customized scripts (flat, existing try/finally, try/catch, multiline docker build), and non-docker wrapper preservation.
+$buildImageVariants = @(
+    @{
+        Name = 'already-try-finally'
+        Input = "`$version = minver -i -t v -v w`ndocfx metadata docfx.json`ntry {`n    docker buildx build -t sample-docfx:`$version --platform linux/arm64,linux/amd64 --load -f Dockerfile.docfx .`n}`nfinally {`n    Get-ChildItem -Recurse -Path api -Include *.yml, .manifest | Remove-Item`n}`n"
+        Expected = @(
+            '$version = minver -i -t v -v w'
+            'docfx metadata docfx.json'
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            '    docker buildx build -t sample-docfx:$version --platform linux/arm64,linux/amd64 --load -f Dockerfile.docfx .'
+            '}'
+            'finally {'
+            '    Get-ChildItem -Recurse -Path api -Include *.yml, .manifest | Remove-Item'
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+        ) -join "`n"
+        Trailing = "`n"
+    }
+    @{
+        Name = 'partially-wired-crlf'
+        Input = "`$version = minver -i -t v -v w`r`ndocfx metadata docfx.json`r`n& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')`r`ndocker buildx build -t xunit-docfx:`$version --platform linux/arm64,linux/amd64 --load -f Dockerfile.docfx .`r`nget-childItem -recurse -path api -include *.yml, .manifest | remove-item`r`n"
+        Expected = @(
+            '$version = minver -i -t v -v w'
+            'docfx metadata docfx.json'
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            '    docker buildx build -t xunit-docfx:$version --platform linux/arm64,linux/amd64 --load -f Dockerfile.docfx .'
+            '}'
+            'finally {'
+            '    get-childItem -recurse -path api -include *.yml, .manifest | remove-item'
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+        ) -join "`r`n"
+        Trailing = "`r`n"
+    }
+    @{
+        Name = 'customized-flat'
+        Input = "param([string] `$Registry = 'ghcr.io/example')`n`$version = minver -i -t v -v w`nWrite-Host `"Building `$Registry/docs:`$version`"`n# & (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')`ndocfx metadata docfx.json`ndocker buildx build -t `"`$Registry/docs:`$version`" -f Dockerfile.docfx .`nget-childItem -recurse -path api -include *.yml, .manifest | remove-item`n"
+        Expected = @(
+            "param([string] `$Registry = 'ghcr.io/example')"
+            '$version = minver -i -t v -v w'
+            'Write-Host "Building $Registry/docs:$version"'
+            "# & (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'docfx metadata docfx.json'
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            '    docker buildx build -t "$Registry/docs:$version" -f Dockerfile.docfx .'
+            '}'
+            'finally {'
+            '    get-childItem -recurse -path api -include *.yml, .manifest | remove-item'
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+        ) -join "`n"
+        Trailing = "`n"
+    }
+    @{
+        Name = 'customized-try-finally'
+        Input = "param([string] `$Tag = 'dev')`ndocfx metadata docfx.json`ntry {`n    Write-Host `"Start `$Tag`"`n    docker buildx build -t `"custom:`$Tag`" -f Dockerfile.docfx .`n}`nfinally {`n    get-childItem -recurse -path api -include *.yml, .manifest | remove-item`n    Write-Host 'Done'`n}`n"
+        Expected = @(
+            "param([string] `$Tag = 'dev')"
+            'docfx metadata docfx.json'
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            '    Write-Host "Start $Tag"'
+            '    docker buildx build -t "custom:$Tag" -f Dockerfile.docfx .'
+            '}'
+            'finally {'
+            '    get-childItem -recurse -path api -include *.yml, .manifest | remove-item'
+            "    Write-Host 'Done'"
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+        ) -join "`n"
+        Trailing = "`n"
+    }
+    @{
+        Name = 'customized-try-catch'
+        Input = "`$version = minver -i -t v -v w`ndocfx metadata docfx.json`ntry {`n    docker buildx build -t custom-docfx:`$version -f Dockerfile.docfx .`n}`ncatch {`n    Write-Error `$_`n    throw`n}`n"
+        Expected = @(
+            '$version = minver -i -t v -v w'
+            'docfx metadata docfx.json'
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            '    docker buildx build -t custom-docfx:$version -f Dockerfile.docfx .'
+            '}'
+            'catch {'
+            '    Write-Error $_'
+            '    throw'
+            '}'
+            'finally {'
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+        ) -join "`n"
+        Trailing = "`n"
+    }
+    @{
+        Name = 'customized-multiline-poststep'
+        Input = "param([string] `$Tag = 'latest')`ndocfx metadata docfx.json`ndocker buildx build ```n    -t `"custom-docs:`$Tag`" ```n    -f Dockerfile.docfx .`nWrite-Host `"Built `$Tag`"`n"
+        Expected = @(
+            "param([string] `$Tag = 'latest')"
+            'docfx metadata docfx.json'
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            '    docker buildx build `'
+            '        -t "custom-docs:$Tag" `'
+            '        -f Dockerfile.docfx .'
+            '}'
+            'finally {'
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+            'Write-Host "Built $Tag"'
+        ) -join "`n"
+        Trailing = "`n"
+    }
+    @{
+        Name = 'customized-non-docker'
+        Input = "param([string] `$Env = 'prod')`n& (Join-Path `$PSScriptRoot 'CustomPipeline.ps1') -Env `$Env`n"
+        Expected = "param([string] `$Env = 'prod')`n& (Join-Path `$PSScriptRoot 'CustomPipeline.ps1') -Env `$Env"
+        Trailing = "`n"
+    }
+)
+foreach ($variant in $buildImageVariants) {
+    $variantRoot = Join-Path $work ("build-image-" + $variant.Name)
+    $null = [IO.Directory]::CreateDirectory($variantRoot)
+    $variantConfig = Join-Path $variantRoot 'docfx.json'
+    $variantScript = Join-Path $variantRoot 'BuildDocfxImage.ps1'
+    [IO.File]::WriteAllText($variantConfig, '{"build":{"template":["default","modern"]}}')
+    [IO.File]::WriteAllText($variantScript, $variant.Input)
+    $inventoryOverride = @{ config = $variantConfig; examples = @() } | ConvertTo-Json -Depth 5
+    try {
+        $null = & $generator -RepoRoot $variantRoot
+        if ($LASTEXITCODE -ne 0) { throw "Generator failed for BuildDocfxImage variant $($variant.Name)." }
+        $actualVariant = [IO.File]::ReadAllText($variantScript)
+        if ($actualVariant -cne ($variant.Expected + $variant.Trailing)) {
+            throw "BuildDocfxImage variant $($variant.Name) did not match expected output. Actual:`n$actualVariant"
+        }
+        $vTokens = $null; $vErrors = $null
+        $null = [Management.Automation.Language.Parser]::ParseInput($actualVariant, [ref]$vTokens, [ref]$vErrors)
+        if ($vErrors.Count) { throw "BuildDocfxImage variant $($variant.Name) produced invalid PowerShell: $vErrors" }
+        $beforeHash = (Get-FileHash $variantScript).Hash
+        $beforeTicks = (Get-Item $variantScript).LastWriteTimeUtc.Ticks
+        $null = & $generator -RepoRoot $variantRoot
+        if ($LASTEXITCODE -ne 0 -or (Get-FileHash $variantScript).Hash -cne $beforeHash -or (Get-Item $variantScript).LastWriteTimeUtc.Ticks -ne $beforeTicks) {
+            throw "BuildDocfxImage variant $($variant.Name) was not idempotent on second run."
+        }
+    } finally { $inventoryOverride = $null }
+}
+
+# Template ordering: templates/modern must come before templates/ms-style, with templates/ms-style always last.
+$templateOrderCases = @(
+    @{
+        Name = 'ms-style-without-modern'
+        Initial = @('default', 'modern', 'templates/ms-style')
+        CreateModernMain = $false
+        Expected = @('default', 'modern', 'templates/modern', 'templates/ms-style')
+    }
+    @{
+        Name = 'ms-style-before-existing-modern'
+        Initial = @('default', 'modern', 'templates/ms-style', 'templates/modern')
+        CreateModernMain = $true
+        Expected = @('default', 'modern', 'templates/modern', 'templates/ms-style')
+    }
+)
+foreach ($case in $templateOrderCases) {
+    $caseRoot = Join-Path $work ("template-order-" + $case.Name)
+    $null = [IO.Directory]::CreateDirectory($caseRoot)
+    $caseConfig = Join-Path $caseRoot 'docfx.json'
+    [IO.File]::WriteAllText($caseConfig, (@{ build = @{ template = $case.Initial } } | ConvertTo-Json -Depth 5 -Compress))
+    if ($case.CreateModernMain) {
+        $modernPublic = Join-Path $caseRoot 'templates/modern/public'
+        $null = [IO.Directory]::CreateDirectory($modernPublic)
+        [IO.File]::WriteAllText((Join-Path $modernPublic 'main.js'), "export default {};`n")
+    }
+    $inventoryOverride = @{ config = $caseConfig; examples = @() } | ConvertTo-Json -Depth 5
+    try {
+        $null = & $generator -RepoRoot $caseRoot
+        if ($LASTEXITCODE -ne 0) { throw "Generator failed for template-order case $($case.Name)." }
+        $actualTemplates = @((Get-Content $caseConfig -Raw | ConvertFrom-Json).build.template)
+        if (($actualTemplates -join ',') -cne ($case.Expected -join ',')) {
+            throw "Template order case $($case.Name) expected [$($case.Expected -join ', ')], got [$($actualTemplates -join ', ')]."
+        }
+    } finally { $inventoryOverride = $null }
+}
+
+Write-Host "Run-action delivery passed: paired console, test, dependency-backed test and repository test; exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"

@@ -108,7 +108,7 @@ Use this path when the user invokes the skill without naming a specific API or n
 17. Audit related namespace pages together so fixes are consistent across the public API family.
 18. Add or repair `Extension Members` tables for namespaces with public extension methods. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column. If `EXTENSION_METHOD_MISSING` or `EXTENSION_METHOD_SIGNATURE_MISSING` appears after `EXTENSION_SECTION_MISSING` drops, treat that as the same namespace-layer queue getting more specific: finish table contents and signature fidelity before resuming net-new examples.
 19. Finish the namespace-layer pass across the active queue before net-new type/example authoring: repair namespace prose, availability/start-here guidance, and `NAMESPACE_EMBEDDED_OVERWRITE_SECTION` ownership problems, moving misplaced type/member examples into readable type-targeted files under `.docfx/api/types/` when needed. Rerun the fast validator until namespace-layer diagnostics are gone or only example-driven work remains.
-20. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, availability notes, or exact ownership evidence. For colliding type names, target every exact type UID. For colliding extension containers, target the exact declaring-type or method UID and use receiver syntax. Put a short human fly-in before every C# fence; when an example is large, multi-block, or setup-heavy, make the lead explain the setup/prerequisite and workflow outcome. Keep extension-container openings focused on the caller outcome and receiver scenario rather than C# declaration trivia unless a DocFX limitation genuinely needs a note.
+20. Add or repair overwrite content under `.docfx/api/types/` for public API items that need examples, remarks, corrected summaries, or exact ownership evidence. Never place `[!INCLUDE ...]` availability includes on type pages (`.docfx/api/types/*`) or after examples — under `.docfx/api/`, includes are only allowed in `.docfx/api/namespaces/*`, and Markdown edits must stay strictly under `.docfx/api/`. For colliding type names, target every exact type UID. For colliding extension containers, target the exact declaring-type or method UID and use receiver syntax. Put a short human fly-in before every C# fence; when an example is large, multi-block, or setup-heavy, make the lead explain the setup/prerequisite and workflow outcome. Keep extension-container openings focused on the caller outcome and receiver scenario rather than C# declaration trivia unless a DocFX limitation genuinely needs a note.
 21. Create separate type-page overwrite files for public non-abstraction types that have no example yet, under `.docfx/api/types/{TypeUid}.md` in Codebelt repositories.
 22. Create explicit examples for public extension methods that still have none.
 23. Build or refresh the example inventory.
@@ -312,7 +312,7 @@ Remove the `Extension Members` section when the namespace has no public extensio
 
 Do not unwrap decorated receivers or flatten generic method names in this table. Keep signatures such as `IDecorator<Type>` and `As<T>` intact instead of rewriting them as `Type` or bare `As`.
 
-Namespace overview files stay single-UID and stop after the fly-in, availability, related links, and optional `Extension Members` table. Do not append secondary `uid:` / `example:` mappings there; put extension-method examples on the declaring extension class page or another readable type-targeted file under `.docfx/api/types/`.
+Namespace overview files stay single-UID and stop after the fly-in, availability, related links, and optional `Extension Members` table. Do not append secondary `uid:` / `example:` mappings there; put extension-method examples on the declaring extension class page or another readable type-targeted file under `.docfx/api/types/`. Under `.docfx/api/`, `[!INCLUDE ...]` directives (including availability includes) are only allowed in `.docfx/api/namespaces/*` — never in `.docfx/api/types/*` or after examples — and Markdown edits must stay under `.docfx/api/`.
 
 ## Type example shape
 
@@ -343,7 +343,7 @@ public class WidgetFactory
 ```
 ````
 
-Do not include a manual `### Examples` heading in the body. DocFX renders that heading automatically for the `example` property. Unbound fences retain the namespace/type or labelled `// Program.cs` structure rules. Project-bound source files and clearly contextualized excerpts use their maintained compilation context; see [example architecture](example-architecture.md). Multiple fences may describe one scenario, with each file's role and project identified.
+Do not include a manual `## Example`, `### Example`, `## Examples`, or `### Examples` heading in the body when front matter maps `example` (`example: *content`, `example: [*content]`, or `example:\n- *content`). DocFX renders the `Examples` heading automatically for the `example` property, and `docfx.cs` rejects manual `Example`/`Examples` headings inside `example:`-mapped bodies with `EXAMPLE_REDUNDANT_HEADING`. Place only the complementary explanatory prose directly before the C# fence. Unbound fences retain the namespace/type or labelled `// Program.cs` structure rules. Project-bound source files and clearly contextualized excerpts use their maintained compilation context; see [example architecture](example-architecture.md). Multiple fences may describe one scenario, with each file's role and project identified.
 
 ## Extension method example template
 
@@ -404,6 +404,7 @@ Before completing documentation work, verify:
 - [ ] Every inventory row names exact evidence paths and a consumer task; generated metadata and the target overwrite file are not the sole evidence.
 - [ ] The example inventory maps each required public type and extension method to its example file, UID, source evidence, and chosen scenario.
 - [ ] Every example has a human-written fly-in immediately before the C# fence; advanced examples explain setup, prerequisites, or workflow outcome before the code.
+- [ ] Overwrite sections mapped via `example:` (`example: *content`, `example: [*content]`, or `example:\n- *content`) contain no manual `## Example`, `### Example`, or `### Examples` heading in the body (`EXAMPLE_REDUNDANT_HEADING`); complementary explanatory prose sits directly before the C# fence.
 - [ ] Examples show a coherent consumer workflow, use related public types when helpful, and avoid placeholder-only `Consumer`/`MyNamespace` shells when a domain name is available.
 - [ ] No example is reflection-only, metadata-only, duplicated by UID, or built from `DocumentedTypeExample`, `DocumentedExtensionExample`, or generic `Describe()` scaffolding.
 - [ ] The C# fence itself uses the documented type or invokes the documented extension method; prose, comments, and strings are not counted as usage.
@@ -417,7 +418,8 @@ Before completing documentation work, verify:
 - [ ] No generated C# example derives from a generic base type without concrete type arguments.
 - [ ] No generated C# example calls members that are not confirmed on the public API surface.
 - [ ] Where no compile-valid example could be generated, the overwrite file contains the appropriate omission comment, and that comment is not being misused as a diagnostic suppressor or skip waiver.
-- [ ] Availability is included or explicitly stated and matches actual target frameworks and conditions.
+- [ ] Availability is included (via `[!INCLUDE ...]` only on namespace pages under `.docfx/api/namespaces/*` — never on type pages or after examples) or explicitly stated and matches actual target frameworks and conditions.
+- [ ] All Markdown edits remained strictly under `.docfx/api/` (no Markdown files outside `.docfx/api/` were modified).
 - [ ] Existing manual edits are preserved, stale documentation is corrected, and no contradictory documentation remains.
 - [ ] `git diff` for touched documentation paths was inspected before final verification.
 - [ ] `dotnet build` has been run, using `-p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`, or the failure is reported.

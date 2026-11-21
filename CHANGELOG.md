@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-11-21
+
+This is a minor release that adds a standalone run-action materializer to `dotnet-docfx-digest`, so the generated Native and Docker wrapper scripts are rebuilt at DocFX build time from a committed manifest instead of being committed themselves, and it adds validator gates for API include placement and redundant example headings, together with fixes to run-action toolbar fallback and sample build parallelism.
+
+### Added
+
+- `dotnet-docfx-digest` standalone `BuildRunActions.ps1` materializer that rebuilds the Native and Docker run-action scripts from `run-actions.manifest.json` beside `docfx.json` without requiring an installed skill, skips cleanly when the default manifest is absent, and removes generated scripts and emptied example directories that are no longer in the manifest,
+- `dotnet-docfx-digest` `generate-run-actions.ps1` emission of `run-actions.manifest.json` and `BuildRunActions.ps1`, wiring of `BuildRunActions.ps1` before the Docker build in an existing `BuildDocfxImage.ps1` with removal of the generated `run-actions/` directory in `finally`, and a `templates/modern` fallback template that keeps `templates/ms-style` last in `build.template`,
+- `dotnet-docfx-digest` DocFX verification build step that materializes run actions in its isolated temp workspace when a manifest and `BuildRunActions.ps1` are present, failing verification with the script output if materialization fails,
+- `dotnet-docfx-digest` validator diagnostic `API_INCLUDE_OUTSIDE_NAMESPACES` for `[!INCLUDE ...]` directives under `.docfx/api/` outside `api/namespaces/`,
+- `dotnet-docfx-digest` validator diagnostic `EXAMPLE_REDUNDANT_HEADING` for manual `Example`/`Examples` headings inside `example:`-mapped overwrite bodies, together with recognition of the `example: [*content]` flow-sequence form.
+
+### Changed
+
+- `dotnet-docfx-digest` run-action guidance now recommends committing the settings, manifest, materializer, and Markdown associations while ignoring the generated `run-actions/` directory, instead of committing that directory as documentation source, and the generator no longer writes `run-actions/` or `run-actions/index.json` into the working tree,
+- `dotnet-docfx-digest` fast validator accepts `run-actions.manifest.json` and `BuildRunActions.ps1` as run-action deliverables,
+- `dotnet-docfx-digest` guidance limits availability includes to namespace overview pages under `.docfx/api/namespaces/*` instead of type pages and after examples, and the README quality-gate entry describes the `example:` mapping forms and the heading gate.
+
+### Fixed
+
+- `dotnet-docfx-digest` run-action toolbar re-shows the original run links when copying or previewing a script fails, so the script remains reachable,
+- `dotnet-docfx-digest` sample solution builds run with a single MSBuild node when a target framework is passed, avoiding concurrent builds of the same projects against shared `bin`/`obj` paths.
+
 ## [0.13.0] - 2026-11-20
 
 This is a minor release that adds the `dotnet-csrun` skill for executable C# evidence, adds source-bound samples, contextual source references, repository-backed one-shot examples, and opt-in run actions to `dotnet-docfx-digest`, changes its example authoring to match the execution context, updates the .NET scaffolds to resolve current compatible test packages across major lines, and fixes sample compile attribution and comma-separated `-Skill` lists in the sync script.
@@ -833,6 +856,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.13.1]: https://github.com/codebeltnet/agentic/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/codebeltnet/agentic/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/codebeltnet/agentic/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/codebeltnet/agentic/compare/v0.11.2...v0.12.0

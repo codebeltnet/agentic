@@ -40,7 +40,7 @@ function previewScript(script, label) {
   dialog.showModal();
 }
 
-function createAction(link, report) {
+function createAction(link, report, onCopyFailure) {
   const transport = link.dataset.transport;
   const label = transport === 'native' ? 'Native' : 'Docker';
   const name = 'Copy ' + label + ' run script';
@@ -97,21 +97,22 @@ function createAction(link, report) {
         report(label + ' script copied.', true);
       }
     } catch {
+      if (!preview) onCopyFailure?.();
       report('Could not ' + (preview ? 'preview ' : 'copy ') + label + ' script.');
     } finally {
       pending = false;
     }
   }
 
-  button.addEventListener('click', event => act(event.shiftKey));
+  button.addEventListener('click', event => { void act(event.shiftKey); });
   button.addEventListener('contextmenu', event => {
     event.preventDefault();
-    act(true);
+    void act(true);
   });
   button.addEventListener('keydown', event => {
     if (event.shiftKey && event.key === 'Enter') {
       event.preventDefault();
-      act(true);
+      void act(true);
     }
   });
   return button;
@@ -144,7 +145,7 @@ export function enhanceRunActions(root = document) {
 }
 
 function attachToolbar(pre, links, assets) {
-  if (links.hasAttribute('data-enhanced')) return;
+  if ('enhanced' in links.dataset) return;
   const toolbar = document.createElement('span');
   toolbar.className = 'docfx-run-toolbar';
   toolbar.setAttribute('role', 'group');
@@ -159,7 +160,7 @@ function attachToolbar(pre, links, assets) {
     status.textContent = message;
     if (message) clearStatus = setTimeout(() => { status.textContent = ''; }, 3000);
   }
-  toolbar.append(...assets.map(link => createAction(link, report)));
+  toolbar.append(...assets.map(link => createAction(link, report, () => { links.hidden = false; })));
   // Keep our nodes before DocFX's Lit render range, which replaces the original anchor on copy.
   pre.prepend(toolbar, status);
   pre.classList.add('docfx-runnable');
