@@ -117,6 +117,7 @@ internal static class DocfxValidator
                 var platformReferences = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
                     .Where(p => Path.GetFileName(p).StartsWith("System.", StringComparison.Ordinal) || Path.GetFileName(p) is "netstandard.dll" or "mscorlib.dll")
                     .Select(p => MetadataReference.CreateFromFile(p)).ToArray();
+                var associatedPages = files.Where(file => workspace.ReadMarkdown(file).Contains("<!-- docfx-run-actions:start -->", StringComparison.Ordinal));
                 var examples = files.SelectMany(file =>
                 {
                     var sections = ExtractOverwriteSections(file);
@@ -152,7 +153,7 @@ internal static class DocfxValidator
                         .Select(g => g.Properties.GetValueOrDefault("TargetFramework")).Where(f => f is not null).Distinct(),
                     BuildInputs = RunActionProjectInputs(root, p.Path)
                 });
-                Console.WriteLine(JsonSerializer.Serialize(new { config, examples, projects = projectEvidence, warnings = report.Warnings }, JsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(new { config, examples, associatedPages, projects = projectEvidence, warnings = report.Warnings }, JsonOptions));
                 return 0;
             }
             if (options.WriteOverwriteRequestPath is not null)

@@ -57,6 +57,7 @@ $configPath = $inventory.config
 $workspace = Split-Path $configPath -Parent
 Assert-RepositoryPath $configPath
 $manifestPath = Join-Path $workspace 'run-actions.manifest.json'
+$evidenceDirectory = Join-Path ([IO.Path]::GetTempPath()) ('docfx-run-verification-' + (Hash $configPath))
 $oldManifestById = @{}
 if (Test-Path -LiteralPath $manifestPath) {
     $oldManifestDoc = Get-Content $manifestPath -Raw | ConvertFrom-Json
@@ -71,7 +72,7 @@ $toolHash = Hash ((Get-Content $PSCommandPath -Raw) + (Get-Content (Join-Path $P
 $results = [Collections.Generic.List[object]]::new()
 $manifestEntries = [Collections.Generic.List[object]]::new()
 $associations = [hashtable]::new([StringComparer]::Ordinal)
-$pages = @(@($inventory.examples.file) | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
+$pages = @((@($inventory.examples.file) + @($inventory.associatedPages)) | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
 foreach ($page in $pages) { Assert-RepositoryPath $page }
 $recipeBySource = [hashtable]::new([StringComparer]::Ordinal)
 foreach ($recipe in $recipes) {
@@ -150,17 +151,40 @@ foreach ($example in $inventory.examples) {
             $tokens=$null; $errors=$null
             $null = [Management.Automation.Language.Parser]::ParseInput($script,[ref]$tokens,[ref]$errors)
             if ($errors.Count) { throw "Generated $transport script has syntax errors: $errors" }
-            $result["${transport}Sha256"] = Hash $script
+            $scriptHash = Hash $script
+            $result["${transport}Sha256"] = $scriptHash
+            $evidencePath = Join-Path $evidenceDirectory "$id-$transport-$scriptHash.json"
             if ($Verify -eq 'Both' -or $Verify -eq $transport) {
                 $tempScript = Join-Path ([IO.Path]::GetTempPath()) ("docfx-run-$id-$transport-" + [guid]::NewGuid().ToString('N') + '.ps1')
                 $log = Join-Path ([IO.Path]::GetTempPath()) ("docfx-run-$id-$transport-" + [guid]::NewGuid().ToString('N') + '.log')
                 try {
                     [IO.File]::WriteAllText($tempScript, $script, [Text.UTF8Encoding]::new($false))
+                    [IO.File]::WriteAllText($log, '')
                     & pwsh -NoProfile -NonInteractive -File $tempScript *> $log
                     $result[$transport] = if ($LASTEXITCODE -eq 0) { 'Verified' } else { 'Failed' }
                     $result["${transport}Evidence"] = $log
+                    $null = [IO.Directory]::CreateDirectory($evidenceDirectory)
+                    $pendingEvidence = "$evidencePath.$([guid]::NewGuid().ToString('N')).tmp"
+                    try {
+                        $evidence = @{ state = $result[$transport]; log = $log }
+                        [IO.File]::WriteAllText($pendingEvidence, ($evidence | ConvertTo-Json -Compress))
+                        [IO.File]::Move($pendingEvidence, $evidencePath, $true)
+                    } finally {
+                        [IO.File]::Delete($pendingEvidence)
+                    }
                 } finally {
                     if (Test-Path -LiteralPath $tempScript) { Remove-Item -LiteralPath $tempScript -Force }
+                }
+            } elseif (Test-Path -LiteralPath $evidencePath -PathType Leaf) {
+                try {
+                    $evidence = [IO.File]::ReadAllText($evidencePath) | ConvertFrom-Json
+                    if ($evidence.state -in @('Verified', 'Failed') -and
+                        $evidence.log -and (Test-Path -LiteralPath $evidence.log -PathType Leaf)) {
+                        $result[$transport] = $evidence.state
+                        $result["${transport}Evidence"] = $evidence.log
+                    }
+                } catch {
+                    Write-Verbose "Could not read $transport verification evidence for $id"
                 }
             }
         }
@@ -209,7 +233,7 @@ foreach ($page in $pages) {
     if (-not (Test-Path -LiteralPath $page)) { continue }
     $original = [IO.File]::ReadAllText($page)
     $edits = [Collections.Generic.List[object]]::new()
-    foreach ($block in [regex]::Matches($original, '(?s)(?:\r\n|\n|\r){2}<!-- docfx-run-actions:start -->.*?<!-- docfx-run-actions:end -->')) {
+    foreach ($block in [regex]::Matches($original, '(?s)(?:\A|(?:\r\n|\n|\r){1,2})<!-- docfx-run-actions:start -->.*?<!-- docfx-run-actions:end -->')) {
         $edits.Add(@{ Offset = $block.Index; Length = $block.Length; Text = '' })
     }
     if ($associations.ContainsKey($page)) {
@@ -329,13 +353,28 @@ function Update-BuildDocfxImageScript([string] $Original) {
         ) -join $nl) + $trailingNewline
     }
 
-    $hasInvoke = $Original.IndexOf('BuildRunActions.ps1', [StringComparison]::OrdinalIgnoreCase) -ge 0
-    $hasCleanup = $Original -match "(?i)['""]run-actions['""]"
-    if ($hasInvoke -and $hasCleanup) { return $Original }
-
     $tokens = $null; $parseErrors = $null
     $ast = [Management.Automation.Language.Parser]::ParseInput($Original, [ref]$tokens, [ref]$parseErrors)
     if ($parseErrors.Count) { return $Original }
+
+    $hasInvoke = $null -ne $ast.Find({
+        param($node)
+        if ($node -isnot [Management.Automation.Language.CommandAst]) { return $false }
+        if ($node.GetCommandName() -match '(^|[\\/])BuildRunActions\.ps1$') { return $true }
+        if ($node.InvocationOperator -notin @('Ampersand', 'Dot')) { return $false }
+        $target = $node.CommandElements[0]
+        if ($target -is [Management.Automation.Language.ParenExpressionAst] -and $target.Pipeline.PipelineElements.Count -eq 1) {
+            $join = $target.Pipeline.PipelineElements[0]
+            if ($join -is [Management.Automation.Language.CommandAst] -and $join.GetCommandName() -eq 'Join-Path') {
+                return $null -ne ($join.CommandElements | Where-Object {
+                    $_ -is [Management.Automation.Language.StringConstantExpressionAst] -and $_.Value -ieq 'BuildRunActions.ps1'
+                } | Select-Object -First 1)
+            }
+        }
+        return $target.Extent.Text -match '\A"\$(?:PSScriptRoot|\{PSScriptRoot\})[\\/]BuildRunActions\.ps1"\z'
+    }, $true)
+    $hasCleanup = $Original -match "(?i)['""]run-actions['""]"
+    if ($hasInvoke -and $hasCleanup) { return $Original }
 
     $dockerCommands = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] -and (Test-DockerBuildCommand $n) }, $true))
     if (-not $dockerCommands.Count) { return $Original }

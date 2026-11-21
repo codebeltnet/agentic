@@ -230,6 +230,11 @@ if ((Get-FileHash $toolbarModule).Hash -cne $toolbarHash -or
     @($refresh | Where-Object status -eq 'unchanged').Count -ne 5) {
     throw 'Refreshing a stale toolbar must preserve the manifest payloads.'
 }
+$refreshEntry = $refresh | Where-Object id -eq $entry.id
+if ($refreshEntry.native -ne 'Verified' -or $refreshEntry.docker -ne 'Unverified' -or
+    $refreshEntry.nativeEvidence -cne $nativeOnlyEntry.nativeEvidence -or -not (Test-Path -LiteralPath $refreshEntry.nativeEvidence)) {
+    throw 'Toolbar refresh lost independent verification evidence.'
+}
 foreach ($script in Get-ChildItem "$work/run-actions" -Filter '*.ps1' -Recurse -File) {
     if ($before[$script.FullName][0] -cne (Get-FileHash $script.FullName).Hash -or
         $before[$script.FullName][1] -ne $script.LastWriteTimeUtc.Ticks) {
@@ -277,9 +282,11 @@ if (-not (Test-Path "$work/run-actions.manifest.json") -or -not (Test-Path "$wor
     throw 'Generator must emit run-actions.manifest.json and BuildRunActions.ps1 beside docfx.json.'
 }
 $expectedHashes = @{}
-foreach ($psFile in Get-ChildItem -Path "$work/run-actions" -Recurse -Filter '*.ps1') {
-    $rel = [IO.Path]::GetRelativePath("$work/run-actions", $psFile.FullName).Replace('\', '/')
-    $expectedHashes[$rel] = (Get-FileHash -LiteralPath $psFile.FullName -Algorithm SHA256).Hash
+foreach ($example in $limitedAgain) {
+    foreach ($transport in @('native', 'docker')) {
+        $hash = $example."${transport}Sha256"
+        if ($hash) { $expectedHashes["$($example.id)/$transport.ps1"] = $hash }
+    }
 }
 if (-not $expectedHashes.ContainsKey("$($resolved.id)/native.ps1") -or
     -not $expectedHashes.ContainsKey("$($resolved.id)/docker.ps1") -or
@@ -343,12 +350,31 @@ if ($LASTEXITCODE -ne 0 -or (Test-Path (Join-Path $noManifestDir 'run-actions'))
     throw 'BuildRunActions.ps1 must no-op cleanly when no default run-actions.manifest.json exists.'
 }
 
+# A changed script under the same example ID must discard that transport's verification.
+$retargeted = (& $generator -RepoRoot $work -Framework net9.0) | ConvertFrom-Json
+$verifiedConsole = $nativeOnly | Where-Object { $_.file -like '*console.md' }
+$retargetedConsole = $retargeted | Where-Object id -eq $verifiedConsole.id
+if (-not $retargetedConsole.nativeSha256 -or $retargetedConsole.nativeSha256 -ceq $verifiedConsole.nativeSha256 -or
+    $retargetedConsole.native -ne 'Unverified' -or $retargetedConsole.nativeEvidence) {
+    throw 'A changed Native script reused stale verification evidence.'
+}
+
 # Mutating the principal source invalidates its recipe and removes both associations and manifest entries.
 [IO.File]::WriteAllText("$work/docs/integration.md", $updated.Replace('Bootstrapper Minimal Worker', 'Changed assertion'))
 $third = (& $generator -RepoRoot $work) | ConvertFrom-Json
 $global:LASTEXITCODE = 0
 & "$work/BuildRunActions.ps1" | Out-Null
 if ((Test-Path "$work/run-actions/$($entry.id)/native.ps1") -or (Get-Content "$work/docs/integration.md" -Raw).Contains('data-example-id')) { throw 'Stale recipe/assets survived source change.' }
+
+# Deleting the only fence must remove its association even when the page no longer has inventory entries.
+$consolePage = "$work/docs/console.md"
+$consoleWithActions = [IO.File]::ReadAllText($consolePage)
+[IO.File]::WriteAllText($consolePage, [regex]::Replace($consoleWithActions, '(?s)\x60{3}csharp.*?\x60{3}', ''))
+$withoutConsole = (& $generator -RepoRoot $work) | ConvertFrom-Json
+if (($withoutConsole | Where-Object file -eq $consolePage) -or [IO.File]::ReadAllText($consolePage).Contains('docfx-run-actions:start')) {
+    throw 'Removing the last C# fence left a stale association.'
+}
+[IO.File]::WriteAllText($consolePage, $consoleWithActions)
 
 # A legacy hidden harness is a failed recipe, while an intrinsic limitation has no assets.
 $invalidRecipe = $packageRecipe | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
@@ -435,11 +461,12 @@ $buildImageVariants = @(
     }
     @{
         Name = 'customized-flat'
-        Input = "param([string] `$Registry = 'ghcr.io/example')`n`$version = minver -i -t v -v w`nWrite-Host `"Building `$Registry/docs:`$version`"`ndocfx metadata docfx.json`ndocker buildx build -t `"`$Registry/docs:`$version`" -f Dockerfile.docfx .`nget-childItem -recurse -path api -include *.yml, .manifest | remove-item`n"
+        Input = "param([string] `$Registry = 'ghcr.io/example')`n`$version = minver -i -t v -v w`nWrite-Host `"Building `$Registry/docs:`$version`"`n# & (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')`ndocfx metadata docfx.json`ndocker buildx build -t `"`$Registry/docs:`$version`" -f Dockerfile.docfx .`nget-childItem -recurse -path api -include *.yml, .manifest | remove-item`n"
         Expected = @(
             "param([string] `$Registry = 'ghcr.io/example')"
             '$version = minver -i -t v -v w'
             'Write-Host "Building $Registry/docs:$version"'
+            "# & (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
             'docfx metadata docfx.json'
             "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
             'try {'
