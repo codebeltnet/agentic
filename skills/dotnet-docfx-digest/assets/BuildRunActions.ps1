@@ -233,6 +233,7 @@ $doc = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json -AsHashtab
 if ($doc.schemaVersion -ne 1) { throw "Unsupported run-actions manifest schemaVersion: $($doc.schemaVersion)" }
 $examples = @($doc.examples)
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
+$expectedScripts = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $written = 0
 
 foreach ($example in $examples) {
@@ -257,7 +258,25 @@ foreach ($example in $examples) {
             $null = [IO.Directory]::CreateDirectory($dir)
             [IO.File]::WriteAllText($path, $scriptText, $utf8NoBom)
         }
+        $null = $expectedScripts.Add("$id/$transport.ps1")
         $written++
+    }
+}
+
+if (Test-Path -LiteralPath $OutputRoot -PathType Container) {
+    foreach ($exampleDir in @(Get-ChildItem -LiteralPath $OutputRoot -Directory)) {
+        if ($exampleDir.Name -cnotmatch '^[a-f0-9]{24}$' -or
+            ($exampleDir.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+        foreach ($name in @('native.ps1', 'docker.ps1')) {
+            if ($expectedScripts.Contains("$($exampleDir.Name)/$name")) { continue }
+            $stalePath = Join-Path $exampleDir.FullName $name
+            if (Test-Path -LiteralPath $stalePath -PathType Leaf) {
+                Remove-Item -LiteralPath $stalePath -Force
+            }
+        }
+        if (-not @(Get-ChildItem -LiteralPath $exampleDir.FullName -Force).Count) {
+            Remove-Item -LiteralPath $exampleDir.FullName
+        }
     }
 }
 

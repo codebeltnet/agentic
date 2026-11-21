@@ -243,6 +243,80 @@ if ($limitedEntry.coverage -ne 'Partially supported' -or $limitedEntry.docker -n
 if ((Get-Content "$work/docs/integration.md" -Raw).Contains('View Docker Script')) { throw 'Unsupported Docker still has a control.' }
 $limitedAgain = (& $generator -RepoRoot $work) | ConvertFrom-Json
 if (($limitedAgain | Where-Object id -eq $entry.id).status -ne 'unchanged') { throw 'Single-transport cache requires the unsupported script.' }
+
+# Standalone BuildRunActions.ps1 materializes byte-identical native/docker scripts from run-actions.manifest.json
+# (including recipe-provided standalone manifests with custom package pins and single-transport examples) and prunes stale generated scripts.
+if (-not (Test-Path "$work/run-actions.manifest.json") -or -not (Test-Path "$work/BuildRunActions.ps1")) {
+    throw 'Generator must emit run-actions.manifest.json and BuildRunActions.ps1 beside docfx.json.'
+}
+$expectedHashes = @{}
+foreach ($psFile in Get-ChildItem -Path "$work/run-actions" -Recurse -Filter '*.ps1') {
+    $rel = [IO.Path]::GetRelativePath("$work/run-actions", $psFile.FullName).Replace('\', '/')
+    $expectedHashes[$rel] = (Get-FileHash -LiteralPath $psFile.FullName -Algorithm SHA256).Hash
+}
+if (-not $expectedHashes.ContainsKey("$($resolved.id)/native.ps1") -or
+    -not $expectedHashes.ContainsKey("$($resolved.id)/docker.ps1") -or
+    -not $expectedHashes.ContainsKey("$($entry.id)/native.ps1") -or
+    $expectedHashes.ContainsKey("$($entry.id)/docker.ps1")) {
+    throw 'Expected recipe-backed standalone scripts and single-transport repository script before testing standalone materializer.'
+}
+$assetsOnlyPage = "$work/docs/console.md"
+$pageBefore = [IO.File]::ReadAllText($assetsOnlyPage)
+$configBefore = [IO.File]::ReadAllText("$work/docfx.json")
+Get-ChildItem -LiteralPath "$work/run-actions" -Directory | Remove-Item -Recurse -Force
+$staleExampleDir = "$work/run-actions/deadbeefdeadbeefdeadbeef"
+$null = [IO.Directory]::CreateDirectory($staleExampleDir)
+[IO.File]::WriteAllText("$staleExampleDir/native.ps1", '# stale example native')
+[IO.File]::WriteAllText("$staleExampleDir/docker.ps1", '# stale example docker')
+$staleTransportDir = "$work/run-actions/$($entry.id)"
+$null = [IO.Directory]::CreateDirectory($staleTransportDir)
+$staleTransportPath = "$staleTransportDir/docker.ps1"
+[IO.File]::WriteAllText($staleTransportPath, '# stale transport')
+$unrelatedRootFile = "$work/run-actions/unrelated.txt"
+[IO.File]::WriteAllText($unrelatedRootFile, 'keep root')
+$unrelatedDir = "$work/run-actions/custom"
+$null = [IO.Directory]::CreateDirectory($unrelatedDir)
+$unrelatedDirScript = "$unrelatedDir/native.ps1"
+[IO.File]::WriteAllText($unrelatedDirScript, '# unrelated script')
+$mixedExampleDir = "$work/run-actions/0123456789abcdef01234567"
+$null = [IO.Directory]::CreateDirectory($mixedExampleDir)
+[IO.File]::WriteAllText("$mixedExampleDir/native.ps1", '# stale mixed native')
+$mixedKeepFile = "$mixedExampleDir/keep.txt"
+[IO.File]::WriteAllText($mixedKeepFile, 'keep inside example dir')
+$LASTEXITCODE = 0
+& "$work/BuildRunActions.ps1" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Standalone BuildRunActions.ps1 failed.' }
+if ((Test-Path -LiteralPath $staleExampleDir) -or
+    (Test-Path -LiteralPath $staleTransportPath) -or
+    (Test-Path -LiteralPath "$mixedExampleDir/native.ps1")) {
+    throw 'BuildRunActions.ps1 left stale generated scripts or empty stale directories behind.'
+}
+if (-not (Test-Path -LiteralPath "$work/run-actions/index.json") -or
+    -not (Test-Path -LiteralPath $unrelatedRootFile) -or
+    -not (Test-Path -LiteralPath $unrelatedDirScript) -or
+    -not (Test-Path -LiteralPath $mixedKeepFile)) {
+    throw 'BuildRunActions.ps1 deleted unrelated files.'
+}
+Remove-Item -LiteralPath $unrelatedRootFile, $unrelatedDir, $mixedExampleDir -Recurse -Force
+$actualFiles = @(Get-ChildItem -Path "$work/run-actions" -Recurse -Filter '*.ps1')
+if ($actualFiles.Count -ne $expectedHashes.Count) { throw "BuildRunActions.ps1 produced $($actualFiles.Count) scripts; expected $($expectedHashes.Count)." }
+foreach ($psFile in $actualFiles) {
+    $rel = [IO.Path]::GetRelativePath("$work/run-actions", $psFile.FullName).Replace('\', '/')
+    $actualHash = (Get-FileHash -LiteralPath $psFile.FullName -Algorithm SHA256).Hash
+    if ($expectedHashes[$rel] -cne $actualHash) { throw "BuildRunActions.ps1 drifted from generator output for $rel." }
+}
+if ([IO.File]::ReadAllText($assetsOnlyPage) -cne $pageBefore -or [IO.File]::ReadAllText("$work/docfx.json") -cne $configBefore) {
+    throw 'BuildRunActions.ps1 must not modify Markdown or docfx.json.'
+}
+$noManifestDir = Join-Path $work 'no-manifest'
+$null = [IO.Directory]::CreateDirectory($noManifestDir)
+Copy-Item -LiteralPath "$work/BuildRunActions.ps1" -Destination (Join-Path $noManifestDir 'BuildRunActions.ps1')
+$LASTEXITCODE = 0
+& (Join-Path $noManifestDir 'BuildRunActions.ps1') | Out-Null
+if ($LASTEXITCODE -ne 0 -or (Test-Path (Join-Path $noManifestDir 'run-actions'))) {
+    throw 'BuildRunActions.ps1 must no-op cleanly when no default run-actions.manifest.json exists.'
+}
+
 # Mutating the principal source invalidates its recipe and removes both associations and owned scripts.
 [IO.File]::WriteAllText("$work/docs/integration.md", $updated.Replace('Bootstrapper Minimal Worker', 'Changed assertion'))
 $third = (& $generator -RepoRoot $work) | ConvertFrom-Json
@@ -287,39 +361,5 @@ try {
     }
     if ([IO.File]::ReadAllText($externalPage) -cne $console) { throw 'Rejected inventory changed the external page.' }
 } finally { $inventoryOverride = $null }
-
-# Standalone BuildRunActions.ps1 materializes byte-identical native/docker scripts from run-actions.manifest.json with no external dependencies.
-if (-not (Test-Path "$work/run-actions.manifest.json") -or -not (Test-Path "$work/BuildRunActions.ps1")) {
-    throw 'Generator must emit run-actions.manifest.json and BuildRunActions.ps1 beside docfx.json.'
-}
-$expectedHashes = @{}
-foreach ($psFile in Get-ChildItem -Path "$work/run-actions" -Recurse -Filter '*.ps1') {
-    $rel = [IO.Path]::GetRelativePath("$work/run-actions", $psFile.FullName).Replace('\', '/')
-    $expectedHashes[$rel] = (Get-FileHash -LiteralPath $psFile.FullName -Algorithm SHA256).Hash
-}
-if (-not $expectedHashes.Count) { throw 'Expected generated run-action scripts before testing standalone materializer.' }
-$assetsOnlyPage = "$work/docs/console.md"
-$pageBefore = [IO.File]::ReadAllText($assetsOnlyPage)
-$configBefore = [IO.File]::ReadAllText("$work/docfx.json")
-Remove-Item -LiteralPath "$work/run-actions" -Recurse -Force
-& "$work/BuildRunActions.ps1" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Standalone BuildRunActions.ps1 failed.' }
-$actualFiles = @(Get-ChildItem -Path "$work/run-actions" -Recurse -Filter '*.ps1')
-if ($actualFiles.Count -ne $expectedHashes.Count) { throw "BuildRunActions.ps1 produced $($actualFiles.Count) scripts; expected $($expectedHashes.Count)." }
-foreach ($psFile in $actualFiles) {
-    $rel = [IO.Path]::GetRelativePath("$work/run-actions", $psFile.FullName).Replace('\', '/')
-    $actualHash = (Get-FileHash -LiteralPath $psFile.FullName -Algorithm SHA256).Hash
-    if ($expectedHashes[$rel] -cne $actualHash) { throw "BuildRunActions.ps1 drifted from generator output for $rel." }
-}
-if ([IO.File]::ReadAllText($assetsOnlyPage) -cne $pageBefore -or [IO.File]::ReadAllText("$work/docfx.json") -cne $configBefore) {
-    throw 'BuildRunActions.ps1 must not modify Markdown or docfx.json.'
-}
-$noManifestDir = Join-Path $work 'no-manifest'
-$null = [IO.Directory]::CreateDirectory($noManifestDir)
-Copy-Item -LiteralPath "$work/BuildRunActions.ps1" -Destination (Join-Path $noManifestDir 'BuildRunActions.ps1')
-& (Join-Path $noManifestDir 'BuildRunActions.ps1') | Out-Null
-if ($LASTEXITCODE -ne 0 -or (Test-Path (Join-Path $noManifestDir 'run-actions'))) {
-    throw 'BuildRunActions.ps1 must no-op cleanly when no default run-actions.manifest.json exists.'
-}
 
 Write-Host "Run-action delivery passed: paired console, test, dependency-backed test and repository test; exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"
