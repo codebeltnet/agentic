@@ -246,6 +246,69 @@ function Resolve-CsrunEngine {
     }
     $CacheDirectory = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($CacheDirectory))
     $currentOwner = if ($IsWindows) { [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } else { (& id -u).Trim() }
+    $windowsTrustedSids = if ($IsWindows) {
+        [Collections.Generic.HashSet[string]]::new(
+            [string[]]@(
+                $currentOwner,
+                [Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::LocalSystemSid, $null).Value,
+                [Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null).Value
+            ),
+            [StringComparer]::OrdinalIgnoreCase
+        )
+    } else { $null }
+    $windowsWriteMask = if ($IsWindows) {
+        [int64](
+            [Security.AccessControl.FileSystemRights]::WriteData -bor
+            [Security.AccessControl.FileSystemRights]::AppendData -bor
+            [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+            [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+            [Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+            [Security.AccessControl.FileSystemRights]::Delete -bor
+            [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+            [Security.AccessControl.FileSystemRights]::TakeOwnership
+        ) -bor [int64]0x10000000 -bor [int64]0x40000000
+    } else { [int64]0 }
+
+    function New-PrivateWindowsDirectorySecurity {
+        $ds = [Security.AccessControl.DirectorySecurity]::new()
+        $ds.SetAccessRuleProtection($true, $false)
+        $inherit = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+        $prop = [Security.AccessControl.PropagationFlags]::None
+        $full = [Security.AccessControl.FileSystemRights]::FullControl
+        $allow = [Security.AccessControl.AccessControlType]::Allow
+        foreach ($sidValue in $windowsTrustedSids) {
+            $sid = [Security.Principal.SecurityIdentifier]::new($sidValue)
+            $ds.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, $full, $inherit, $prop, $allow))
+        }
+        return $ds
+    }
+
+    function Set-PrivateWindowsFileAcl([string] $Path) {
+        $fs = [Security.AccessControl.FileSecurity]::new()
+        $fs.SetAccessRuleProtection($true, $false)
+        $full = [Security.AccessControl.FileSystemRights]::FullControl
+        $allow = [Security.AccessControl.AccessControlType]::Allow
+        foreach ($sidValue in $windowsTrustedSids) {
+            $sid = [Security.Principal.SecurityIdentifier]::new($sidValue)
+            $fs.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, $full, $allow))
+        }
+        [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($Path), $fs)
+    }
+
+    function Test-PrivateWindowsAcl([string] $Path) {
+        $acl = Get-Acl -LiteralPath $Path
+        if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $currentOwner) { return $false }
+        $rules = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])
+        foreach ($rule in $rules) {
+            if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+            $sid = $rule.IdentityReference.Value
+            if ($windowsTrustedSids.Contains($sid)) { continue }
+            if ($sid -eq 'S-1-3-0' -and ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+            $rights = [int64]$rule.FileSystemRights.value__
+            if (($rights -band $windowsWriteMask) -ne 0) { return $false }
+        }
+        return $true
+    }
 
     function Get-UnixItemMetadata([string] $Path) {
         $statArgs = if ($IsMacOS) { @('-f', '%u %l %p', $Path) } else { @('-c', '%u %h %f', '--', $Path) }
@@ -261,7 +324,7 @@ function Resolve-CsrunEngine {
         $linkProp = $item.PSObject.Properties['LinkType']
         if (($linkProp -and $linkProp.Value) -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
         if ($IsWindows) {
-            try { return (Get-Acl -LiteralPath $Path).GetOwner([Security.Principal.SecurityIdentifier]).Value -eq $currentOwner }
+            try { return (Test-PrivateWindowsAcl $Path) }
             catch { return $false }
         }
         $metadata = Get-UnixItemMetadata $Path
@@ -271,11 +334,19 @@ function Resolve-CsrunEngine {
     }
 
     if (-not (Get-Item -LiteralPath $CacheDirectory -Force -ErrorAction SilentlyContinue)) {
-        $null = [IO.Directory]::CreateDirectory($CacheDirectory)
-        if (-not $IsWindows) { & chmod 700 -- $CacheDirectory }
+        if ($IsWindows) {
+            $parentDir = [IO.Path]::GetDirectoryName($CacheDirectory)
+            if ($parentDir -and -not (Test-Path -LiteralPath $parentDir)) {
+                $null = [IO.Directory]::CreateDirectory($parentDir)
+            }
+            $null = [IO.FileSystemAclExtensions]::CreateDirectory((New-PrivateWindowsDirectorySecurity), $CacheDirectory)
+        } else {
+            $null = [IO.Directory]::CreateDirectory($CacheDirectory)
+            & chmod 700 -- $CacheDirectory
+        }
     }
     if (-not (Test-PrivateCachePath $CacheDirectory -Directory)) {
-        throw "csrun engine cache directory failed ownership or symlink checks: $CacheDirectory"
+        throw "csrun engine cache directory failed ownership, ACL, or symlink checks: $CacheDirectory"
     }
 
     $scriptPath = Join-Path $CacheDirectory 'csrun.ps1'
@@ -317,7 +388,7 @@ function Resolve-CsrunEngine {
                 fetchedUtc = $FetchedUtc.ToUniversalTime().ToString('O')
             } | ConvertTo-Json -Compress
             [IO.File]::WriteAllText($tmpMeta, $payload, $utf8NoBom)
-            if (-not $IsWindows) { & chmod 600 -- $tmpMeta }
+            if ($IsWindows) { Set-PrivateWindowsFileAcl $tmpMeta } else { & chmod 600 -- $tmpMeta }
             [IO.File]::Move($tmpMeta, $metaPath, $true)
         } finally {
             if (Test-Path -LiteralPath $tmpMeta) { Remove-Item -LiteralPath $tmpMeta -Force }
@@ -339,7 +410,7 @@ function Resolve-CsrunEngine {
 
     $tmpScript = $null
     try {
-        if (-not $IsWindows) { & chmod 600 -- $lockPath 2>$null }
+        if ($IsWindows) { Set-PrivateWindowsFileAcl $lockPath } else { & chmod 600 -- $lockPath 2>$null }
         $now = [DateTimeOffset]::UtcNow
         $cached = Read-VerifiedCache
         if ($cached -and -not $ForceRefresh -and $MaxAgeMinutes -gt 0 -and ($now - $cached.FetchedUtc).TotalMinutes -lt $MaxAgeMinutes) {
@@ -410,7 +481,7 @@ function Resolve-CsrunEngine {
             if ("sha256:$actualHash" -ne $asset.digest) {
                 throw "csrun asset checksum mismatch: $actualHash"
             }
-            if (-not $IsWindows) { & chmod 600 -- $tmpScript }
+            if ($IsWindows) { Set-PrivateWindowsFileAcl $tmpScript } else { & chmod 600 -- $tmpScript }
             [IO.File]::Move($tmpScript, $scriptPath, $true)
             $tmpScript = $null
         }
