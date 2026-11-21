@@ -6055,11 +6055,16 @@ internal static class DocfxValidator
         // Actual Csc arguments and native project terminal events establish context evidence.
         // ProjectImports=None keeps source/import archives out of the disposable binary log.
         var binaryLog = framework is null ? string.Empty : $" \"-bl:{Path.Combine(tempRoot, "samples.binlog")};ProjectImports=None\"";
+        // Passing -p:TargetFramework on a solution build causes MSBuild to evaluate direct solution
+        // projects with TargetFramework in global properties while ProjectReference edges strip it
+        // via GlobalPropertiesToRemove. With -m:>1, MSBuild schedules both instances concurrently
+        // against the same bin/obj paths (e.g. GenerateDepsFile IOException on *.deps.json).
+        var batchParallelism = framework is null ? parallelism : 1;
         return RunProcess("dotnet",
-            $"build \"{solutionPath}\" -c {configuration} --nologo -m:{parallelism}{signingProperty}{frameworkProperty}{contextIsolation}{binaryLog}",
+            $"build \"{solutionPath}\" -c {configuration} --nologo -m:{batchParallelism}{signingProperty}{frameworkProperty}{contextIsolation}{binaryLog}",
             tempRoot, permission: ProcessPermission.SampleCompile,
             progress: new ProcessProgress("sample compilation",
-                $"{workers.Count} sample project(s), {parallelism} runner(s)"));
+                $"{workers.Count} sample project(s), {batchParallelism} runner(s)"));
     }
 
     private static List<SampleProjectBuildEvidence> ReadSampleBuildEvidence(string path, out string? error)
