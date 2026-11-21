@@ -6949,7 +6949,7 @@ internal static class DocfxValidator
             if (config.RootElement.TryGetProperty("build", out var build) && build.TryGetProperty("template", out var templates) &&
                 templates.ValueKind == JsonValueKind.Array && templates.EnumerateArray().Any(t => t.ValueKind == JsonValueKind.String &&
                     (PathsEqual(candidate, Path.Combine(docfxWorkspace, t.GetString()!, "public", "run-actions.js")) ||
-                     (t.GetString() == "run-actions-template" && PathsEqual(candidate, Path.Combine(docfxWorkspace, "run-actions-template", "public", "main.js")))))) { return true; }
+                     (t.GetString() == "templates/modern" && PathsEqual(candidate, Path.Combine(docfxWorkspace, "templates/modern", "public", "main.js")))))) { return true; }
         }
 
         return IsKnownNamespaceMarkdown(candidate, docfxWorkspace, ws, knownNamespaces) ||

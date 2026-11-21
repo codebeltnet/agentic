@@ -249,9 +249,9 @@ foreach ($template in $templates) {
     if (Test-Path $candidate) { $main=$candidate }
 }
 if (-not $main) {
-    $main = Join-Path $workspace 'run-actions-template/public/main.js'
+    $main = Join-Path $workspace 'templates/modern/public/main.js'
     $null = Write-Changed $main "export default {};`n"
-    if ('run-actions-template' -notin $templates) { $config.build.template = $templates + @('run-actions-template') }
+    if ('templates/modern' -notin $templates) { $config.build.template = $templates + @('templates/modern') }
 }
 Assert-RepositoryPath $main
 $mainText = [IO.File]::ReadAllText($main)
