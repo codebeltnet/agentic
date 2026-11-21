@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ValidatorPath = (Join-Path $PSScriptRoot 'docfx.cs')
 )
 
@@ -2736,6 +2736,176 @@ public static class StockReport
     Write-Host 'DocFX application assembly architecture regression passed (real xUnit execution, CS0017, contexts and excerpts).'
 } finally {
     if (Test-Path $architecture) { Remove-Item -LiteralPath $architecture -Recurse -Force }
+}
+
+# Regression: YAML flow-sequence `example: [*content]` must be recognized as MappedToExample,
+# and manual Example/Examples headings inside any `example:`-mapped body must fail with EXAMPLE_REDUNDANT_HEADING.
+$headingWorkspace = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-redundant-heading-' + [guid]::NewGuid().ToString('N'))
+try {
+    Write-Utf8File (Join-Path $headingWorkspace 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+    Write-Utf8File (Join-Path $headingWorkspace 'src/Widgets/Widgets.csproj') $projectCsproj
+    Write-Utf8File (Join-Path $headingWorkspace 'src/Widgets/Spinner.cs') @'
+namespace Acme.Widgets;
+
+public sealed class Spinner
+{
+    public string Spin(string label) => $"Spinning: {label}";
+}
+'@
+    Write-Utf8File (Join-Path $headingWorkspace '.docfx/docfx.json') (New-DocfxJson @('src/Widgets/Widgets.csproj'))
+    Write-Utf8File (Join-Path $headingWorkspace '.docfx/api/namespaces/Acme.Widgets.md') @'
+---
+uid: Acme.Widgets
+summary: *content
+---
+The `Acme.Widgets` namespace helps console applications render deterministic spinner labels without duplicating status formatting. Use it when long-running tasks need clear progress text; start with `Spinner` to format and display each state.
+
+Availability: .NET 10.
+'@
+    $spinnerPage = Join-Path $headingWorkspace '.docfx/api/types/Acme.Widgets.Spinner.md'
+    $sampleCode = @'
+```csharp
+using System;
+using Acme.Widgets;
+
+namespace Acme.Samples;
+
+public sealed class ProgressPrinter
+{
+    public void Run()
+    {
+        var spinner = new Spinner();
+        Console.WriteLine(spinner.Spin("Indexing"));
+    }
+}
+```
+'@
+
+    # 1. Valid YAML flow sequence `example: [*content]` with complementary prose and no manual heading passes.
+    Write-Utf8File $spinnerPage @"
+---
+uid: Acme.Widgets.Spinner
+example: [*content]
+---
+The ``Spinner`` formats progress labels for command-line tools. The following example creates a spinner and prints the formatted status text to standard output:
+
+$sampleCode
+"@
+    $flowClean = Invoke-Validator -Workspace $headingWorkspace
+    Assert-NoDiagnostic $flowClean 'EXAMPLE_MISSING'
+    Assert-NoDiagnostic $flowClean 'EXAMPLE_REDUNDANT_HEADING'
+    Assert-NoDiagnostic $flowClean 'EXAMPLE_LEAD_MISSING'
+
+    # 2. Valid spaced flow sequence `example: [ *content ]` with descriptive subheading and heading inside fence passes.
+    Write-Utf8File $spinnerPage @'
+---
+uid: Acme.Widgets.Spinner
+example: [ *content ]
+---
+The `Spinner` formats progress labels for command-line tools. The following example creates a spinner and prints the formatted status text to standard output:
+
+### Custom label formatting
+
+```csharp
+using System;
+using Acme.Widgets;
+
+namespace Acme.Samples;
+
+public sealed class ProgressPrinter
+{
+    public void Run()
+    {
+        var spinner = new Spinner();
+        var note = @"
+### Example
+";
+        Console.WriteLine(spinner.Spin(note.Trim()));
+    }
+}
+```
+'@
+    $spacedFlowClean = Invoke-Validator -Workspace $headingWorkspace
+    Assert-NoDiagnostic $spacedFlowClean 'EXAMPLE_MISSING'
+    Assert-NoDiagnostic $spacedFlowClean 'EXAMPLE_REDUNDANT_HEADING'
+
+    # 3. `example: [*content]` + `### Example` in body must fail with EXAMPLE_REDUNDANT_HEADING (not EXAMPLE_MISSING).
+    Write-Utf8File $spinnerPage @"
+---
+uid: Acme.Widgets.Spinner
+example: [*content]
+---
+The ``Spinner`` formats progress labels for command-line tools.
+
+### Example
+
+The following example creates a spinner and prints the formatted status text to standard output:
+
+$sampleCode
+"@
+    $flowRedundant = Invoke-Validator -Workspace $headingWorkspace
+    Assert-NoDiagnostic $flowRedundant 'EXAMPLE_MISSING'
+    Assert-Diagnostic $flowRedundant 'EXAMPLE_REDUNDANT_HEADING'
+    Assert-DiagnosticMessageContains $flowRedundant 'EXAMPLE_REDUNDANT_HEADING' '### Example'
+
+    # 4. `example: *content` + `### Examples` in body must fail with EXAMPLE_REDUNDANT_HEADING.
+    Write-Utf8File $spinnerPage @"
+---
+uid: Acme.Widgets.Spinner
+example: *content
+---
+### Examples
+
+The following example creates a spinner and prints the formatted status text to standard output:
+
+$sampleCode
+"@
+    $scalarRedundant = Invoke-Validator -Workspace $headingWorkspace
+    Assert-Diagnostic $scalarRedundant 'EXAMPLE_REDUNDANT_HEADING'
+    Assert-DiagnosticMessageContains $scalarRedundant 'EXAMPLE_REDUNDANT_HEADING' '### Examples'
+
+    # 5. `example:\n  - *content` + `## Example` in body must fail with EXAMPLE_REDUNDANT_HEADING.
+    Write-Utf8File $spinnerPage @"
+---
+uid: Acme.Widgets.Spinner
+example:
+  - *content
+---
+## Example
+
+The following example creates a spinner and prints the formatted status text to standard output:
+
+$sampleCode
+"@
+    $listRedundant = Invoke-Validator -Workspace $headingWorkspace
+    Assert-Diagnostic $listRedundant 'EXAMPLE_REDUNDANT_HEADING'
+    Assert-DiagnosticMessageContains $listRedundant 'EXAMPLE_REDUNDANT_HEADING' '## Example'
+
+    # 6. Form B (`summary: *content` + `### Example`) remains valid without EXAMPLE_REDUNDANT_HEADING.
+    Write-Utf8File $spinnerPage @"
+---
+uid: Acme.Widgets.Spinner
+summary: *content
+---
+Formats progress labels for command-line tools.
+
+### Example
+
+The following example creates a spinner and prints the formatted status text to standard output:
+
+$sampleCode
+"@
+    $formBValid = Invoke-Validator -Workspace $headingWorkspace
+    Assert-NoDiagnostic $formBValid 'EXAMPLE_MISSING'
+    Assert-NoDiagnostic $formBValid 'EXAMPLE_REDUNDANT_HEADING'
+
+    Write-Host 'DocFX example: [*content] and redundant Example heading regression passed.'
+} finally {
+    if (Test-Path $headingWorkspace) { Remove-Item -LiteralPath $headingWorkspace -Recurse -Force }
 }
 
 # The validator returns a non-zero exit code for fixtures that intentionally contain
