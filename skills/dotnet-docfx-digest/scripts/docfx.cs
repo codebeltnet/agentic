@@ -485,6 +485,7 @@ internal static class DocfxValidator
         phaseTimer.Restart();
         ValidateXrefMemberLinks(repoRoot, markdownFiles, workspace,
             ReadDocfxSiteBaseUrl(docfxPath), api, apiModelSource, report);
+        ValidateApiIncludePlacement(repoRoot, docfxWorkspace, markdownFiles, workspace, report);
         WritePhase(options, report, "xref link validation", phaseTimer.Elapsed);
 
         // 8. Verify mandatory examples exist before compiling the examples that were found.
@@ -4458,6 +4459,91 @@ internal static class DocfxValidator
         }
 
         return Regex.IsMatch(body, @"(?im)^\s*Availability\s*:");
+    }
+
+    private static void ValidateApiIncludePlacement(
+        string repoRoot,
+        string docfxWorkspace,
+        IReadOnlyList<string> markdownFiles,
+        ValidationWorkspace workspace,
+        Report report)
+    {
+        var apiRoot = Path.GetFullPath(Path.Combine(docfxWorkspace, "api"))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var namespacesRoot = Path.GetFullPath(Path.Combine(docfxWorkspace, "api", "namespaces"))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+        foreach (var md in markdownFiles)
+        {
+            var fullPath = Path.GetFullPath(md);
+            if (!fullPath.StartsWith(apiRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                // Rule applies strictly under .docfx/api/; Markdown outside .docfx/api/ is allowed to use includes freely.
+                continue;
+            }
+
+            if (fullPath.StartsWith(namespacesRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var text = workspace.ReadMarkdown(md);
+            if (!text.Contains("[!INCLUDE", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+            var inFence = false;
+            var fenceChar = '\0';
+            var fenceLength = 0;
+
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var trimmed = lines[i].TrimStart();
+                if (!inFence)
+                {
+                    if (trimmed.StartsWith("```", StringComparison.Ordinal) || trimmed.StartsWith("~~~", StringComparison.Ordinal))
+                    {
+                        fenceChar = trimmed[0];
+                        fenceLength = 0;
+                        while (fenceLength < trimmed.Length && trimmed[fenceLength] == fenceChar)
+                        {
+                            fenceLength++;
+                        }
+                        inFence = true;
+                        continue;
+                    }
+                }
+                else
+                {
+                    if (trimmed.Length >= fenceLength && trimmed[0] == fenceChar)
+                    {
+                        var count = 0;
+                        while (count < trimmed.Length && trimmed[count] == fenceChar)
+                        {
+                            count++;
+                        }
+                        if (count >= fenceLength && string.IsNullOrWhiteSpace(trimmed[count..]))
+                        {
+                            inFence = false;
+                        }
+                    }
+                    continue;
+                }
+
+                if (trimmed.Contains("[!INCLUDE", StringComparison.OrdinalIgnoreCase))
+                {
+                    report.Errors.Add(new Diagnostic(
+                        "API_INCLUDE_OUTSIDE_NAMESPACES",
+                        Rel(repoRoot, md),
+                        null,
+                        $"Line {i + 1} uses a `[!INCLUDE ...]` directive outside `api/namespaces/`. " +
+                        "Under `.docfx/api/`, `[!INCLUDE ...]` directives (including availability includes) are only allowed on namespace overview pages under `.docfx/api/namespaces/*` — never on type pages (`.docfx/api/types/*`) or after examples."));
+                    break;
+                }
+            }
+        }
     }
 
     // ----------------------------------------------------------------------
