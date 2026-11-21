@@ -29,7 +29,7 @@ if (-not (Test-Path $helpers)) { throw "Install dotnet-csrun beside this skill: 
 . $helpers
 Set-StrictMode -Off
 
-# Parse GNU/CLI-style --flags alongside native PowerShell -Parameters.
+# Parse GNU/CLI-style --flags alongside native PowerShell parameters.
 $idList = [Collections.Generic.List[string]]::new()
 if ($TargetId) { foreach ($item in $TargetId) { if ($item) { $idList.Add($item) } } }
 if ($CliArgs -and $CliArgs.Count -gt 0) {
