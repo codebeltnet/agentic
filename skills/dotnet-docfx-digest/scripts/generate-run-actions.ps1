@@ -575,18 +575,35 @@ function Build-CandidateRecipeAndSource($ExampleObj) {
         if ($mode -eq 'test' -and -not ($deps | Where-Object { $_ -like 'xunit.v3@*' })) {
             $deps = @($deps + 'xunit.v3@4.0.3')
         }
+        $resolvedSdk = if ($ExampleObj.dependencies.sdk) { [string]$ExampleObj.dependencies.sdk } else { 'Microsoft.NET.Sdk' }
+        $resolvedFwRefs = @($ExampleObj.dependencies.frameworkReferences | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+        if ($existing -and $existing.manifest) {
+            if ($existing.manifest.PSObject.Properties['sdk'] -and $existing.manifest.sdk) {
+                $resolvedSdk = [string]$existing.manifest.sdk
+            }
+            if ($existing.manifest.PSObject.Properties['frameworkReferences'] -and $existing.manifest.frameworkReferences) {
+                $resolvedFwRefs = @($existing.manifest.frameworkReferences | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+            }
+        }
+        $manifestObj = [ordered]@{
+            schemaVersion = 1
+            mode = $mode
+            framework = $Framework
+            dependsOn = @($deps)
+        }
+        if ($resolvedSdk -and $resolvedSdk -ne 'Microsoft.NET.Sdk') {
+            $manifestObj['sdk'] = $resolvedSdk
+        }
+        if ($resolvedFwRefs.Count -gt 0) {
+            $manifestObj['frameworkReferences'] = @($resolvedFwRefs)
+        }
         $recipeObj = [ordered]@{
             uid = $ExampleObj.uid
             exampleId = $ExampleObj.exampleId
             fenceOrdinal = $ExampleObj.fenceOrdinal
             sourceSha256 = $candidateHash
             whitespaceSha256 = $candidateWsHash
-            manifest = [ordered]@{
-                schemaVersion = 1
-                mode = $mode
-                framework = $Framework
-                dependsOn = @($deps)
-            }
+            manifest = $manifestObj
         }
     }
 
@@ -600,7 +617,8 @@ function Build-CandidateRecipeAndSource($ExampleObj) {
         candidateSourceSha256 = $candidateHash
         candidateWhitespaceSha256 = $candidateWsHash
         dependsOn = @($deps)
-        sdk = if ($ExampleObj.dependencies.sdk) { [string]$ExampleObj.dependencies.sdk } else { 'Microsoft.NET.Sdk' }
+        sdk = if ($isHost) { if ($ExampleObj.dependencies.sdk) { [string]$ExampleObj.dependencies.sdk } else { 'Microsoft.NET.Sdk.Web' } } else { $resolvedSdk }
+        frameworkReferences = if ($isHost) { @() } else { @($resolvedFwRefs) }
         recipe = $recipeObj
         recipeSha256 = $recipeSha256
     }
@@ -862,9 +880,7 @@ if ($CheckRecipes) {
             } elseif ($oldSourceText) {
                 $oldWs = Canonicalize-Whitespace $oldSourceText
                 $newWs = Canonicalize-Whitespace $candidateFence.source
-                $oldNoWs = [regex]::Replace($oldSourceText, '\s+', '')
-                $newNoWs = [regex]::Replace($candidateFence.source, '\s+', '')
-                if ($oldWs -ceq $newWs -or $oldNoWs -ceq $newNoWs) {
+                if ($oldWs -ceq $newWs) {
                     $diffKind = 'whitespace-only'
                     $wsOrphanCount++
                 } else {
@@ -1125,94 +1141,135 @@ if ($ValidateRunAction) {
             elseif ($exitCode -ne 0) { $failReason = 'host-execution-failed' }
             elseif ([string]::IsNullOrWhiteSpace($stdout)) { $failReason = 'empty-host-output' }
         } else {
-            # Build file-based app separately from execution so compiler warnings never masquerade as program stdout.
-            $headerLines = [Collections.Generic.List[string]]::new()
-            $headerLines.Add("#:property TargetFramework=$Framework")
-            $headerLines.Add('#:property PublishAot=false')
-            if ($candidate.sdk -eq 'Microsoft.NET.Sdk.Web') { $headerLines.Add('#:sdk Microsoft.NET.Sdk.Web') }
-            foreach ($pin in @($candidate.dependsOn)) { $headerLines.Add("#:package $pin") }
-            $appText = ($headerLines -join "`n") + "`n`n" + $candidate.candidateSource + "`n"
-            $appPath = Join-Path $tempDir 'candidate.cs'
-            $artifactsDir = Join-Path $tempDir 'artifacts'
-            [IO.File]::WriteAllText($appPath, $appText, [Text.UTF8Encoding]::new($false))
-            $dotnetExe = (Get-Command dotnet -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+            # Validate strictly from the saved recipe manifest so validation matches what csrun will execute.
+            $manifestSpec = $candidate.recipe.manifest
+            $manifestMode = [string]$manifestSpec['mode']
+            $manifestFramework = if ($manifestSpec.Contains('framework') -and $manifestSpec['framework']) { [string]$manifestSpec['framework'] } else { $Framework }
+            $manifestSdk = if ($manifestSpec.Contains('sdk') -and $manifestSpec['sdk']) { [string]$manifestSpec['sdk'] } else { 'Microsoft.NET.Sdk' }
+            $manifestDeps = if ($manifestSpec.Contains('dependsOn') -and $manifestSpec['dependsOn']) { @($manifestSpec['dependsOn']) } else { @() }
+            $manifestFwRefs = if ($manifestSpec.Contains('frameworkReferences') -and $manifestSpec['frameworkReferences']) { @($manifestSpec['frameworkReferences']) } else { @() }
 
-            $buildPsi = [Diagnostics.ProcessStartInfo]::new($dotnetExe)
-            foreach ($a in @('build', $appPath, '--artifacts-path', $artifactsDir, '--nologo', '-v', 'quiet')) { $buildPsi.ArgumentList.Add($a) }
-            $buildPsi.WorkingDirectory = $tempDir
-            $buildPsi.RedirectStandardOutput = $true
-            $buildPsi.RedirectStandardError = $true
-            $buildPsi.UseShellExecute = $false
-            $buildProc = [Diagnostics.Process]::new()
-            $buildProc.StartInfo = $buildPsi
-            $buildOut = ''; $buildErr = ''; $buildExit = -1
-            try {
-                if (-not $buildProc.Start()) { throw 'Could not start dotnet build for file-based candidate.' }
-                $bOutTask = $buildProc.StandardOutput.ReadToEndAsync()
-                $bErrTask = $buildProc.StandardError.ReadToEndAsync()
-                if (-not $buildProc.WaitForExit([Math]::Max($TimeoutSeconds, 60) * 1000)) {
-                    $timedOut = $true
-                    try { $buildProc.Kill($true) } catch {}
-                    $null = $buildProc.WaitForExit(5000)
+            $invalidManifestError = $null
+            if ($manifestSdk -notin @('Microsoft.NET.Sdk', 'Microsoft.NET.Sdk.Web')) {
+                $invalidManifestError = "Unsupported csrun manifest sdk: $manifestSdk"
+            } elseif ($manifestMode -eq 'console' -and $manifestFwRefs.Count -gt 0) {
+                $unsupportedFwRefs = @($manifestFwRefs | Where-Object { $_ -ine 'Microsoft.AspNetCore.App' })
+                if ($unsupportedFwRefs.Count -gt 0 -or $manifestSdk -ine 'Microsoft.NET.Sdk.Web') {
+                    $invalidManifestError = "Console manifest frameworkReferences only supports Microsoft.AspNetCore.App with sdk Microsoft.NET.Sdk.Web."
                 }
-                $buildExit = if ($timedOut) { 124 } else { $buildProc.ExitCode }
-                $buildOut = $bOutTask.GetAwaiter().GetResult()
-                $buildErr = $bErrTask.GetAwaiter().GetResult()
-            } finally {
-                $buildProc.Dispose()
             }
 
-            if ($timedOut) {
-                $exitCode = 124
-                $stderr = ($buildOut + "`n" + $buildErr).Trim()
-                $failReason = 'execution-timeout'
-            } elseif ($buildExit -ne 0) {
-                $exitCode = $buildExit
-                $stderr = ($buildOut + "`n" + $buildErr).Trim()
-                $failReason = 'build-failed'
+            if ($invalidManifestError) {
+                $exitCode = 1
+                $stderr = $invalidManifestError
+                $failReason = 'invalid-manifest'
             } else {
-                $builtDll = Get-ChildItem -LiteralPath $artifactsDir -Recurse -File -Filter 'candidate.dll' -ErrorAction SilentlyContinue |
-                    Sort-Object FullName | Select-Object -First 1
-                if (-not $builtDll) {
-                    $exitCode = 1
-                    $failReason = 'build-output-missing'
+                $dotnetExe = (Get-Command dotnet -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+                $artifactsDir = Join-Path $tempDir 'artifacts'
+                $useTempProject = ($manifestMode -eq 'test' -and $manifestFwRefs.Count -gt 0)
+                if ($useTempProject) {
+                    $pkgLines = @($manifestDeps | ForEach-Object {
+                        $parts = [string]$_ -split '@', 2
+                        "    <PackageReference Include=""$([Security.SecurityElement]::Escape($parts[0]))"" Version=""$([Security.SecurityElement]::Escape($parts[1]))"" />"
+                    })
+                    $fwLines = @($manifestFwRefs | ForEach-Object {
+                        "    <FrameworkReference Include=""$([Security.SecurityElement]::Escape([string]$_))"" />"
+                    })
+                    $itemLines = @($pkgLines + $fwLines)
+                    $itemGroup = if ($itemLines.Count -gt 0) { "`n  <ItemGroup>`n" + ($itemLines -join "`n") + "`n  </ItemGroup>" } else { '' }
+                    $csprojText = "<Project Sdk=""$manifestSdk"">`n  <PropertyGroup>`n    <OutputType>Exe</OutputType>`n    <TargetFramework>$manifestFramework</TargetFramework>`n    <ImplicitUsings>enable</ImplicitUsings>`n    <Nullable>enable</Nullable>`n    <PublishAot>false</PublishAot>`n  </PropertyGroup>$itemGroup`n</Project>`n"
+                    $buildTargetPath = Join-Path $tempDir 'candidate.csproj'
+                    [IO.File]::WriteAllText($buildTargetPath, $csprojText, [Text.UTF8Encoding]::new($false))
+                    [IO.File]::WriteAllText((Join-Path $tempDir 'Program.cs'), $candidate.candidateSource + "`n", [Text.UTF8Encoding]::new($false))
                 } else {
-                    $psi = [Diagnostics.ProcessStartInfo]::new($dotnetExe)
-                    $psi.ArgumentList.Add($builtDll.FullName)
-                    $psi.WorkingDirectory = $tempDir
-                    $psi.RedirectStandardOutput = $true
-                    $psi.RedirectStandardError = $true
-                    $psi.UseShellExecute = $false
-                    $proc = [Diagnostics.Process]::new()
-                    $proc.StartInfo = $psi
-                    try {
-                        if (-not $proc.Start()) { throw 'Could not start candidate assembly.' }
-                        $outTask = $proc.StandardOutput.ReadToEndAsync()
-                        $errTask = $proc.StandardError.ReadToEndAsync()
-                        if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
-                            $timedOut = $true
-                            try { $proc.Kill($true) } catch {}
-                            $null = $proc.WaitForExit(5000)
-                        }
-                        $exitCode = if ($timedOut) { 124 } else { $proc.ExitCode }
-                        $stdout = $outTask.GetAwaiter().GetResult()
-                        $stderr = $errTask.GetAwaiter().GetResult()
-                    } finally {
-                        $proc.Dispose()
+                    # Build file-based app separately from execution so compiler warnings never masquerade as program stdout.
+                    $headerLines = [Collections.Generic.List[string]]::new()
+                    $headerLines.Add("#:property TargetFramework=$manifestFramework")
+                    $headerLines.Add('#:property PublishAot=false')
+                    if ($manifestSdk -eq 'Microsoft.NET.Sdk.Web') { $headerLines.Add('#:sdk Microsoft.NET.Sdk.Web') }
+                    foreach ($pin in @($manifestDeps)) { $headerLines.Add("#:package $pin") }
+                    $appText = ($headerLines -join "`n") + "`n`n" + $candidate.candidateSource + "`n"
+                    $buildTargetPath = Join-Path $tempDir 'candidate.cs'
+                    [IO.File]::WriteAllText($buildTargetPath, $appText, [Text.UTF8Encoding]::new($false))
+                }
+
+                $buildPsi = [Diagnostics.ProcessStartInfo]::new($dotnetExe)
+                foreach ($a in @('build', $buildTargetPath, '--artifacts-path', $artifactsDir, '--nologo', '-v', 'quiet')) { $buildPsi.ArgumentList.Add($a) }
+                $buildPsi.WorkingDirectory = $tempDir
+                $buildPsi.RedirectStandardOutput = $true
+                $buildPsi.RedirectStandardError = $true
+                $buildPsi.UseShellExecute = $false
+                $buildProc = [Diagnostics.Process]::new()
+                $buildProc.StartInfo = $buildPsi
+                $buildOut = ''; $buildErr = ''; $buildExit = -1
+                try {
+                    if (-not $buildProc.Start()) { throw 'Could not start dotnet build for candidate manifest.' }
+                    $bOutTask = $buildProc.StandardOutput.ReadToEndAsync()
+                    $bErrTask = $buildProc.StandardError.ReadToEndAsync()
+                    if (-not $buildProc.WaitForExit([Math]::Max($TimeoutSeconds, 60) * 1000)) {
+                        $timedOut = $true
+                        try { $buildProc.Kill($true) } catch {}
+                        $null = $buildProc.WaitForExit(5000)
                     }
-                    if ($timedOut) {
-                        $failReason = 'execution-timeout'
-                    } elseif ($exitCode -ne 0) {
-                        $failReason = 'run-failed'
-                    } elseif ($candidate.mode -eq 'console' -and [string]::IsNullOrWhiteSpace($stdout)) {
-                        $failReason = 'empty-console-output'
-                    } elseif ($candidate.mode -eq 'test') {
+                    $buildExit = if ($timedOut) { 124 } else { $buildProc.ExitCode }
+                    $buildOut = $bOutTask.GetAwaiter().GetResult()
+                    $buildErr = $bErrTask.GetAwaiter().GetResult()
+                } finally {
+                    $buildProc.Dispose()
+                }
+
+                if ($timedOut) {
+                    $exitCode = 124
+                    $stderr = ($buildOut + "`n" + $buildErr).Trim()
+                    $failReason = 'execution-timeout'
+                } elseif ($buildExit -ne 0) {
+                    $exitCode = $buildExit
+                    $stderr = ($buildOut + "`n" + $buildErr).Trim()
+                    $failReason = 'build-failed'
+                } else {
+                    $builtDll = Get-ChildItem -LiteralPath $artifactsDir -Recurse -File -Filter 'candidate.dll' -ErrorAction SilentlyContinue |
+                        Sort-Object FullName | Select-Object -First 1
+                    if (-not $builtDll) {
+                        $exitCode = 1
+                        $failReason = 'build-output-missing'
+                    } else {
+                        $psi = [Diagnostics.ProcessStartInfo]::new($dotnetExe)
+                        $psi.ArgumentList.Add($builtDll.FullName)
+                        $psi.WorkingDirectory = $tempDir
+                        $psi.RedirectStandardOutput = $true
+                        $psi.RedirectStandardError = $true
+                        $psi.UseShellExecute = $false
+                        $proc = [Diagnostics.Process]::new()
+                        $proc.StartInfo = $psi
                         try {
-                            Invoke-Expression $script:CsrunTestVerificationTemplate
-                            Assert-CsrunTestOutput $stdout
-                        } catch {
-                            $failReason = 'test-assertion-failed'
-                            $stderr = ($stderr + "`n" + $_.Exception.Message).Trim()
+                            if (-not $proc.Start()) { throw 'Could not start candidate assembly.' }
+                            $outTask = $proc.StandardOutput.ReadToEndAsync()
+                            $errTask = $proc.StandardError.ReadToEndAsync()
+                            if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+                                $timedOut = $true
+                                try { $proc.Kill($true) } catch {}
+                                $null = $proc.WaitForExit(5000)
+                            }
+                            $exitCode = if ($timedOut) { 124 } else { $proc.ExitCode }
+                            $stdout = $outTask.GetAwaiter().GetResult()
+                            $stderr = $errTask.GetAwaiter().GetResult()
+                        } finally {
+                            $proc.Dispose()
+                        }
+                        if ($timedOut) {
+                            $failReason = 'execution-timeout'
+                        } elseif ($exitCode -ne 0) {
+                            $failReason = 'run-failed'
+                        } elseif ($manifestMode -eq 'console' -and [string]::IsNullOrWhiteSpace($stdout)) {
+                            $failReason = 'empty-console-output'
+                        } elseif ($manifestMode -eq 'test') {
+                            try {
+                                Invoke-Expression $script:CsrunTestVerificationTemplate
+                                Assert-CsrunTestOutput $stdout
+                            } catch {
+                                $failReason = 'test-assertion-failed'
+                                $stderr = ($stderr + "`n" + $_.Exception.Message).Trim()
+                            }
                         }
                     }
                 }
@@ -1567,7 +1624,18 @@ foreach ($exObj in $normalizedExamples) {
         $manifestObject = $null
         $hostHarnessObj = $null
         if ($strategy -eq 'standalone') {
-            $manifestObject = if ($recipe) { $recipe.manifest | Select-Object * } else { [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) } }
+            if ($recipe) {
+                $manifestObject = $recipe.manifest | Select-Object *
+            } else {
+                $manifestObject = [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) }
+                if ($exObj.dependencies.sdk -and $exObj.dependencies.sdk -ne 'Microsoft.NET.Sdk') {
+                    $manifestObject | Add-Member -NotePropertyName sdk -NotePropertyValue ([string]$exObj.dependencies.sdk) -Force
+                }
+                $autoFwRefs = @($exObj.dependencies.frameworkReferences | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+                if ($autoFwRefs.Count -gt 0) {
+                    $manifestObject | Add-Member -NotePropertyName frameworkReferences -NotePropertyValue $autoFwRefs -Force
+                }
+            }
             if ($manifestObject.PSObject.Properties['source'] -and (Normalize $manifestObject.source) -cne $displayedSource) { throw 'Manifest source differs from displayed C#.' }
             $manifestObject | Add-Member -NotePropertyName source -NotePropertyValue $displayedSource -Force
         } elseif ($strategy -eq 'host') {
@@ -1663,6 +1731,7 @@ foreach ($exObj in $normalizedExamples) {
             # Read existing cached evidence first (supports both unverified runs and --verify-changed reuse).
             $cachedState = $null
             $cachedLog = $null
+            $cachedEngineSha = $null
             if ($evidencePath -and (Test-PrivateCacheItem $evidencePath)) {
                 try {
                     $evidence = [IO.File]::ReadAllText($evidencePath) | ConvertFrom-Json
@@ -1672,6 +1741,9 @@ foreach ($exObj in $normalizedExamples) {
                         if (Test-PrivateCacheItem $log) {
                             $cachedState = $evidence.state
                             $cachedLog = $log
+                            if ($evidence.PSObject.Properties['engineSha256'] -and $evidence.engineSha256) {
+                                $cachedEngineSha = ([string]$evidence.engineSha256).ToUpperInvariant()
+                            }
                         }
                     }
                 } catch {
@@ -1680,7 +1752,13 @@ foreach ($exObj in $normalizedExamples) {
             }
 
             $shouldRunVerify = $inVerifyScope -and ($Verify -eq 'Both' -or $Verify -eq $transport)
-            if ($shouldRunVerify -and $VerifyChanged -and -not $changed -and $cachedState -eq 'Verified') {
+            $engineMatchesEvidence = ($strategy -ne 'standalone') -or (
+                $resolvedVerificationEngine -and
+                $resolvedVerificationEngine.Sha256 -and
+                $cachedEngineSha -and
+                $cachedEngineSha -ceq ([string]$resolvedVerificationEngine.Sha256).ToUpperInvariant()
+            )
+            if ($shouldRunVerify -and $VerifyChanged -and -not $changed -and $cachedState -eq 'Verified' -and $engineMatchesEvidence) {
                 $shouldRunVerify = $false
                 $verificationReused++
                 $result[$transport] = $cachedState
@@ -1755,13 +1833,11 @@ foreach ($exObj in $normalizedExamples) {
 }
 
 $hasHardFailure = (@($results | Where-Object { $_.status -eq 'failed' -or $_.native -eq 'Failed' -or $_.docker -eq 'Failed' }).Count -gt 0)
-$manifestPreserved = $false
-# Never destroy a previous non-empty manifest as a side effect of a failed verification!
-if ($Verify -ne 'None' -and $hasHardFailure -and $manifestEntries.Count -eq 0 -and $oldManifestById.Count -gt 0) {
-    $manifestPreserved = $true
-}
+$skipMutations = ($Verify -ne 'None' -and $hasHardFailure)
+# Never replace or destroy a previous manifest or page associations as a side effect of any hard verification failure.
+$manifestPreserved = $skipMutations -and (Test-Path -LiteralPath $manifestPath)
 
-if (-not $manifestPreserved) {
+if (-not $skipMutations) {
     # Apply edits by offset in the original text so each existing line ending is preserved.
     foreach ($page in $pages) {
         if (-not (Test-Path -LiteralPath $page)) { continue }
@@ -2050,7 +2126,7 @@ function Update-BuildDocfxImageScript([string] $Original) {
     if ($verifyErrors.Count) { return $Original }
     return $updated
 }
-if (-not $manifestPreserved) {
+if (-not $skipMutations) {
     $buildImagePath = Join-Path $workspace 'BuildDocfxImage.ps1'
     if (Test-Path -LiteralPath $buildImagePath) {
         Assert-RepositoryPath $buildImagePath
