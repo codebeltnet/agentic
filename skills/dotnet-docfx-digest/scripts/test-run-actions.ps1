@@ -47,7 +47,7 @@ $partial = "# Partial`r`n`n``````csharp`nvar fixture = new ManagedApplicationFix
 [IO.File]::WriteAllText("$work/docs/partial.md", $partial)
 $null = New-Item -ItemType Directory "$work/template/public" -Force
 [IO.File]::WriteAllText("$work/template/public/main.js", "// Context7 customization`nexport default { start() { window.context7 = true; } };`n")
-[IO.File]::WriteAllText("$work/BuildDocfxImage.ps1", "`$version = minver -i -t v -v w`ndocfx metadata docfx.json`ntry {`n    docker buildx build -t sample-docfx:`$version -f Dockerfile.docfx .`n}`nfinally {`n    get-childItem -recurse -path api -include *.yml, .manifest | remove-item`n}`n")
+[IO.File]::WriteAllText("$work/BuildDocfxImage.ps1", "`$version = minver -i -t v -v w`ndocfx metadata docfx.json`ndocker buildx build -t xunit-docfx:`$version --platform linux/arm64,linux/amd64 --load -f Dockerfile.docfx .`nget-childItem -recurse -path api -include *.yml, .manifest | remove-item`n")
 [IO.File]::WriteAllText("$work/docfx.json", '{"build":{"content":[{"files":["docs/*.md"]}],"template":["default","modern","template"],"dest":"_site"}}')
 [IO.File]::WriteAllText("$work/docs/test.md", "# Test`n`n``````csharp`nusing Xunit;`npublic class ExampleTest { [Fact] public void ParsesInventoryCount() { Assert.Equal(42, int.Parse(`"42`")); } }`n```````n")
 $packageSource = @'
@@ -179,10 +179,26 @@ if (-not $association.Success -or $transports.Count -ne 2 -or 'native' -notin $t
 }
 if (-not (Get-Content "$work/template/public/main.js" -Raw).Contains('window.context7 = true')) { throw 'Existing template was overwritten.' }
 $buildImageText = Get-Content "$work/BuildDocfxImage.ps1" -Raw
-if (-not $buildImageText.Contains("& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')") -or
-    -not $buildImageText.Contains("Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force")) {
-    throw 'Generator must wire BuildRunActions.ps1 and finally cleanup into BuildDocfxImage.ps1.'
+$expectedBuildImage = @(
+    '$version = minver -i -t v -v w'
+    'docfx metadata docfx.json'
+    "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+    'try {'
+    '    docker buildx build -t xunit-docfx:$version --platform linux/arm64,linux/amd64 --load -f Dockerfile.docfx .'
+    '}'
+    'finally {'
+    '    get-childItem -recurse -path api -include *.yml, .manifest | remove-item'
+    "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+    "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+    '    }'
+    '}'
+) -join "`n"
+if ($buildImageText -cne ($expectedBuildImage + "`n")) {
+    throw "Generator must rewrite an uncustomized BuildDocfxImage.ps1 to run BuildRunActions.ps1 and clean up run-actions in finally. Actual:`n$buildImageText"
 }
+$buildImageTokens = $null; $buildImageParseErrors = $null
+$null = [Management.Automation.Language.Parser]::ParseInput($buildImageText, [ref]$buildImageTokens, [ref]$buildImageParseErrors)
+if ($buildImageParseErrors.Count) { throw "Rewritten BuildDocfxImage.ps1 is not valid PowerShell: $buildImageParseErrors" }
 $files = @(Get-ChildItem $work -Recurse -File)
 $before = @{}
 foreach ($file in $files) { $before[$file.FullName] = @((Get-FileHash $file.FullName).Hash, $file.LastWriteTimeUtc.Ticks) }
@@ -376,5 +392,164 @@ try {
     }
     if ([IO.File]::ReadAllText($externalPage) -cne $console) { throw 'Rejected inventory changed the external page.' }
 } finally { $inventoryOverride = $null }
+
+# Verify BuildDocfxImage.ps1 variants: standard try/finally, partially-wired CRLF flat script, customized scripts (flat, existing try/finally, try/catch, multiline docker build), and non-docker wrapper preservation.
+$buildImageVariants = @(
+    @{
+        Name = 'already-try-finally'
+        Input = "`$version = minver -i -t v -v w`ndocfx metadata docfx.json`ntry {`n    docker buildx build -t sample-docfx:`$version --platform linux/arm64,linux/amd64 --load -f Dockerfile.docfx .`n}`nfinally {`n    Get-ChildItem -Recurse -Path api -Include *.yml, .manifest | Remove-Item`n}`n"
+        Expected = @(
+            '$version = minver -i -t v -v w'
+            'docfx metadata docfx.json'
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            '    docker buildx build -t sample-docfx:$version --platform linux/arm64,linux/amd64 --load -f Dockerfile.docfx .'
+            '}'
+            'finally {'
+            '    Get-ChildItem -Recurse -Path api -Include *.yml, .manifest | Remove-Item'
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+        ) -join "`n"
+        Trailing = "`n"
+    }
+    @{
+        Name = 'partially-wired-crlf'
+        Input = "`$version = minver -i -t v -v w`r`ndocfx metadata docfx.json`r`n& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')`r`ndocker buildx build -t xunit-docfx:`$version --platform linux/arm64,linux/amd64 --load -f Dockerfile.docfx .`r`nget-childItem -recurse -path api -include *.yml, .manifest | remove-item`r`n"
+        Expected = @(
+            '$version = minver -i -t v -v w'
+            'docfx metadata docfx.json'
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            '    docker buildx build -t xunit-docfx:$version --platform linux/arm64,linux/amd64 --load -f Dockerfile.docfx .'
+            '}'
+            'finally {'
+            '    get-childItem -recurse -path api -include *.yml, .manifest | remove-item'
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+        ) -join "`r`n"
+        Trailing = "`r`n"
+    }
+    @{
+        Name = 'customized-flat'
+        Input = "param([string] `$Registry = 'ghcr.io/example')`n`$version = minver -i -t v -v w`nWrite-Host `"Building `$Registry/docs:`$version`"`ndocfx metadata docfx.json`ndocker buildx build -t `"`$Registry/docs:`$version`" -f Dockerfile.docfx .`nget-childItem -recurse -path api -include *.yml, .manifest | remove-item`n"
+        Expected = @(
+            "param([string] `$Registry = 'ghcr.io/example')"
+            '$version = minver -i -t v -v w'
+            'Write-Host "Building $Registry/docs:$version"'
+            'docfx metadata docfx.json'
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            '    docker buildx build -t "$Registry/docs:$version" -f Dockerfile.docfx .'
+            '}'
+            'finally {'
+            '    get-childItem -recurse -path api -include *.yml, .manifest | remove-item'
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+        ) -join "`n"
+        Trailing = "`n"
+    }
+    @{
+        Name = 'customized-try-finally'
+        Input = "param([string] `$Tag = 'dev')`ndocfx metadata docfx.json`ntry {`n    Write-Host `"Start `$Tag`"`n    docker buildx build -t `"custom:`$Tag`" -f Dockerfile.docfx .`n}`nfinally {`n    get-childItem -recurse -path api -include *.yml, .manifest | remove-item`n    Write-Host 'Done'`n}`n"
+        Expected = @(
+            "param([string] `$Tag = 'dev')"
+            'docfx metadata docfx.json'
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            '    Write-Host "Start $Tag"'
+            '    docker buildx build -t "custom:$Tag" -f Dockerfile.docfx .'
+            '}'
+            'finally {'
+            '    get-childItem -recurse -path api -include *.yml, .manifest | remove-item'
+            "    Write-Host 'Done'"
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+        ) -join "`n"
+        Trailing = "`n"
+    }
+    @{
+        Name = 'customized-try-catch'
+        Input = "`$version = minver -i -t v -v w`ndocfx metadata docfx.json`ntry {`n    docker buildx build -t custom-docfx:`$version -f Dockerfile.docfx .`n}`ncatch {`n    Write-Error `$_`n    throw`n}`n"
+        Expected = @(
+            '$version = minver -i -t v -v w'
+            'docfx metadata docfx.json'
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            '    docker buildx build -t custom-docfx:$version -f Dockerfile.docfx .'
+            '}'
+            'catch {'
+            '    Write-Error $_'
+            '    throw'
+            '}'
+            'finally {'
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+        ) -join "`n"
+        Trailing = "`n"
+    }
+    @{
+        Name = 'customized-multiline-poststep'
+        Input = "param([string] `$Tag = 'latest')`ndocfx metadata docfx.json`ndocker buildx build ```n    -t `"custom-docs:`$Tag`" ```n    -f Dockerfile.docfx .`nWrite-Host `"Built `$Tag`"`n"
+        Expected = @(
+            "param([string] `$Tag = 'latest')"
+            'docfx metadata docfx.json'
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            '    docker buildx build `'
+            '        -t "custom-docs:$Tag" `'
+            '        -f Dockerfile.docfx .'
+            '}'
+            'finally {'
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+            'Write-Host "Built $Tag"'
+        ) -join "`n"
+        Trailing = "`n"
+    }
+    @{
+        Name = 'customized-non-docker'
+        Input = "param([string] `$Env = 'prod')`n& (Join-Path `$PSScriptRoot 'CustomPipeline.ps1') -Env `$Env`n"
+        Expected = "param([string] `$Env = 'prod')`n& (Join-Path `$PSScriptRoot 'CustomPipeline.ps1') -Env `$Env"
+        Trailing = "`n"
+    }
+)
+foreach ($variant in $buildImageVariants) {
+    $variantRoot = Join-Path $work ("build-image-" + $variant.Name)
+    $null = [IO.Directory]::CreateDirectory($variantRoot)
+    $variantConfig = Join-Path $variantRoot 'docfx.json'
+    $variantScript = Join-Path $variantRoot 'BuildDocfxImage.ps1'
+    [IO.File]::WriteAllText($variantConfig, '{"build":{"template":["default","modern"]}}')
+    [IO.File]::WriteAllText($variantScript, $variant.Input)
+    $inventoryOverride = @{ config = $variantConfig; examples = @() } | ConvertTo-Json -Depth 5
+    try {
+        $null = & $generator -RepoRoot $variantRoot
+        if ($LASTEXITCODE -ne 0) { throw "Generator failed for BuildDocfxImage variant $($variant.Name)." }
+        $actualVariant = [IO.File]::ReadAllText($variantScript)
+        if ($actualVariant -cne ($variant.Expected + $variant.Trailing)) {
+            throw "BuildDocfxImage variant $($variant.Name) did not match expected output. Actual:`n$actualVariant"
+        }
+        $vTokens = $null; $vErrors = $null
+        $null = [Management.Automation.Language.Parser]::ParseInput($actualVariant, [ref]$vTokens, [ref]$vErrors)
+        if ($vErrors.Count) { throw "BuildDocfxImage variant $($variant.Name) produced invalid PowerShell: $vErrors" }
+        $beforeHash = (Get-FileHash $variantScript).Hash
+        $beforeTicks = (Get-Item $variantScript).LastWriteTimeUtc.Ticks
+        $null = & $generator -RepoRoot $variantRoot
+        if ($LASTEXITCODE -ne 0 -or (Get-FileHash $variantScript).Hash -cne $beforeHash -or (Get-Item $variantScript).LastWriteTimeUtc.Ticks -ne $beforeTicks) {
+            throw "BuildDocfxImage variant $($variant.Name) was not idempotent on second run."
+        }
+    } finally { $inventoryOverride = $null }
+}
 
 Write-Host "Run-action delivery passed: paired console, test, dependency-backed test and repository test; exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"

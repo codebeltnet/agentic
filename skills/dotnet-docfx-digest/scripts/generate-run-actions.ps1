@@ -261,28 +261,212 @@ $null = Write-Changed $configPath (($config | ConvertTo-Json -Depth 100) + "`n")
 $sortedManifest = @($manifestEntries | Sort-Object { $_.id })
 $null = Write-Changed $manifestPath (([ordered]@{ schemaVersion = 1; examples = $sortedManifest } | ConvertTo-Json -Depth 30) + "`n")
 $null = Write-Changed (Join-Path $workspace 'BuildRunActions.ps1') ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../assets/BuildRunActions.ps1')))
+function Test-DockerBuildCommand($CommandAst) {
+    if ($CommandAst.CommandElements.Count -lt 2) { return $false }
+    $cmdName = $CommandAst.GetCommandName()
+    if (-not $cmdName -or $cmdName -inotmatch '(^|[\\/])docker(\.exe)?$') { return $false }
+    $firstArg = $CommandAst.CommandElements[1].Extent.Text.Trim("'`"")
+    if ($firstArg -ieq 'build') { return $true }
+    if ($firstArg -ieq 'buildx' -and $CommandAst.CommandElements.Count -ge 3) {
+        return $CommandAst.CommandElements[2].Extent.Text.Trim("'`"") -ieq 'build'
+    }
+    return $false
+}
+function Test-ApiCleanupPipeline($PipelineAst) {
+    if ($PipelineAst -isnot [Management.Automation.Language.PipelineAst]) { return $false }
+    if ($PipelineAst.PipelineElements.Count -ne 2) { return $false }
+    $first = $PipelineAst.PipelineElements[0] -as [Management.Automation.Language.CommandAst]
+    $second = $PipelineAst.PipelineElements[1] -as [Management.Automation.Language.CommandAst]
+    if (-not $first -or -not $second) { return $false }
+    $firstName = $first.GetCommandName()
+    $secondName = $second.GetCommandName()
+    return ($firstName -ieq 'Get-ChildItem' -or $firstName -ieq 'gci') -and
+           ($secondName -ieq 'Remove-Item' -or $secondName -ieq 'ri') -and
+           ($PipelineAst.Extent.Text -match '(?i)\bapi\b')
+}
+function Get-LineIndent([string] $Text, [int] $Offset) {
+    if ($Offset -eq 0) { return '' }
+    $lineStart = $Text.LastIndexOf("`n", $Offset - 1)
+    $lineStart = if ($lineStart -lt 0) { 0 } else { $lineStart + 1 }
+    $prefix = $Text.Substring($lineStart, $Offset - $lineStart)
+    if ($prefix -notmatch '^[ \t]*$') { return $null }
+    return $prefix
+}
+function Update-BuildDocfxImageScript([string] $Original) {
+    $standardFlatPattern = '(?i)\A\s*(?<version>\$version\s*=\s*minver[^\r\n]*)(?:\r?\n[ \t]*)+(?<metadata>docfx\s+metadata[^\r\n]*)(?:\r?\n[ \t]*)+(?:&\s*\(Join-Path\s+\$PSScriptRoot\s+[''"]BuildRunActions\.ps1[''"]\)(?:\r?\n[ \t]*)+)?(?<docker>docker\s+buildx\s+build[^\r\n]*)(?:\r?\n[ \t]*)+(?<cleanup>get-childitem\b[^\r\n]*\|\s*remove-item[^\r\n]*)\s*\z'
+    $standardTryPattern = '(?i)\A\s*(?<version>\$version\s*=\s*minver[^\r\n]*)(?:\r?\n[ \t]*)+(?<metadata>docfx\s+metadata[^\r\n]*)(?:\r?\n[ \t]*)+(?:&\s*\(Join-Path\s+\$PSScriptRoot\s+[''"]BuildRunActions\.ps1[''"]\)(?:\r?\n[ \t]*)+)?try\s*\{(?:\r?\n[ \t]*)+(?<docker>docker\s+buildx\s+build[^\r\n]*)(?:\r?\n[ \t]*)+\}(?:\r?\n[ \t]*)+finally\s*\{(?:\r?\n[ \t]*)+(?<cleanup>get-childitem\b[^\r\n]*\|\s*remove-item[^\r\n]*)(?:(?:\r?\n[ \t]*)+if\s*\(\s*Test-Path\s+-LiteralPath\s+\(Join-Path\s+\$PSScriptRoot\s+[''"]run-actions[''"]\)\s*\)\s*\{(?:\r?\n[ \t]*)+Remove-Item\s+-LiteralPath\s+\(Join-Path\s+\$PSScriptRoot\s+[''"]run-actions[''"]\)\s+-Recurse\s+-Force(?:\r?\n[ \t]*)+\})?(?:\r?\n[ \t]*)+\}\s*\z'
+    $nl = if ($Original.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $trailingNewline = if ($Original -match '\r?\n\z') { $nl } else { '' }
+    $match = [regex]::Match($Original, $standardFlatPattern)
+    if (-not $match.Success) { $match = [regex]::Match($Original, $standardTryPattern) }
+    if ($match.Success) {
+        return (@(
+            $match.Groups['version'].Value.Trim()
+            $match.Groups['metadata'].Value.Trim()
+            "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')"
+            'try {'
+            ('    ' + $match.Groups['docker'].Value.Trim())
+            '}'
+            'finally {'
+            ('    ' + $match.Groups['cleanup'].Value.Trim())
+            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+            '    }'
+            '}'
+        ) -join $nl) + $trailingNewline
+    }
+
+    $hasInvoke = $Original.IndexOf('BuildRunActions.ps1', [StringComparison]::OrdinalIgnoreCase) -ge 0
+    $hasCleanup = $Original -match "(?i)['""]run-actions['""]"
+    if ($hasInvoke -and $hasCleanup) { return $Original }
+
+    $tokens = $null; $parseErrors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseInput($Original, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count) { return $Original }
+
+    $dockerCommands = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.CommandAst] -and (Test-DockerBuildCommand $n) }, $true))
+    if (-not $dockerCommands.Count) { return $Original }
+
+    $enclosingTries = [Collections.Generic.List[object]]::new()
+    $directStmts = [Collections.Generic.List[object]]::new()
+    foreach ($cmd in $dockerCommands) {
+        $tryNode = $null
+        $stmtNode = $null
+        for ($cur = $cmd; $cur; $cur = $cur.Parent) {
+            if (-not $stmtNode -and $cur -is [Management.Automation.Language.StatementAst] -and
+                ($cur.Parent -is [Management.Automation.Language.StatementBlockAst] -or $cur.Parent -is [Management.Automation.Language.NamedBlockAst])) {
+                $stmtNode = $cur
+            }
+            if ($cur.Parent -is [Management.Automation.Language.TryStatementAst] -and [object]::ReferenceEquals($cur, $cur.Parent.Body)) {
+                $tryNode = $cur.Parent
+                break
+            }
+        }
+        $enclosingTries.Add($tryNode)
+        $directStmts.Add($stmtNode)
+    }
+
+    $edits = [Collections.Generic.List[object]]::new()
+    $allInSameTry = ($null -ne $enclosingTries[0]) -and (@($enclosingTries | Where-Object { -not [object]::ReferenceEquals($_, $enclosingTries[0]) }).Count -eq 0)
+    if ($allInSameTry) {
+        $tryAst = $enclosingTries[0]
+        $tryIndent = Get-LineIndent $Original $tryAst.Extent.StartOffset
+        if ($null -eq $tryIndent) { return $Original }
+        if (-not $hasInvoke) {
+            $edits.Add(@{
+                Offset = $tryAst.Extent.StartOffset
+                Length = 0
+                Text = "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')$nl$tryIndent"
+            })
+        }
+        if (-not $hasCleanup) {
+            if ($tryAst.Finally) {
+                $bodyIndent = $tryIndent + '    '
+                if ($tryAst.Finally.Statements.Count -gt 0) {
+                    $lastFinallyIndent = Get-LineIndent $Original $tryAst.Finally.Statements[-1].Extent.StartOffset
+                    if ($null -ne $lastFinallyIndent) { $bodyIndent = $lastFinallyIndent }
+                }
+                $cleanupLines = @(
+                    "${bodyIndent}if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+                    "${bodyIndent}    Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+                    "${bodyIndent}}"
+                ) -join $nl
+                $closeOffset = $tryAst.Finally.Extent.EndOffset - 1
+                $closeIndent = Get-LineIndent $Original $closeOffset
+                if ($null -ne $closeIndent) {
+                    $insertAt = $closeOffset - $closeIndent.Length
+                    $edits.Add(@{ Offset = $insertAt; Length = 0; Text = $cleanupLines + $nl })
+                } else {
+                    $edits.Add(@{ Offset = $closeOffset; Length = 0; Text = $nl + $cleanupLines + $nl + $tryIndent })
+                }
+            } else {
+                $finallyBlock = @(
+                    "${tryIndent}finally {"
+                    "${tryIndent}    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {"
+                    "${tryIndent}        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force"
+                    "${tryIndent}    }"
+                    "${tryIndent}}"
+                ) -join $nl
+                $edits.Add(@{ Offset = $tryAst.Extent.EndOffset; Length = 0; Text = $nl + $finallyBlock })
+            }
+        }
+    } else {
+        $parentBlock = if ($directStmts[0]) { $directStmts[0].Parent } else { $null }
+        $allInSameBlock = ($null -ne $parentBlock) -and (@($directStmts | Where-Object { $null -eq $_ -or -not [object]::ReferenceEquals($_.Parent, $parentBlock) }).Count -eq 0)
+        if (-not $allInSameBlock) { return $Original }
+        $orderedStmts = @($directStmts | Sort-Object { $_.Extent.StartOffset } -Unique)
+        $firstStmt = $orderedStmts[0]
+        $lastStmt = $orderedStmts[-1]
+        $indent = Get-LineIndent $Original $firstStmt.Extent.StartOffset
+        if ($null -eq $indent) { return $Original }
+        if ($hasCleanup) {
+            if (-not $hasInvoke) {
+                $edits.Add(@{
+                    Offset = $firstStmt.Extent.StartOffset
+                    Length = 0
+                    Text = "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')$nl$indent"
+                })
+            }
+        } else {
+            $dockerSlice = $Original.Substring($firstStmt.Extent.StartOffset, $lastStmt.Extent.EndOffset - $firstStmt.Extent.StartOffset)
+            $indentedDocker = (@($dockerSlice -split '\r?\n' | ForEach-Object {
+                if ($_ -match '^[ \t]*$') { '' }
+                elseif ($indent.Length -gt 0 -and $_.StartsWith($indent, [StringComparison]::Ordinal)) { $indent + '    ' + $_.Substring($indent.Length) }
+                else { $indent + '    ' + $_ }
+            }) -join $nl)
+            $replaceEnd = $lastStmt.Extent.EndOffset
+            $cleanupBody = [Collections.Generic.List[string]]::new()
+            $stmtList = @($parentBlock.Statements)
+            $lastIdx = -1
+            for ($i = 0; $i -lt $stmtList.Count; $i++) {
+                if ([object]::ReferenceEquals($stmtList[$i], $lastStmt)) { $lastIdx = $i; break }
+            }
+            if ($lastIdx -ge 0 -and ($lastIdx + 1) -lt $stmtList.Count) {
+                $nextStmt = $stmtList[$lastIdx + 1]
+                $gap = $Original.Substring($lastStmt.Extent.EndOffset, $nextStmt.Extent.StartOffset - $lastStmt.Extent.EndOffset)
+                if ($gap -match '^\s*$' -and (Test-ApiCleanupPipeline $nextStmt)) {
+                    $cleanupBody.Add($indent + '    ' + $nextStmt.Extent.Text.Trim())
+                    $replaceEnd = $nextStmt.Extent.EndOffset
+                }
+            }
+            $cleanupBody.Add("${indent}    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {")
+            $cleanupBody.Add("${indent}        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force")
+            $cleanupBody.Add("${indent}    }")
+            $replacementLines = [Collections.Generic.List[string]]::new()
+            if (-not $hasInvoke) {
+                $replacementLines.Add("& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')")
+                $replacementLines.Add("${indent}try {")
+            } else {
+                $replacementLines.Add('try {')
+            }
+            $replacementLines.Add($indentedDocker)
+            $replacementLines.Add("${indent}}")
+            $replacementLines.Add("${indent}finally {")
+            foreach ($line in $cleanupBody) { $replacementLines.Add($line) }
+            $replacementLines.Add("${indent}}")
+            $edits.Add(@{
+                Offset = $firstStmt.Extent.StartOffset
+                Length = $replaceEnd - $firstStmt.Extent.StartOffset
+                Text = ($replacementLines -join $nl)
+            })
+        }
+    }
+
+    if (-not $edits.Count) { return $Original }
+    $updated = $Original
+    foreach ($edit in $edits | Sort-Object -Property Offset, Length -Descending) {
+        $updated = $updated.Remove($edit.Offset, $edit.Length).Insert($edit.Offset, $edit.Text)
+    }
+    $verifyTokens = $null; $verifyErrors = $null
+    $null = [Management.Automation.Language.Parser]::ParseInput($updated, [ref]$verifyTokens, [ref]$verifyErrors)
+    if ($verifyErrors.Count) { return $Original }
+    return $updated
+}
 $buildImagePath = Join-Path $workspace 'BuildDocfxImage.ps1'
 if (Test-Path -LiteralPath $buildImagePath) {
     Assert-RepositoryPath $buildImagePath
     $buildImageOriginal = [IO.File]::ReadAllText($buildImagePath)
-    $buildImageNewline = if ($buildImageOriginal.Contains("`r`n")) { "`r`n" } else { "`n" }
-    $buildImageUpdated = $buildImageOriginal
-    if (-not $buildImageUpdated.Contains('BuildRunActions.ps1')) {
-        $invokeLine = "& (Join-Path `$PSScriptRoot 'BuildRunActions.ps1')$buildImageNewline"
-        if ($buildImageUpdated -match '(?m)^[ \t]*try\s*\{') {
-            $buildImageUpdated = [regex]::Replace($buildImageUpdated, '(?m)^([ \t]*try\s*\{)', "$invokeLine`$1", 1)
-        } elseif ($buildImageUpdated -match '(?m)^[ \t]*docker\s+buildx\s+build\b') {
-            $buildImageUpdated = [regex]::Replace($buildImageUpdated, '(?m)^([ \t]*docker\s+buildx\s+build\b)', "$invokeLine`$1", 1)
-        }
-    }
-    if (-not $buildImageUpdated.Contains("'run-actions'") -and -not $buildImageUpdated.Contains('"run-actions"') -and
-        $buildImageUpdated -match '(?s)(finally\s*\{.*?)(\r?\n[ \t]*\})') {
-        $cleanup = $buildImageNewline +
-            "    if (Test-Path -LiteralPath (Join-Path `$PSScriptRoot 'run-actions')) {" + $buildImageNewline +
-            "        Remove-Item -LiteralPath (Join-Path `$PSScriptRoot 'run-actions') -Recurse -Force" + $buildImageNewline +
-            "    }"
-        $buildImageUpdated = [regex]::Replace($buildImageUpdated, '(?s)(finally\s*\{.*?)(\r?\n[ \t]*\})', "`$1$cleanup`$2", 1)
-    }
+    $buildImageUpdated = Update-BuildDocfxImageScript $buildImageOriginal
     Write-Page $buildImagePath $buildImageOriginal $buildImageUpdated
 }
 if ($results.Count) { $results | ConvertTo-Json -Depth 30 } else { '[]' }
