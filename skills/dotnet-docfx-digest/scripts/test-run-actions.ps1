@@ -726,6 +726,47 @@ $null = [IO.Directory]::CreateDirectory("$detRoot/docs")
 $null = [IO.Directory]::CreateDirectory("$detRoot/src/Acme.Net")
 $null = [IO.Directory]::CreateDirectory("$detRoot/src/Acme.Internal")
 $null = [IO.Directory]::CreateDirectory("$detRoot/src/Acme.Xml")
+$null = [IO.Directory]::CreateDirectory("$detRoot/src/Acme.AppSubtree")
+
+[IO.File]::WriteAllText("$detRoot/Directory.Packages.props", @'
+<Project>
+  <PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Shared.Telemetry" Version="2.1.0" />
+  </ItemGroup>
+</Project>
+'@)
+
+[IO.File]::WriteAllText("$detRoot/src/Acme.AppSubtree/Directory.Build.props", @'
+<Project>
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <Version>99.0.0</Version>
+  </PropertyGroup>
+</Project>
+'@)
+[IO.File]::WriteAllText("$detRoot/src/Acme.AppSubtree/Directory.Packages.props", @'
+<Project>
+  <PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Shared.Telemetry" Version="9.9.9" />
+  </ItemGroup>
+</Project>
+'@)
+[IO.File]::WriteAllText("$detRoot/src/Acme.AppSubtree/Acme.AppSubtree.csproj", @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Shared.Telemetry" />
+  </ItemGroup>
+</Project>
+'@)
+[IO.File]::WriteAllText("$detRoot/src/Acme.AppSubtree/AppOnlyHelper.cs", @'
+namespace Acme.AppSubtree;
+public sealed class AppOnlyHelper { }
+'@)
 
 [IO.File]::WriteAllText("$detRoot/src/Acme.Net/Acme.Net.csproj", @'
 <Project Sdk="Microsoft.NET.Sdk">
@@ -734,6 +775,9 @@ $null = [IO.Directory]::CreateDirectory("$detRoot/src/Acme.Xml")
     <PackageId>Acme.Net</PackageId>
     <Version>11.0.0</Version>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Shared.Telemetry" />
+  </ItemGroup>
 </Project>
 '@)
 [IO.File]::WriteAllText("$detRoot/src/Acme.Net/HttpManager.cs", @'
@@ -793,12 +837,47 @@ public sealed class CleanExample
 {
     public void Demonstrate()
     {
-        Console.WriteLine("clean-ok");
+        Console.WriteLine("clean ok");
     }
 }
 ``````
 "@
 [IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $cleanWrapperMd)
+
+$asyncExprWrapperMd = @"
+---
+uid: Demo.AsyncExprWrapper
+---
+# Async expression-bodied wrapper
+
+``````csharp
+using System;
+using System.Threading.Tasks;
+
+public sealed class AsyncExprExample
+{
+    public async Task<int> DemonstrateAsync() => await Task.FromResult(42);
+}
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/AsyncExprWrapper.md", $asyncExprWrapperMd)
+
+$webConsoleMd = @"
+---
+uid: Demo.WebConsole
+---
+# Non-blocking ASP.NET Core console sample
+
+``````csharp
+using System;
+using Microsoft.AspNetCore.Http;
+
+var context = new DefaultHttpContext();
+context.Request.Method = HttpMethods.Get;
+Console.WriteLine(context.Request.Method);
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/WebConsole.md", $webConsoleMd)
 
 $membersWrapperMd = @"
 ---
@@ -890,6 +969,7 @@ uid: Acme.Net.Http.HttpManager
 
 ``````csharp
 using Acme.Net.Http;
+using Shared.Telemetry;
 
 var mgr = new HttpManager();
 ``````
@@ -998,10 +1078,12 @@ if ($LASTEXITCODE -ne 0 -or $explainText -notlike '*host-parameterized*' -or $ex
     throw "--explain prose output was incomplete: $explainText"
 }
 
-# 2. --resolve-dependencies <uid> (split package, unpublished project, CS0104 ambiguity)
+# 2. --resolve-dependencies <uid> (split package, subtree Directory.Build.props / Directory.Packages.props isolation, unpublished project, CS0104 ambiguity)
 $splitDep = (& $generator -RepoRoot $detRoot --resolve-dependencies Acme.Net.Http.HttpManager) | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0 -or -not $splitDep.preflightPassed -or ($splitDep.dependsOn -notcontains 'Acme.Net@11.0.0') -or ($splitDep.dependsOn -contains 'Acme.Net.Http@11.0.0')) {
-    throw "Split-package dependency resolution failed: $($splitDep | ConvertTo-Json -Compress)"
+if ($LASTEXITCODE -ne 0 -or -not $splitDep.preflightPassed -or
+    ($splitDep.dependsOn -notcontains 'Acme.Net@11.0.0') -or ($splitDep.dependsOn -contains 'Acme.Net.Http@11.0.0') -or
+    ($splitDep.dependsOn -notcontains 'Shared.Telemetry@2.1.0') -or ($splitDep.dependsOn -contains 'Shared.Telemetry@9.9.9')) {
+    throw "Split-package or subtree-scoped dependency resolution failed: $($splitDep | ConvertTo-Json -Compress)"
 }
 $unpubDep = (& $generator -RepoRoot $detRoot --resolve-dependencies Acme.Internal.SecretHelper) | ConvertFrom-Json
 if ($LASTEXITCODE -ne 1 -or $unpubDep.preflightPassed -or -not (@($unpubDep.errors | Where-Object { $_ -like 'missing-package: SecretHelper -> Acme.Internal*' }).Count)) {
@@ -1025,7 +1107,7 @@ if ($LASTEXITCODE -ne 1 -or $silentVal.validated -or $silentVal.reasonCode -ne '
     throw "Console validation must reject empty stdout: $($silentVal | ConvertTo-Json -Compress)"
 }
 $cleanVal = (& $generator -RepoRoot $detRoot --validate-run-action Demo.WrapperClean) | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0 -or -not $cleanVal.validated -or -not $cleanVal.converted -or $cleanVal.stdout -notlike '*clean-ok*' -or -not $cleanVal.recipeSha256) {
+if ($LASTEXITCODE -ne 0 -or -not $cleanVal.validated -or -not $cleanVal.converted -or $cleanVal.stdout -notlike '*clean ok*' -or -not $cleanVal.recipeSha256) {
     throw "wrapper-clean validation failed: $($cleanVal | ConvertTo-Json -Compress)"
 }
 if ([IO.File]::ReadAllText("$detRoot/docs/WrapperClean.md") -cne $cleanWrapperMd) {
@@ -1034,6 +1116,26 @@ if ([IO.File]::ReadAllText("$detRoot/docs/WrapperClean.md") -cne $cleanWrapperMd
 $cleanApplied = (& $generator -RepoRoot $detRoot --apply-run-action Demo.WrapperClean) | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or -not $cleanApplied.applied -or -not $cleanApplied.fenceUpdated -or $cleanApplied.recipeSha256 -cne $cleanVal.recipeSha256) {
     throw "--apply-run-action failed after validation: $($cleanApplied | ConvertTo-Json -Compress)"
+}
+$asyncExprVal = (& $generator -RepoRoot $detRoot --validate-run-action Demo.AsyncExprWrapper) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $asyncExprVal.validated -or -not $asyncExprVal.converted -or $asyncExprVal.stdout.Trim() -cne '42') {
+    throw "Async expression-bodied wrapper validation failed (must not emit double await): $($asyncExprVal | ConvertTo-Json -Compress)"
+}
+$asyncExprApplied = (& $generator -RepoRoot $detRoot --apply-run-action Demo.AsyncExprWrapper) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $asyncExprApplied.applied -or ([IO.File]::ReadAllText("$detRoot/docs/AsyncExprWrapper.md") -match 'await\s+await')) {
+    throw "Async expression-bodied wrapper apply failed or emitted double await: $($asyncExprApplied | ConvertTo-Json -Compress)"
+}
+$webConsoleVal = (& $generator -RepoRoot $detRoot --validate-run-action Demo.WebConsole) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $webConsoleVal.validated -or $webConsoleVal.stdout.Trim() -cne 'GET') {
+    throw "Web SDK standalone console validation failed: $($webConsoleVal | ConvertTo-Json -Compress)"
+}
+$webConsoleApplied = (& $generator -RepoRoot $detRoot --apply-run-action Demo.WebConsole) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $webConsoleApplied.applied) {
+    throw "Web SDK standalone console apply failed: $($webConsoleApplied | ConvertTo-Json -Compress)"
+}
+$webSavedRecipe = ((Get-Content "$detRoot/run-actions.settings.json" -Raw | ConvertFrom-Json).examples | Where-Object uid -eq 'Demo.WebConsole' | Select-Object -First 1)
+if (-not $webSavedRecipe -or $webSavedRecipe.manifest.sdk -cne 'Microsoft.NET.Sdk.Web' -or ($webSavedRecipe.manifest.frameworkReferences -notcontains 'Microsoft.AspNetCore.App')) {
+    throw "Saved standalone recipe dropped sdk or frameworkReferences: $($webSavedRecipe | ConvertTo-Json -Depth 10 -Compress)"
 }
 $membersVal = (& $generator -RepoRoot $detRoot --validate-run-action Demo.WrapperMembers) | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or -not $membersVal.validated -or $membersVal.stdout -notlike '*members-ok*') {
@@ -1091,7 +1193,17 @@ foreach ($t in @('native', 'docker')) {
     if ($actualHostHash -cne $hostGenEntry."${t}Sha256") { throw "BuildRunActions.ps1 host $t.ps1 hash drifted from generator." }
 }
 
-# 6. Negative recipe health checks: moved, duplicate-uid, whitespace-only orphan, semantic orphan
+$webGenEntry = $detGenSummary.examples | Where-Object exampleId -ceq 'Demo.WebConsole#1'
+if (-not $webGenEntry -or $webGenEntry.strategy -ne 'standalone') {
+    throw "Expected standalone WebConsole entry: $($webGenEntry | ConvertTo-Json -Compress)"
+}
+$webNativeScript = Get-Content "$detRoot/run-actions/$($webGenEntry.id)/native.ps1" -Raw
+$webNativeManifest = (Get-CsrunWrapperManifest $webNativeScript) | ConvertFrom-Json
+if ($webNativeManifest.sdk -cne 'Microsoft.NET.Sdk.Web' -or ($webNativeManifest.frameworkReferences -notcontains 'Microsoft.AspNetCore.App')) {
+    throw "Materialized csrun manifest dropped sdk or frameworkReferences: $($webNativeManifest | ConvertTo-Json -Compress)"
+}
+
+# 6. Negative recipe health checks: moved, duplicate-uid, whitespace-only orphan, string-literal whitespace change (semantic!), semantic orphan
 $savedSettingsRaw = [IO.File]::ReadAllText("$detRoot/run-actions.settings.json")
 $savedMultiRaw = [IO.File]::ReadAllText("$detRoot/docs/MultiFence.md")
 $savedCleanRaw = [IO.File]::ReadAllText("$detRoot/docs/WrapperClean.md")
@@ -1104,16 +1216,24 @@ try {
     }
     [IO.File]::WriteAllText("$detRoot/docs/MultiFence.md", $savedMultiRaw)
 
-    # Whitespace-only orphan: append trailing spaces to Console.WriteLine("clean-ok");
-    [IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $savedCleanRaw.Replace('Console.WriteLine("clean-ok");', 'Console.WriteLine("clean-ok");   '))
+    # Whitespace-only orphan: append trailing spaces to Console.WriteLine("clean ok");
+    [IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $savedCleanRaw.Replace('Console.WriteLine("clean ok");', 'Console.WriteLine("clean ok");   '))
     $wsCheck = (& $generator -RepoRoot $detRoot --check-recipes --json) | ConvertFrom-Json
     $wsIssue = $wsCheck.issues | Where-Object { $_.kind -eq 'orphaned' -and $_.uid -eq 'Demo.WrapperClean' } | Select-Object -First 1
     if ($LASTEXITCODE -ne 1 -or -not $wsIssue -or $wsIssue.diffKind -ne 'whitespace-only' -or -not $wsIssue.currentSourceSha256 -or $wsIssue.suggestedUpdate.action -ne 'update-source-sha256') {
         throw "Expected whitespace-only orphan classification: $($wsCheck | ConvertTo-Json -Depth 10)"
     }
 
+    # String-literal whitespace change ("clean ok" -> "cleanok") MUST be classified as semantic, NOT whitespace-only!
+    [IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $savedCleanRaw.Replace('clean ok', 'cleanok'))
+    $litWsCheck = (& $generator -RepoRoot $detRoot --check-recipes --json) | ConvertFrom-Json
+    $litWsIssue = $litWsCheck.issues | Where-Object { $_.kind -eq 'orphaned' -and $_.uid -eq 'Demo.WrapperClean' } | Select-Object -First 1
+    if ($LASTEXITCODE -ne 1 -or -not $litWsIssue -or $litWsIssue.diffKind -ne 'semantic' -or $litWsIssue.suggestedUpdate.action -ne 're-validate-and-apply') {
+        throw "Whitespace change inside a string literal must be classified as semantic: $($litWsCheck | ConvertTo-Json -Depth 10)"
+    }
+
     # Semantic orphan: change printed string
-    [IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $savedCleanRaw.Replace('clean-ok', 'changed-semantics'))
+    [IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $savedCleanRaw.Replace('clean ok', 'changed-semantics'))
     $semCheck = (& $generator -RepoRoot $detRoot --check-recipes --json) | ConvertFrom-Json
     $semIssue = $semCheck.issues | Where-Object { $_.kind -eq 'orphaned' -and $_.uid -eq 'Demo.WrapperClean' } | Select-Object -First 1
     if ($LASTEXITCODE -ne 1 -or -not $semIssue -or $semIssue.diffKind -ne 'semantic' -or $semIssue.suggestedUpdate.action -ne 're-validate-and-apply') {
@@ -1161,14 +1281,21 @@ if ([IO.File]::ReadAllText("$detRoot/run-actions.manifest.json") -cne $manifestB
     throw 'Failed verification destroyed or mutated the previous manifest or Markdown associations!'
 }
 
-# 8. Blocker 7: --verify Native --engine-path, --verify-changed reuse, and --verify --id <uid>
+# 8. Blocker 7: --verify Native --engine-path, --verify-changed reuse + engine hash invalidation, runtime-failure manifest preservation, and --verify --id <uid>
 $detEngine = Join-Path $work 'det-csrun.ps1'
+$detEngineB = Join-Path $work 'det-csrun-b.ps1'
 [IO.File]::WriteAllText($detEngine, $mockEngineContent, [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($detEngineB, ($mockEngineContent + "`n# engine-b"), [Text.UTF8Encoding]::new($false))
 $detVerifyCalls = [Collections.Generic.List[string]]::new()
+$detFailFirst = $false
 function pwsh {
     $fileIndex = [Array]::IndexOf($args, '-File')
     $detVerifyCalls.Add([string]$args[$fileIndex + 1])
-    $global:LASTEXITCODE = 0
+    if ($detFailFirst -and $detVerifyCalls.Count -eq 1) {
+        $global:LASTEXITCODE = 1
+    } else {
+        $global:LASTEXITCODE = 0
+    }
 }
 try {
     $vAll = (& $generator -RepoRoot $detRoot --verify Native --engine-path $detEngine --summary-json) | ConvertFrom-Json
@@ -1179,21 +1306,52 @@ try {
     $vChangedCount = $detVerifyCalls.Count
     $detVerifyCalls.Clear()
 
-    $vSingle = (& $generator -RepoRoot $detRoot --verify --id Demo.WrapperMembers#1 --engine-path $detEngine --summary-json) | ConvertFrom-Json
+    # Switching to a different engine (different SHA-256) must re-execute standalone examples under --verify-changed!
+    $vChangedEngineB = (& $generator -RepoRoot $detRoot --verify-changed --engine-path $detEngineB --summary-json) | ConvertFrom-Json
+    $vChangedEngineBCount = $detVerifyCalls.Count
+    $detVerifyCalls.Clear()
+
+    # A runtime verification failure with non-zero manifest entries must preserve the previous manifest and page associations!
+    $manifestBeforeRuntimeFail = [IO.File]::ReadAllText("$detRoot/run-actions.manifest.json")
+    $pageBeforeRuntimeFail = [IO.File]::ReadAllText("$detRoot/docs/WrapperClean.md")
+    $savedCleanBeforeRuntimeFail = $pageBeforeRuntimeFail
+    try {
+        [IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $pageBeforeRuntimeFail.Replace('Console.WriteLine("clean ok");', 'Console.WriteLine("failing-update");'))
+        $detFailFirst = $true
+        $vRuntimeFail = (& $generator -RepoRoot $detRoot --verify Native --engine-path $detEngineB --summary-json) | ConvertFrom-Json
+        $vRuntimeFailExit = $LASTEXITCODE
+        $detFailFirst = $false
+        $detVerifyCalls.Clear()
+        if ($vRuntimeFailExit -ne 1 -or -not $vRuntimeFail.manifestPreserved) {
+            throw "Runtime verification failure must exit 1 and preserve manifest: $($vRuntimeFail | ConvertTo-Json -Depth 5 -Compress)"
+        }
+        if ([IO.File]::ReadAllText("$detRoot/run-actions.manifest.json") -cne $manifestBeforeRuntimeFail) {
+            throw 'Runtime verification failure overwrote the last good run-actions.manifest.json!'
+        }
+    } finally {
+        $detFailFirst = $false
+        [IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $savedCleanBeforeRuntimeFail)
+    }
+
+    $vSingle = (& $generator -RepoRoot $detRoot --verify --id Demo.WrapperMembers#1 --engine-path $detEngineB --summary-json) | ConvertFrom-Json
     $vSingleCount = $detVerifyCalls.Count
     $detVerifyCalls.Clear()
 
-    $vMissing = (& $generator -RepoRoot $detRoot --verify --id Does.Not.Exist --engine-path $detEngine --summary-json)
+    $vMissing = (& $generator -RepoRoot $detRoot --verify --id Does.Not.Exist --engine-path $detEngineB --summary-json)
     $vMissingExit = $LASTEXITCODE
 } finally {
     Remove-Item Function:\pwsh -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $detEngine) { Remove-Item -LiteralPath $detEngine -Force }
+    if (Test-Path -LiteralPath $detEngineB) { Remove-Item -LiteralPath $detEngineB -Force }
 }
 if ($vAllCount -lt 5 -or $vAll.verified -lt 5) {
     throw "Expected full --verify Native run to execute >=5 examples; executed=$vAllCount verified=$($vAll.verified)"
 }
 if ($vChangedCount -ne 0 -or $vChanged.verification.reused -lt 5 -or $vChanged.verifyScope -ne 'changed') {
     throw "Expected --verify-changed to reuse all unchanged verified examples; executed=$vChangedCount reused=$($vChanged.verification.reused)"
+}
+if ($vChangedEngineBCount -lt 4) {
+    throw "Expected --verify-changed with a different engine SHA-256 to re-execute all standalone examples; executed=$vChangedEngineBCount"
 }
 if ($vSingleCount -ne 1 -or $vSingle.verifyScope -ne 'id') {
     throw "Expected --verify --id to execute exactly 1 example; executed=$vSingleCount scope=$($vSingle.verifyScope)"
@@ -1204,6 +1362,42 @@ if ($manifestAfterSingle.Count -lt 5) {
 }
 if ($vMissingExit -ne 3) {
     throw "Expected unmatched --id selector to exit 3; got $vMissingExit"
+}
+
+# 9. Issue 7: Host harness build deadline bounds stalled dotnet build and kills its process tree.
+. (Join-Path $PSScriptRoot 'integration-example.ps1')
+$stalledPair = New-HostExamplePair -Source 'Console.WriteLine("never");' -Framework 'net10.0' -Sdk 'Microsoft.NET.Sdk.Web' -TimeoutSeconds 3
+$pwshExe = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
+$childPidFile = Join-Path $work 'stalled-child.pid'
+$buildArgsPattern = "foreach (`$a in @('build', `$csprojPath, '-c', 'Release', '--nologo', '-v', 'quiet')) { `$buildStartInfo.ArgumentList.Add(`$a) }"
+if (-not $stalledPair.Native.Contains($buildArgsPattern)) {
+    throw 'Host runner script no longer launches dotnet build via bounded ProcessStartInfo.'
+}
+$escapedPwsh = $pwshExe.Replace("'", "''")
+$escapedPidFile = $childPidFile.Replace("'", "''")
+$stallCmd = "`$c = Start-Process -FilePath '$escapedPwsh' -ArgumentList @('-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30') -PassThru; [IO.File]::WriteAllText('$escapedPidFile', [string]`$c.Id); Start-Sleep -Seconds 30"
+$escapedStallCmd = $stallCmd.Replace("'", "''")
+$stalledScript = $stalledPair.Native.Replace(
+    $buildArgsPattern,
+    "`$buildStartInfo.FileName = '$escapedPwsh'; foreach (`$a in @('-NoProfile', '-NonInteractive', '-Command', '$escapedStallCmd')) { `$buildStartInfo.ArgumentList.Add(`$a) }"
+)
+$stalledScriptPath = Join-Path $work 'stalled-host.ps1'
+[IO.File]::WriteAllText($stalledScriptPath, $stalledScript, [Text.UTF8Encoding]::new($false))
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$stalledOut = & $pwshExe -NoProfile -NonInteractive -File $stalledScriptPath 2>&1 | Out-String
+$stalledExit = $LASTEXITCODE
+$sw.Stop()
+if ($stalledExit -eq 0 -or $stalledOut -notlike '*Host sample build timed out after 3s*' -or $sw.Elapsed.TotalSeconds -ge 15) {
+    throw "Stalled host build was not bounded by timeoutSeconds (exit=$stalledExit, elapsed=$([Math]::Round($sw.Elapsed.TotalSeconds,2))s): $stalledOut"
+}
+if (Test-Path -LiteralPath $childPidFile) {
+    $childPid = [int]([IO.File]::ReadAllText($childPidFile).Trim())
+    Start-Sleep -Milliseconds 300
+    $stillRunning = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+    if ($stillRunning) {
+        try { Stop-Process -Id $childPid -Force -ErrorAction SilentlyContinue } catch {}
+        throw "Timed-out host build did not kill its child process tree (PID $childPid survived)."
+    }
 }
 
 $global:LASTEXITCODE = 0
