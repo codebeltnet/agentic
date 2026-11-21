@@ -34,7 +34,7 @@ internal static class AgentsScript
 
         For public non-abstraction types, include at least one realistic, copy/paste-ready usage example on the generated type page/overwrite section for that type UID. For example, a public `Class1` requires an example on the `Class1` API page, not only on the namespace page. Prefer deriving examples from existing unit, functional, or integration tests, but convert test code into real-life consumer-oriented usage.
 
-        Missing type examples must be added through per-type DocFX overwrite files under `.docfx/api/types/{TypeUid}.md` in Codebelt repositories. Namespace overview text and `Extension Members` tables are not substitutes for type-page examples.
+        Missing type examples must be added through per-type DocFX overwrite files under `.docfx/api/types/{TypeUid}.md` in Codebelt repositories. Namespace overview text and `Extension Members` tables are not substitutes for type-page examples. When front matter maps the body to `example` (`example: *content`, `example: [*content]`, or `example:\n- *content`), DocFX renders the `Examples` section heading automatically — never add a manual `## Example`, `### Example`, or `### Examples` heading in the body; place the complementary explanatory prose directly before the C# fence instead.
 
         Public extension methods must have examples too. Listing an extension method in an `Extension Members` table is required, but it is not enough.
 

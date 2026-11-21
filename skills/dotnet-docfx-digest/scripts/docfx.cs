@@ -4714,6 +4714,33 @@ internal static class DocfxValidator
                 $"UID `{duplicate.Key}` is mapped to {duplicate.Count()} example sections. Keep one coherent, scenario-led example for a UID; merge or remove the duplicate `example: *content` sections."));
         }
 
+        foreach (var section in sections
+                     .Where(section => section.MappedToExample)
+                     .Where(section => !options.ChangedOnly || changedFiles is null ||
+                                       changedFiles.Contains(Path.GetFullPath(section.File)) ||
+                                       changedFiles.Any(IsChangedDocfxConfig)))
+        {
+            var sectionNs = NamespaceFromUid(section.Uid);
+            var declaringNs = NamespaceFromUid(DeclaringTypeUidFromMethodUid(section.Uid));
+            if (scope.ScopeRestricted &&
+                !scope.IncludesNamespace(sectionNs) &&
+                !scope.IncludesNamespace(declaringNs))
+            {
+                continue;
+            }
+
+            if (TryFindRedundantExampleHeading(section.Body, out var lineOffset, out var headingLine))
+            {
+                report.Errors.Add(new Diagnostic(
+                    "EXAMPLE_REDUNDANT_HEADING",
+                    Rel(repoRoot, section.File),
+                    sectionNs,
+                    $"Line {section.BodyStartLine + lineOffset} in UID `{section.Uid}` includes a redundant `{headingLine}` heading inside an `example:`-mapped overwrite section (`example: *content`, `example: [*content]`, or `example:\\n- *content`). " +
+                    "DocFX renders the `Examples` section heading automatically from the front matter, so adding a manual `Example`/`Examples` heading produces duplicate headings on the rendered page. Remove the heading and keep the complementary explanatory prose directly before the C# fence.",
+                    uid: section.Uid));
+            }
+        }
+
         var exampleFingerprints = new List<(string SectionUid, string Path, string Fingerprint)>();
 
         foreach (var target in api.RequiredExampleTargets)
@@ -6375,22 +6402,83 @@ internal static class DocfxValidator
         return line;
     }
 
+    private static bool TryFindRedundantExampleHeading(string body, out int relativeLineOffset, out string headingLine)
+    {
+        relativeLineOffset = 0;
+        headingLine = string.Empty;
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return false;
+        }
+
+        var lines = body.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+        var inFence = false;
+        var fenceChar = '\0';
+        var fenceLength = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].TrimStart();
+            if (!inFence)
+            {
+                if (trimmed.StartsWith("```", StringComparison.Ordinal) || trimmed.StartsWith("~~~", StringComparison.Ordinal))
+                {
+                    fenceChar = trimmed[0];
+                    fenceLength = 0;
+                    while (fenceLength < trimmed.Length && trimmed[fenceLength] == fenceChar)
+                    {
+                        fenceLength++;
+                    }
+                    inFence = true;
+                    continue;
+                }
+            }
+            else
+            {
+                if (trimmed.Length >= fenceLength && trimmed[0] == fenceChar)
+                {
+                    var count = 0;
+                    while (count < trimmed.Length && trimmed[count] == fenceChar)
+                    {
+                        count++;
+                    }
+                    if (count >= fenceLength && string.IsNullOrWhiteSpace(trimmed[count..]))
+                    {
+                        inFence = false;
+                    }
+                }
+                continue;
+            }
+
+            if (Regex.IsMatch(trimmed, @"^#{1,6}\s+Examples?:?(?:\s+#+)?\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                relativeLineOffset = i;
+                headingLine = trimmed.TrimEnd();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsMappedToExample(string yaml)
     {
-        // Form A: example: *content  (inline scalar)
-        if (ReadYamlScalar(yaml, "example") is "*content")
+        // Form A: example: *content (inline scalar) or example: [*content] (flow sequence)
+        var scalar = ReadYamlScalar(yaml, "example");
+        if (scalar is "*content" ||
+            (scalar is not null && Regex.IsMatch(scalar, @"^\[\s*\*content\s*\]$")))
         {
             return true;
         }
 
-        // Form B: example:\n  - *content  (sequence / list form)
+        // Form B: example:\n  - *content (block sequence / list form)
         var lines = yaml.Split('\n');
         for (var i = 0; i < lines.Length - 1; i++)
         {
             if (lines[i].Trim() == "example:")
             {
                 var next = lines[i + 1].Trim();
-                if (next == "- *content")
+                if (Regex.IsMatch(next, @"^-\s+\*content$"))
                 {
                     return true;
                 }
@@ -9051,6 +9139,7 @@ internal static class DocfxValidator
             var action = diagnostic.Code switch
             {
                 "EXAMPLE_UID_DUPLICATE" => "Merge the duplicate mappings into one coherent example section for the UID, then rerun validation.",
+                "EXAMPLE_REDUNDANT_HEADING" => "Remove the manual `Example`/`Examples` heading from the `example:`-mapped overwrite body (DocFX renders `Examples` automatically) and keep the complementary explanatory prose directly before the C# fence.",
                 "EXAMPLE_PLACEHOLDER" or "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or
                 "EXAMPLE_DEFAULT_PLACEHOLDER" or "EXAMPLE_NO_OBSERVABLE_OUTCOME" or "EXAMPLE_FORWARDING_SCAFFOLD" or
                 "EXAMPLE_RUNTIME_TYPE_NAME_OUTCOME" or "EXAMPLE_EMPTY_ENTRY_POINT_STUB" =>
@@ -9079,7 +9168,7 @@ internal static class DocfxValidator
 
     private static bool IsExampleQualityDiagnostic(Diagnostic diagnostic)
     {
-        return diagnostic.Code is "EXAMPLE_MISSING" or "EXAMPLE_UID_DUPLICATE" or "EXAMPLE_PLACEHOLDER" or
+        return diagnostic.Code is "EXAMPLE_MISSING" or "EXAMPLE_UID_DUPLICATE" or "EXAMPLE_REDUNDANT_HEADING" or "EXAMPLE_PLACEHOLDER" or
             "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or "EXTENSION_EXAMPLE_NOT_INVOKED" or
             "EXAMPLE_DEFAULT_PLACEHOLDER" or "EXAMPLE_NO_OBSERVABLE_OUTCOME" or "EXAMPLE_FORWARDING_SCAFFOLD" or
             "EXAMPLE_RUNTIME_TYPE_NAME_OUTCOME" or "EXAMPLE_EMPTY_ENTRY_POINT_STUB" or
