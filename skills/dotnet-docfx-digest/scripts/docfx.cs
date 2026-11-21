@@ -1452,6 +1452,21 @@ internal static class DocfxValidator
             CopyDirectory(repoRoot, tempRoot, cancellationToken);
             var relativeDocfxPath = Path.GetRelativePath(repoRoot, docfxPath);
             var tempDocfxPath = Path.Combine(tempRoot, relativeDocfxPath);
+            var tempDocfxDir = Path.GetDirectoryName(tempDocfxPath) ?? tempRoot;
+            var buildRunActionsScript = Path.Combine(tempDocfxDir, "BuildRunActions.ps1");
+            var runActionsManifest = Path.Combine(tempDocfxDir, "run-actions.manifest.json");
+            if (File.Exists(buildRunActionsScript) && File.Exists(runActionsManifest))
+            {
+                var materialize = RunProcess("pwsh", $"-NoProfile -NonInteractive -File \"{buildRunActionsScript}\"",
+                    tempDocfxDir, null, ProcessPermission.DocfxBuild, cancellationToken,
+                    new ProcessProgress("Materialize run-actions", "isolated temp workspace"));
+                if (materialize.ExitCode != 0)
+                {
+                    return new DocfxVerificationResult(false,
+                        $"BuildRunActions.ps1 failed in a temp workspace (exit {materialize.ExitCode}).\n{Trim(materialize.StdOut + materialize.StdErr)}",
+                        stopwatch.Elapsed, materialize.ExitCode == -2);
+                }
+            }
             var environment = hasStrongNameKey
                 ? null
                 : new Dictionary<string, string> { ["SkipSignAssembly"] = "true" };
