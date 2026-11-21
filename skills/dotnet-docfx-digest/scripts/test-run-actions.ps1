@@ -137,6 +137,10 @@ $settingsPath = "$work/run-actions.settings.json"
 [IO.File]::WriteAllText($settingsPath, (@{examples=@($packageRecipe)} | ConvertTo-Json -Depth 20))
 $first = (& $generator -RepoRoot $work) | ConvertFrom-Json
 if ($LASTEXITCODE -ne 2 -or @($first | Where-Object coverage -eq 'Paired').Count -ne 5 -or @($first | Where-Object coverage -eq 'Unresolved').Count -ne 1) { throw "Unexpected generation: $($first | ConvertTo-Json -Depth 10)" }
+if (Test-Path -LiteralPath "$work/run-actions") { throw 'Generator must not physically create run-actions/ in the working tree; BuildRunActions.ps1 owns materialization.' }
+$global:LASTEXITCODE = 0
+& "$work/BuildRunActions.ps1" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'BuildRunActions.ps1 failed to materialize scripts from run-actions.manifest.json.' }
 $resolved = $first | Where-Object uid -ceq $packageUid
 # The same envelope assets/run-actions.js accepts: one complete paste unit, so execution and verification run together.
 $completeScript = '\A& \{\r?\n#requires -Version 7\.0\r?\n[\s\S]*\r?\n\}\r?\n?\z'
@@ -184,7 +188,7 @@ foreach ($file in Get-ChildItem $work -Recurse -File) {
 # Mock only the fresh-process result to exercise independent status bookkeeping without running generated code.
 function pwsh {
     $fileIndex = [Array]::IndexOf($args, '-File')
-    if ($fileIndex -lt 0 -or [string]$args[$fileIndex + 1] -notmatch '[\\/]native\.ps1$') { throw 'The focused verification should invoke Native only.' }
+    if ($fileIndex -lt 0 -or [string]$args[$fileIndex + 1] -notmatch '-native-[a-f0-9]{32}\.ps1$') { throw 'The focused verification should invoke Native only.' }
     $global:LASTEXITCODE = 0
 }
 try {
@@ -200,11 +204,9 @@ $toolbarModule = "$work/template/public/run-actions.js"
 $toolbarHash = (Get-FileHash $toolbarSource).Hash
 [IO.File]::WriteAllText($toolbarModule, '// Stale toolbar from a previous skill revision.')
 $refresh = (& $generator -RepoRoot $work) | ConvertFrom-Json
-$refreshedEntry = $refresh | Where-Object id -eq $entry.id
 if ((Get-FileHash $toolbarModule).Hash -cne $toolbarHash -or
-    @($refresh | Where-Object status -eq 'unchanged').Count -ne 5 -or
-    $refreshedEntry.native -ne 'Verified' -or $refreshedEntry.docker -ne 'Unverified') {
-    throw 'Refreshing a stale toolbar must preserve the execution payloads and verification evidence.'
+    @($refresh | Where-Object status -eq 'unchanged').Count -ne 5) {
+    throw 'Refreshing a stale toolbar must preserve the manifest payloads.'
 }
 foreach ($script in Get-ChildItem "$work/run-actions" -Filter '*.ps1' -Recurse -File) {
     if ($before[$script.FullName][0] -cne (Get-FileHash $script.FullName).Hash -or
@@ -239,6 +241,9 @@ $settings = [ordered]@{ examples=@($packageRecipe, [ordered]@{
 [IO.File]::WriteAllText("$work/run-actions.settings.json", ($settings | ConvertTo-Json -Depth 20))
 $limited = (& $generator -RepoRoot $work) | ConvertFrom-Json
 $limitedEntry = $limited | Where-Object id -eq $entry.id
+$global:LASTEXITCODE = 0
+& "$work/BuildRunActions.ps1" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'BuildRunActions.ps1 failed after single-transport update.' }
 if ($limitedEntry.coverage -ne 'Partially supported' -or $limitedEntry.docker -ne 'Unsupported' -or -not (Test-Path "$work/run-actions/$($entry.id)/native.ps1") -or (Test-Path "$work/run-actions/$($entry.id)/docker.ps1")) { throw 'Single-transport limitation was misrepresented.' }
 if ((Get-Content "$work/docs/integration.md" -Raw).Contains('View Docker Script')) { throw 'Unsupported Docker still has a control.' }
 $limitedAgain = (& $generator -RepoRoot $work) | ConvertFrom-Json
@@ -291,8 +296,7 @@ if ((Test-Path -LiteralPath $staleExampleDir) -or
     (Test-Path -LiteralPath "$mixedExampleDir/native.ps1")) {
     throw 'BuildRunActions.ps1 left stale generated scripts or empty stale directories behind.'
 }
-if (-not (Test-Path -LiteralPath "$work/run-actions/index.json") -or
-    -not (Test-Path -LiteralPath $unrelatedRootFile) -or
+if (-not (Test-Path -LiteralPath $unrelatedRootFile) -or
     -not (Test-Path -LiteralPath $unrelatedDirScript) -or
     -not (Test-Path -LiteralPath $mixedKeepFile)) {
     throw 'BuildRunActions.ps1 deleted unrelated files.'
@@ -317,9 +321,11 @@ if ($LASTEXITCODE -ne 0 -or (Test-Path (Join-Path $noManifestDir 'run-actions'))
     throw 'BuildRunActions.ps1 must no-op cleanly when no default run-actions.manifest.json exists.'
 }
 
-# Mutating the principal source invalidates its recipe and removes both associations and owned scripts.
+# Mutating the principal source invalidates its recipe and removes both associations and manifest entries.
 [IO.File]::WriteAllText("$work/docs/integration.md", $updated.Replace('Bootstrapper Minimal Worker', 'Changed assertion'))
 $third = (& $generator -RepoRoot $work) | ConvertFrom-Json
+$global:LASTEXITCODE = 0
+& "$work/BuildRunActions.ps1" | Out-Null
 if ((Test-Path "$work/run-actions/$($entry.id)/native.ps1") -or (Get-Content "$work/docs/integration.md" -Raw).Contains('data-example-id')) { throw 'Stale recipe/assets survived source change.' }
 
 # A legacy hidden harness is a failed recipe, while an intrinsic limitation has no assets.
@@ -330,9 +336,12 @@ $intrinsic = @{uid=$partialResult.uid; sourceSha256=$partialResult.sourceSha256;
 $customSettings = "$work/custom-settings.json"
 [IO.File]::WriteAllText($customSettings, (@{examples=@($invalidRecipe,$intrinsic)} | ConvertTo-Json -Depth 20))
 $classified = (& $generator -RepoRoot $work -Settings $customSettings) | ConvertFrom-Json
+$classifiedExit = $LASTEXITCODE
+$global:LASTEXITCODE = 0
+& "$work/BuildRunActions.ps1" | Out-Null
 $invalid = $classified | Where-Object id -eq $resolved.id
 $limitedPartial = $classified | Where-Object id -eq $partialResult.id
-if ($LASTEXITCODE -ne 1 -or $invalid.coverage -ne 'Unresolved' -or $invalid.reason -notlike '*Move the executable C# into the displayed sample*' -or
+if ($classifiedExit -ne 1 -or $invalid.coverage -ne 'Unresolved' -or $invalid.reason -notlike '*Move the executable C# into the displayed sample*' -or
     (Test-Path "$work/run-actions/$($resolved.id)/native.ps1") -or (Test-Path "$work/run-actions/$($resolved.id)/docker.ps1") -or
     $limitedPartial.coverage -ne 'Intrinsically non-executable' -or $limitedPartial.native -ne 'Unsupported' -or
     $limitedPartial.docker -ne 'Unsupported' -or (Test-Path "$work/run-actions/$($limitedPartial.id)/native.ps1")) {

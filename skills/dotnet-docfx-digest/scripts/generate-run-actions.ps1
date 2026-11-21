@@ -56,11 +56,14 @@ $inventory = ($inventoryText -join "`n") | ConvertFrom-Json
 $configPath = $inventory.config
 $workspace = Split-Path $configPath -Parent
 Assert-RepositoryPath $configPath
-$assetRoot = Join-Path $workspace 'run-actions'
-Assert-RepositoryPath $assetRoot
-$indexPath = Join-Path $assetRoot 'index.json'
-$old = @()
-if (Test-Path $indexPath) { $old = @((Get-Content $indexPath -Raw | ConvertFrom-Json).examples) }
+$manifestPath = Join-Path $workspace 'run-actions.manifest.json'
+$oldManifestById = @{}
+if (Test-Path -LiteralPath $manifestPath) {
+    $oldManifestDoc = Get-Content $manifestPath -Raw | ConvertFrom-Json
+    foreach ($entry in @($oldManifestDoc.examples)) {
+        if ($entry.id) { $oldManifestById[$entry.id] = ($entry | ConvertTo-Json -Depth 30 -Compress) }
+    }
+}
 $recipes = @()
 if (-not $Settings) { $Settings = Join-Path $workspace 'run-actions.settings.json' }
 if (Test-Path $Settings) { $recipes = @((Get-Content $Settings -Raw | ConvertFrom-Json).examples) }
@@ -68,19 +71,8 @@ $toolHash = Hash ((Get-Content $PSCommandPath -Raw) + (Get-Content (Join-Path $P
 $results = [Collections.Generic.List[object]]::new()
 $manifestEntries = [Collections.Generic.List[object]]::new()
 $associations = [hashtable]::new([StringComparer]::Ordinal)
-$previousPages = foreach ($entry in $old) {
-    if (-not $entry.file) { continue }
-    $path = [IO.Path]::GetFullPath($entry.file, $root)
-    # Legacy indexes stored absolute paths. After moving the checkout, only current
-    # inventory paths and prior paths inside this checkout can own associations.
-    if ($path.StartsWith($rootPrefix, [StringComparison]::Ordinal)) { $path }
-}
-$pages = @(@($inventory.examples.file) + @($previousPages) | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
+$pages = @(@($inventory.examples.file) | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
 foreach ($page in $pages) { Assert-RepositoryPath $page }
-$oldByFingerprint = @{}
-foreach ($entry in $old) {
-    if ($entry.fingerprint) { $oldByFingerprint["$($entry.id)|$($entry.fingerprint)"] = $entry }
-}
 $recipeBySource = [hashtable]::new([StringComparer]::Ordinal)
 foreach ($recipe in $recipes) {
     $key = "$($recipe.uid)|$($recipe.sourceSha256.ToUpperInvariant())"
@@ -142,53 +134,38 @@ foreach ($example in $inventory.examples) {
         if ($strategy -eq 'standalone') { $result.executionSourceSha256 = Hash $displayedSource }
         $image = if ($recipe.csrunImage) { $recipe.csrunImage } else { $CsrunImage }
         $fingerprint = Hash ("$toolHash|$sourceHash|$strategy|$Framework|$image|$($result.executionSourceSha256)|" + ($recipe | ConvertTo-Json -Depth 30 -Compress))
-        $prior = @($oldByFingerprint["$id|$fingerprint"] | Where-Object { $null -ne $_ })
-        $dir = Join-Path $assetRoot $id
-        $reusable = $prior.Count -eq 1
-        foreach ($transport in $transports) {
-            $path = Join-Path $dir "$transport.ps1"
-            if (-not (Test-Path $path) -or -not $reusable -or (Hash ([IO.File]::ReadAllText($path))) -cne $prior[0]."${transport}Sha256") { $reusable = $false }
-        }
         $manifestObject = $null
         if ($strategy -eq 'standalone') {
             $manifestObject = if ($recipe) { $recipe.manifest | Select-Object * } else { [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) } }
             if ($manifestObject.PSObject.Properties['source'] -and (Normalize $manifestObject.source) -cne $displayedSource) { throw 'Manifest source differs from displayed C#.' }
             $manifestObject | Add-Member -NotePropertyName source -NotePropertyValue $displayedSource -Force
         }
-        if ($reusable) {
-            $pair = @{}
-            foreach ($transport in $transports) {
-                $pair[$transport] = [IO.File]::ReadAllText((Join-Path $dir "$transport.ps1"))
-                if ($prior[0]."${transport}Evidence") { $result["${transport}Evidence"] = $prior[0]."${transport}Evidence" }
-            }
-            $result.native = $prior[0].native; $result.docker = $prior[0].docker
-        } elseif ($strategy -eq 'repository') {
+        if ($strategy -eq 'repository') {
             $pair = New-RepositoryExamplePair -Repository $recipe.repository -Commit $recipe.commit -Project $recipe.project -Test $recipe.test -Framework $recipe.framework -Image $recipe.image
         } else {
             $pair = New-CsrunExecutionPair -ManifestJson ($manifestObject | ConvertTo-Json -Depth 30) -Image $image
         }
-        $changed = $false
         foreach ($transport in $transports) {
             $script = Normalize $pair.$transport
             $tokens=$null; $errors=$null
             $null = [Management.Automation.Language.Parser]::ParseInput($script,[ref]$tokens,[ref]$errors)
             if ($errors.Count) { throw "Generated $transport script has syntax errors: $errors" }
-            $path = Join-Path $dir "$transport.ps1"
-            $changed = (Write-Changed $path $script) -or $changed
             $result["${transport}Sha256"] = Hash $script
             if ($Verify -eq 'Both' -or $Verify -eq $transport) {
+                $tempScript = Join-Path ([IO.Path]::GetTempPath()) ("docfx-run-$id-$transport-" + [guid]::NewGuid().ToString('N') + '.ps1')
                 $log = Join-Path ([IO.Path]::GetTempPath()) ("docfx-run-$id-$transport-" + [guid]::NewGuid().ToString('N') + '.log')
-                & pwsh -NoProfile -NonInteractive -File $path *> $log
-                $result[$transport] = if ($LASTEXITCODE -eq 0) { 'Verified' } else { 'Failed' }
-                $result["${transport}Evidence"] = $log
+                try {
+                    [IO.File]::WriteAllText($tempScript, $script, [Text.UTF8Encoding]::new($false))
+                    & pwsh -NoProfile -NonInteractive -File $tempScript *> $log
+                    $result[$transport] = if ($LASTEXITCODE -eq 0) { 'Verified' } else { 'Failed' }
+                    $result["${transport}Evidence"] = $log
+                } finally {
+                    if (Test-Path -LiteralPath $tempScript) { Remove-Item -LiteralPath $tempScript -Force }
+                }
             }
         }
-        $result.status = if ($changed) { 'generated' } else { 'unchanged' }
-        $result.coverage = if ($transports.Count -eq 2) { 'Paired' } else { 'Partially supported' }
-        if ($recipe.explanation) { $result.explanation = $recipe.explanation }
-        $result.fingerprint = $fingerprint
-        if ($strategy -eq 'repository') {
-            $manifestEntries.Add([ordered]@{
+        $manifestEntry = if ($strategy -eq 'repository') {
+            [ordered]@{
                 id = $id
                 strategy = 'repository'
                 transports = @($transports)
@@ -198,16 +175,23 @@ foreach ($example in $inventory.examples) {
                 test = $recipe.test
                 framework = $recipe.framework
                 image = $recipe.image
-            })
+            }
         } else {
-            $manifestEntries.Add([ordered]@{
+            [ordered]@{
                 id = $id
                 strategy = 'standalone'
                 transports = @($transports)
                 image = $image
                 manifest = $manifestObject
-            })
+            }
         }
+        $manifestEntryJson = $manifestEntry | ConvertTo-Json -Depth 30 -Compress
+        $changed = -not $oldManifestById.ContainsKey($id) -or ($oldManifestById[$id] -cne $manifestEntryJson)
+        $result.status = if ($changed) { 'generated' } else { 'unchanged' }
+        $result.coverage = if ($transports.Count -eq 2) { 'Paired' } else { 'Partially supported' }
+        if ($recipe.explanation) { $result.explanation = $recipe.explanation }
+        $result.fingerprint = $fingerprint
+        $manifestEntries.Add($manifestEntry)
         $links = @($transports | ForEach-Object {
             $label = if ($_ -eq 'native') { 'Native' } else { 'Docker' }
             '<a href="~/run-actions/' + $id + '/' + $_ + '.ps1" data-transport="' + $_ + '">View ' + $label + ' Script</a>'
@@ -251,26 +235,6 @@ foreach ($page in $pages) {
     }
     Write-Page $page $original $updated
 }
-# Remove only assets owned by the previous index. Never recursively delete user directories.
-foreach ($entry in $results) {
-    foreach ($transport in @('native','docker')) {
-        if ($entry.$transport -eq 'Unsupported' -and $entry.id -match '^[a-f0-9]{24}$') {
-            $path = Join-Path $assetRoot "$($entry.id)/$transport.ps1"
-            Assert-RepositoryPath $path
-            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
-        }
-    }
-}
-$active = @($results | Where-Object { $_.status -in @('generated','unchanged') } | ForEach-Object id)
-foreach ($previous in $old) {
-    if ($previous.id -match '^[a-f0-9]{24}$' -and $previous.id -notin $active) {
-        foreach ($name in @('native.ps1','docker.ps1')) {
-            $path = Join-Path $assetRoot "$($previous.id)/$name"
-            Assert-RepositoryPath $path
-            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
-        }
-    }
-}
 $config = Get-Content $configPath -Raw | ConvertFrom-Json -AsHashtable
 if (-not $config.build) { throw 'docfx.json requires build configuration.' }
 $resources = @($config.build.resource)
@@ -295,15 +259,8 @@ if (-not $mainText.Contains("import './run-actions.js';")) { $null = Write-Chang
 $null = Write-Changed (Join-Path (Split-Path $main -Parent) 'run-actions.js') ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../assets/run-actions.js')))
 $null = Write-Changed $configPath (($config | ConvertTo-Json -Depth 100) + "`n")
 $sortedManifest = @($manifestEntries | Sort-Object { $_.id })
-$null = Write-Changed (Join-Path $workspace 'run-actions.manifest.json') (([ordered]@{ schemaVersion = 1; examples = $sortedManifest } | ConvertTo-Json -Depth 30) + "`n")
+$null = Write-Changed $manifestPath (([ordered]@{ schemaVersion = 1; examples = $sortedManifest } | ConvertTo-Json -Depth 30) + "`n")
 $null = Write-Changed (Join-Path $workspace 'BuildRunActions.ps1') ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../assets/BuildRunActions.ps1')))
-$persisted = @($results | ForEach-Object {
-    $entry = $_ | Select-Object *
-    $entry.file = [IO.Path]::GetRelativePath($root, $entry.file).Replace('\','/')
-    if ($entry.status -in @('generated','unchanged')) { $entry.status = 'ready' }
-    $entry
-})
-$null = Write-Changed $indexPath (([ordered]@{ examples=$persisted } | ConvertTo-Json -Depth 30) + "`n")
 if ($results.Count) { $results | ConvertTo-Json -Depth 30 } else { '[]' }
 if (@($results | Where-Object { $_.status -eq 'failed' -or $_.native -eq 'Failed' -or $_.docker -eq 'Failed' }).Count) { exit 1 }
 if (@($results | Where-Object coverage -eq 'Unresolved').Count) { exit 2 }
