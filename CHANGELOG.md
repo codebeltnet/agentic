@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-11-22
+
+This is a minor release that adds local SHA-256-verified `csrun.ps1` caching with ETag revalidation and rate-limit fallback in `dotnet-csrun`, integrates one-time cached engine resolution and `-EnginePath` support into `dotnet-docfx-digest` standalone verification, and updates both skills' guidance, catalog entry, and offline tests so verification sweeps avoid exhausting GitHub's unauthenticated REST rate limit while published artifacts continue fetching from GitHub.
+
+### Added
+
+- `dotnet-csrun` `Resolve-CsrunEngine` helper in `scripts/sample-tools.ps1` that fetches the latest stable `csrun.ps1` release once, verifies its SHA-256 digest, caches it in a private user-owned directory (`%LOCALAPPDATA%/codebeltnet/csrun-cache` on Windows, `$HOME/.cache/codebeltnet/csrun-cache` on Unix, or `CSRUN_CACHE_DIR`) with ownership, reparse-point, and lock-file checks, revalidates expired entries via `If-None-Match` (`304 Not Modified`), and falls back to the verified cache on HTTP `403`/`429` rate-limit responses,
+- `dotnet-docfx-digest` `generate-run-actions.ps1` `-EnginePath` parameter and one-time `Resolve-CsrunEngine` caching during `-Verify` for standalone examples, recording `engineSha256` and `engineTag` in verification evidence while keeping `run-actions.manifest.json`, `BuildRunActions.ps1`, materialized `native.ps1`/`docker.ps1` artifacts, and cache hashes bound to the GitHub-referencing scripts.
+
+### Changed
+
+- `dotnet-csrun` and `dotnet-docfx-digest` skill guidance, `README.md` catalog entry, and offline PowerShell test suites (`test-sample-tools.ps1` and `test-run-actions.ps1`) now direct verification and multi-example sweeps to reuse the locally cached verified `csrun.ps1` via `-EnginePath` while keeping delivered artifacts fetching and verifying from GitHub.
+
 ## [0.13.1] - 2026-11-21
 
 This is a minor release that adds a standalone run-action materializer to `dotnet-docfx-digest`, so the generated Native and Docker wrapper scripts are rebuilt at DocFX build time from a committed manifest instead of being committed themselves, and it adds validator gates for API include placement and redundant example headings, together with fixes to run-action toolbar fallback and sample build parallelism.
@@ -856,6 +869,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.13.2]: https://github.com/codebeltnet/agentic/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/codebeltnet/agentic/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/codebeltnet/agentic/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/codebeltnet/agentic/compare/v0.12.0...v0.12.1
