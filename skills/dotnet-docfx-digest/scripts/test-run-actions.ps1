@@ -283,7 +283,7 @@ $null = [IO.Directory]::CreateDirectory($mixedExampleDir)
 [IO.File]::WriteAllText("$mixedExampleDir/native.ps1", '# stale mixed native')
 $mixedKeepFile = "$mixedExampleDir/keep.txt"
 [IO.File]::WriteAllText($mixedKeepFile, 'keep inside example dir')
-$LASTEXITCODE = 0
+$global:LASTEXITCODE = 0
 & "$work/BuildRunActions.ps1" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Standalone BuildRunActions.ps1 failed.' }
 if ((Test-Path -LiteralPath $staleExampleDir) -or
@@ -311,7 +311,7 @@ if ([IO.File]::ReadAllText($assetsOnlyPage) -cne $pageBefore -or [IO.File]::Read
 $noManifestDir = Join-Path $work 'no-manifest'
 $null = [IO.Directory]::CreateDirectory($noManifestDir)
 Copy-Item -LiteralPath "$work/BuildRunActions.ps1" -Destination (Join-Path $noManifestDir 'BuildRunActions.ps1')
-$LASTEXITCODE = 0
+$global:LASTEXITCODE = 0
 & (Join-Path $noManifestDir 'BuildRunActions.ps1') | Out-Null
 if ($LASTEXITCODE -ne 0 -or (Test-Path (Join-Path $noManifestDir 'run-actions'))) {
     throw 'BuildRunActions.ps1 must no-op cleanly when no default run-actions.manifest.json exists.'
