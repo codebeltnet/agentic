@@ -6399,12 +6399,46 @@ internal static class DocfxValidator
         var inComment = false;
         var fenceChar = '\0';
         var fenceLength = 0;
+        var fenceListDepth = 0;
+        var listIndents = new Stack<int>();
 
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
             if (!inComment)
             {
+                var leadingLength = 0;
+                var indent = 0;
+                while (leadingLength < line.Length && line[leadingLength] is ' ' or '\t')
+                {
+                    indent += line[leadingLength++] == '\t' ? 4 - indent % 4 : 1;
+                }
+                if (leadingLength < line.Length)
+                {
+                    while (listIndents.TryPeek(out var listIndent) && indent < listIndent)
+                    {
+                        listIndents.Pop();
+                    }
+                    if (listIndents.Count < fenceListDepth)
+                    {
+                        fenceLength = 0;
+                        fenceListDepth = 0;
+                    }
+                    var contentIndent = indent - (listIndents.TryPeek(out var activeIndent) ? activeIndent : 0);
+                    var content = line[leadingLength..];
+                    var marker = fenceLength == 0 && contentIndent < 4
+                        ? Regex.Match(content, @"^(?:[-+*]|[0-9]{1,9}[.)]) {1,4}(?=\S)")
+                        : Match.Empty;
+                    if (marker.Success)
+                    {
+                        listIndents.Push(indent + marker.Length);
+                        line = content[marker.Length..];
+                    }
+                    else
+                    {
+                        line = new string(' ', contentIndent) + content;
+                    }
+                }
                 var fence = Regex.Match(line, @"^ {0,3}(?<marker>`{3,}|~{3,})(?<info>.*)$");
                 if (fenceLength != 0)
                 {
@@ -6412,6 +6446,7 @@ internal static class DocfxValidator
                         fence.Groups["marker"].Length >= fenceLength && string.IsNullOrWhiteSpace(fence.Groups["info"].Value))
                     {
                         fenceLength = 0;
+                        fenceListDepth = 0;
                     }
                     continue;
                 }
@@ -6419,6 +6454,7 @@ internal static class DocfxValidator
                 {
                     fenceChar = fence.Groups["marker"].Value[0];
                     fenceLength = fence.Groups["marker"].Length;
+                    fenceListDepth = listIndents.Count;
                     yield return (string.Empty, i, fence.Groups["info"].Value.Trim().ToLowerInvariant());
                     continue;
                 }

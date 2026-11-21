@@ -2932,6 +2932,10 @@ Write the directive as `[!INCLUDE [availability](example.md)]`.
 -->
 
     [!INCLUDE [availability](example.md)]
+
+1. Literal directive example
+
+       [!INCLUDE [availability](example.md)]
 '@
     $literalIncludes = Invoke-Validator -Workspace $headingWorkspace
     Assert-NoDiagnostic $literalIncludes 'API_INCLUDE_OUTSIDE_NAMESPACES'
@@ -2940,7 +2944,7 @@ Write the directive as `[!INCLUDE [availability](example.md)]`.
     $lateInclude = Invoke-Validator -Workspace $headingWorkspace
     Assert-DiagnosticMessageContains $lateInclude 'API_INCLUDE_OUTSIDE_NAMESPACES' 'after the examples begin'
 
-    [IO.File]::AppendAllText($spinnerPage, "`n`n$include`n")
+    [IO.File]::AppendAllText($spinnerPage, "`n`n1. Availability`n`n    $include`n")
     $typeInclude = Invoke-Validator -Workspace $headingWorkspace
     Assert-DiagnosticMessageContains $typeInclude 'API_INCLUDE_OUTSIDE_NAMESPACES' 'outside'
 
