@@ -6,7 +6,8 @@ param(
     [string] $Settings,
     [string] $Framework = 'net10.0',
     [string] $CsrunImage = 'codebeltnet/csrun:10',
-    [ValidateSet('None','Native','Docker','Both')][string] $Verify = 'None'
+    [ValidateSet('None','Native','Docker','Both')][string] $Verify = 'None',
+    [string] $EnginePath
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
@@ -119,6 +120,19 @@ foreach ($recipe in $recipes) {
     if ($recipeBySource.ContainsKey($key)) { throw "Duplicate recipe for $key" }
     $recipeBySource[$key] = $recipe
 }
+$resolvedVerificationEngine = $null
+if ($EnginePath) {
+    $fullEnginePath = [IO.Path]::GetFullPath($EnginePath)
+    if (-not (Test-Path -LiteralPath $fullEnginePath -PathType Leaf)) {
+        throw "csrun engine asset not found: $fullEnginePath"
+    }
+    $resolvedVerificationEngine = [pscustomobject]@{
+        Path = $fullEnginePath
+        Tag = $null
+        Sha256 = (Get-FileHash -LiteralPath $fullEnginePath -Algorithm SHA256).Hash.ToUpperInvariant()
+        Source = 'Explicit'
+    }
+}
 foreach ($example in $inventory.examples) {
     $displayedSource = Normalize $example.code
     $source = $displayedSource
@@ -183,8 +197,10 @@ foreach ($example in $inventory.examples) {
         if ($strategy -eq 'repository') {
             $pair = New-RepositoryExamplePair -Repository $recipe.repository -Commit $recipe.commit -Project $recipe.project -Test $recipe.test -Framework $recipe.framework -Image $recipe.image
         } else {
-            $pair = New-CsrunExecutionPair -ManifestJson ($manifestObject | ConvertTo-Json -Depth 30) -Image $image
+            $manifestJson = $manifestObject | ConvertTo-Json -Depth 30
+            $pair = New-CsrunExecutionPair -ManifestJson $manifestJson -Image $image
         }
+        $verifyPair = $null
         foreach ($transport in $transports) {
             $script = Normalize $pair.$transport
             $tokens=$null; $errors=$null
@@ -195,18 +211,32 @@ foreach ($example in $inventory.examples) {
             $evidencePath = if ($evidenceDirectory) { Join-Path $evidenceDirectory "$configHash-$id-$transport-$scriptHash.json" }
             if ($Verify -eq 'Both' -or $Verify -eq $transport) {
                 if (-not $evidencePath) { throw 'A private, user-owned directory is required to record run-action verification.' }
+                $executionScript = $script
+                if ($strategy -eq 'standalone') {
+                    if (-not $resolvedVerificationEngine) {
+                        $resolvedVerificationEngine = Resolve-CsrunEngine
+                    }
+                    if (-not $verifyPair) {
+                        $verifyPair = New-CsrunExecutionPair -ManifestJson $manifestJson -Image $image -EnginePath $resolvedVerificationEngine.Path
+                    }
+                    $executionScript = Normalize $verifyPair.$transport
+                }
                 $runName = "docfx-run-$id-$transport-" + [guid]::NewGuid().ToString('N')
                 $tempScript = Join-Path $evidenceDirectory "$runName.ps1"
                 $log = Join-Path $evidenceDirectory "$runName.log"
                 try {
-                    [IO.File]::WriteAllText($tempScript, $script, [Text.UTF8Encoding]::new($false))
+                    [IO.File]::WriteAllText($tempScript, $executionScript, [Text.UTF8Encoding]::new($false))
                     [IO.File]::WriteAllText($log, '')
                     & pwsh -NoProfile -NonInteractive -File $tempScript *> $log
                     $result[$transport] = if ($LASTEXITCODE -eq 0) { 'Verified' } else { 'Failed' }
                     $result["${transport}Evidence"] = $log
                     $pendingEvidence = Join-Path $evidenceDirectory "$runName.tmp"
                     try {
-                        $evidence = @{ state = $result[$transport]; log = "$runName.log" }
+                        $evidence = [ordered]@{ state = $result[$transport]; log = "$runName.log" }
+                        if ($strategy -eq 'standalone' -and $resolvedVerificationEngine) {
+                            $evidence.engineSha256 = $resolvedVerificationEngine.Sha256
+                            if ($resolvedVerificationEngine.Tag) { $evidence.engineTag = $resolvedVerificationEngine.Tag }
+                        }
                         [IO.File]::WriteAllText($pendingEvidence, ($evidence | ConvertTo-Json -Compress))
                         if (-not $IsWindows) { & chmod 600 -- $pendingEvidence $log }
                         [IO.File]::Move($pendingEvidence, $evidencePath, $true)

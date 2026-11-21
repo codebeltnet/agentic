@@ -207,16 +207,68 @@ if (@($second | Where-Object status -eq 'unchanged').Count -ne 5) { throw 'Incre
 foreach ($file in Get-ChildItem $work -Recurse -File) {
     if ($before[$file.FullName][0] -cne (Get-FileHash $file.FullName).Hash -or $before[$file.FullName][1] -ne $file.LastWriteTimeUtc.Ticks) { throw "Second run changed $($file.FullName)" }
 }
-# Mock only the fresh-process result to exercise independent status bookkeeping without running generated code.
+# Mock only the fresh-process result and GitHub HTTP responses to exercise independent status bookkeeping and single-fetch engine caching offline.
+$mockCacheDir = Join-Path $work 'mock-csrun-cache'
+$previousCacheEnv = $env:CSRUN_CACHE_DIR
+$env:CSRUN_CACHE_DIR = $mockCacheDir
+$mockEngineContent = "param([string]`$ManifestJson)`n[Console]::Write(`$ManifestJson)"
+$mockEngineSha = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($mockEngineContent))).ToLowerInvariant()
+$mockVerifyState = @{
+    ApiCalls = 0
+    AssetCalls = 0
+    StandaloneScripts = [Collections.Generic.List[string]]::new()
+}
+function Invoke-WebRequest {
+    param([string] $Uri, [hashtable] $Headers, [switch] $SkipHttpErrorCheck, [string] $OutFile)
+    if ($OutFile) {
+        $mockVerifyState.AssetCalls++
+        [IO.File]::WriteAllText($OutFile, $mockEngineContent, [Text.UTF8Encoding]::new($false))
+        return
+    }
+    $mockVerifyState.ApiCalls++
+    $body = @{
+        tag_name = 'v0.2.1'
+        assets = @(@{
+            name = 'csrun.ps1'
+            digest = "sha256:$mockEngineSha"
+            browser_download_url = 'https://example.invalid/csrun.ps1'
+        })
+    } | ConvertTo-Json -Depth 5
+    return [pscustomobject]@{ StatusCode = 200; Headers = @{ ETag = @('"mock-etag"') }; Content = $body }
+}
 function pwsh {
     $fileIndex = [Array]::IndexOf($args, '-File')
     if ($fileIndex -lt 0 -or [string]$args[$fileIndex + 1] -notmatch '-native-[a-f0-9]{32}\.ps1$') { throw 'The focused verification should invoke Native only.' }
+    $executedText = [IO.File]::ReadAllText([string]$args[$fileIndex + 1])
+    if ($executedText.Contains('Assert-CsrunTestOutput')) {
+        $mockVerifyState.StandaloneScripts.Add($executedText)
+    }
     $global:LASTEXITCODE = 0
 }
 try {
     $nativeOnly = (& $generator -RepoRoot $work -Verify Native) | ConvertFrom-Json
 }
-finally { Remove-Item Function:\pwsh -ErrorAction SilentlyContinue }
+finally {
+    Remove-Item Function:\pwsh -ErrorAction SilentlyContinue
+    Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+    $env:CSRUN_CACHE_DIR = $previousCacheEnv
+    if (Test-Path -LiteralPath $mockCacheDir) { Remove-Item -LiteralPath $mockCacheDir -Recurse -Force }
+}
+if ($mockVerifyState.ApiCalls -ne 1 -or $mockVerifyState.AssetCalls -ne 1) {
+    throw "Expected exactly one GitHub release lookup and one asset download across all standalone examples; got api=$($mockVerifyState.ApiCalls), asset=$($mockVerifyState.AssetCalls)."
+}
+if ($mockVerifyState.StandaloneScripts.Count -lt 3) {
+    throw "Expected at least 3 standalone verification executions; got $($mockVerifyState.StandaloneScripts.Count)."
+}
+foreach ($executedStandalone in $mockVerifyState.StandaloneScripts) {
+    if ($executedStandalone.Contains('api.github.com/repos/codebeltnet/csrun/releases/latest') -or -not $executedStandalone.Contains('csrun.ps1')) {
+        throw 'Standalone verification script should execute the cached local csrun.ps1 rather than querying GitHub per example.'
+    }
+}
+$publishedConsoleScript = Get-Content "$work/run-actions/$(($nativeOnly | Where-Object { $_.file -like '*console.md' }).id)/native.ps1" -Raw
+if (-not $publishedConsoleScript.Contains('https://api.github.com/repos/codebeltnet/csrun/releases/latest')) {
+    throw 'Published run-action script must still reference GitHub.'
+}
 $nativeOnlyEntry = $nativeOnly | Where-Object id -eq $entry.id
 if ($nativeOnlyEntry.native -ne 'Verified' -or $nativeOnlyEntry.docker -ne 'Unverified') {
     throw 'Successful Native verification must not mark the unexecuted Docker transport Verified.'
@@ -240,6 +292,14 @@ $cacheRecord = Get-ChildItem -LiteralPath $cacheDirectory -Filter "*-$($entry.id
     Where-Object { ([IO.File]::ReadAllText($_.FullName) | ConvertFrom-Json).log -eq (Split-Path $refreshEntry.nativeEvidence -Leaf) } |
     Select-Object -First 1
 if (-not $cacheRecord) { throw 'Verification record and log must share the private cache.' }
+$consoleVerifiedEntry = $refresh | Where-Object { $_.file -like '*console.md' }
+$consoleCacheRecord = Get-ChildItem -LiteralPath $cacheDirectory -Filter "*-$($consoleVerifiedEntry.id)-native-$($consoleVerifiedEntry.nativeSha256).json" |
+    Where-Object { ([IO.File]::ReadAllText($_.FullName) | ConvertFrom-Json).log -eq (Split-Path $consoleVerifiedEntry.nativeEvidence -Leaf) } |
+    Select-Object -First 1
+$consoleEvidenceMeta = if ($consoleCacheRecord) { [IO.File]::ReadAllText($consoleCacheRecord.FullName) | ConvertFrom-Json } else { $null }
+if (-not $consoleEvidenceMeta -or $consoleEvidenceMeta.engineTag -cne 'v0.2.1' -or $consoleEvidenceMeta.engineSha256 -cne $mockEngineSha.ToUpperInvariant()) {
+    throw 'Standalone verification evidence must record the verified cached engine tag and SHA-256.'
+}
 $originalRecord = [IO.File]::ReadAllText($cacheRecord.FullName)
 $outsideLog = Join-Path $work (Split-Path $refreshEntry.nativeEvidence -Leaf)
 [IO.File]::WriteAllText($outsideLog, 'untrusted verification log')
@@ -256,6 +316,28 @@ try {
         if ($untrusted.native -ne 'Unverified' -or $untrusted.nativeEvidence) { throw 'Verification trusted a hard-linked log.' }
     } finally { [IO.File]::Delete($linkedLog) }
 } finally { [IO.File]::WriteAllText($cacheRecord.FullName, $originalRecord) }
+# Explicit -EnginePath runs standalone verification with zero GitHub API calls.
+$explicitEnginePath = Join-Path $work 'explicit-csrun.ps1'
+[IO.File]::WriteAllText($explicitEnginePath, $mockEngineContent, [Text.UTF8Encoding]::new($false))
+$explicitVerifyState = @{ ApiCalls = 0 }
+function Invoke-WebRequest { $explicitVerifyState.ApiCalls++; throw 'Explicit -EnginePath must not contact GitHub.' }
+function pwsh {
+    $fileIndex = [Array]::IndexOf($args, '-File')
+    $executedText = [IO.File]::ReadAllText([string]$args[$fileIndex + 1])
+    if ($executedText.Contains('Assert-CsrunTestOutput') -and -not $executedText.Contains($explicitEnginePath)) {
+        throw 'Explicit -EnginePath was not passed to standalone verification.'
+    }
+    $global:LASTEXITCODE = 0
+}
+try {
+    $null = (& $generator -RepoRoot $work -Verify Native -EnginePath $explicitEnginePath) | ConvertFrom-Json
+}
+finally {
+    Remove-Item Function:\pwsh -ErrorAction SilentlyContinue
+    Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $explicitEnginePath) { Remove-Item -LiteralPath $explicitEnginePath -Force }
+}
+if ($explicitVerifyState.ApiCalls -ne 0) { throw 'Explicit -EnginePath contacted GitHub.' }
 foreach ($script in Get-ChildItem "$work/run-actions" -Filter '*.ps1' -Recurse -File) {
     if ($before[$script.FullName][0] -cne (Get-FileHash $script.FullName).Hash -or
         $before[$script.FullName][1] -ne $script.LastWriteTimeUtc.Ticks) {
