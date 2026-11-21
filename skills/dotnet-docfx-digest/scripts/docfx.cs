@@ -268,6 +268,7 @@ internal static class DocfxValidator
         public List<(string Id, string? Version)> PackageReferences { get; } = new();
         public List<string> ProjectReferences { get; } = new();
         public List<string> FrameworkReferences { get; } = new();
+        public Dictionary<string, string> CentralPackageVersions { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private sealed record RunActionTypeOwner(
@@ -403,22 +404,45 @@ internal static class DocfxValidator
             }
         }
 
-        // 3. Parse Directory.Packages.props and Directory.Build.props up to root.
-        var propDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { root };
-        foreach (var projPath in allProjectPaths)
+        // 3. Parse Directory.Packages.props and Directory.Build.props per directory, then resolve strictly along each project's own parent chain.
+        var dirBuildPropsCache = new Dictionary<string, (string? Version, bool? IsPackable)>(StringComparer.OrdinalIgnoreCase);
+        var dirPackageVersionsCache = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+
+        (string? Version, bool? IsPackable) ReadDirectoryBuildProps(string dir)
         {
-            for (var dir = Path.GetDirectoryName(projPath);
-                dir is not null && (PathsEqual(dir, root) || IsPathUnderDirectory(dir, root));
-                dir = Path.GetDirectoryName(dir))
+            if (dirBuildPropsCache.TryGetValue(dir, out var cached)) { return cached; }
+            string? version = null;
+            bool? isPackable = null;
+            var buildProps = Path.Combine(dir, "Directory.Build.props");
+            if (File.Exists(buildProps))
             {
-                propDirs.Add(dir);
+                try
+                {
+                    var xdoc = XDocument.Load(buildProps);
+                    foreach (var el in xdoc.Descendants())
+                    {
+                        if (el.Name.LocalName is "Version" or "PackageVersion" or "VersionPrefix" &&
+                            !string.IsNullOrWhiteSpace(el.Value) && !el.Value.Contains("$("))
+                        {
+                            version = el.Value.Trim();
+                        }
+                        else if (el.Name.LocalName == "IsPackable" && bool.TryParse(el.Value.Trim(), out var b))
+                        {
+                            isPackable = b;
+                        }
+                    }
+                }
+                catch { }
             }
+            var parsed = (version, isPackable);
+            dirBuildPropsCache[dir] = parsed;
+            return parsed;
         }
 
-        string? rootBuildVersion = null;
-        bool? rootBuildIsPackable = null;
-        foreach (var dir in propDirs.OrderBy(d => d.Length))
+        Dictionary<string, string> ReadDirectoryPackagesProps(string dir)
         {
+            if (dirPackageVersionsCache.TryGetValue(dir, out var cached)) { return cached; }
+            var versions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var pkgProps = Path.Combine(dir, "Directory.Packages.props");
             if (File.Exists(pkgProps))
             {
@@ -431,50 +455,70 @@ internal static class DocfxValidator
                         var ver = el.Attribute("Version")?.Value?.Trim();
                         if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(ver))
                         {
-                            index.CentralPackageVersions[id] = ver;
+                            versions[id] = ver;
                         }
                     }
                 }
                 catch { }
             }
+            dirPackageVersionsCache[dir] = versions;
+            return versions;
+        }
 
-            var buildProps = Path.Combine(dir, "Directory.Build.props");
-            if (File.Exists(buildProps))
+        List<string> GetAncestorChain(string startDir)
+        {
+            var chain = new List<string>();
+            for (var dir = startDir;
+                dir is not null && (PathsEqual(dir, root) || IsPathUnderDirectory(dir, root));
+                dir = Path.GetDirectoryName(dir))
             {
-                try
-                {
-                    var xdoc = XDocument.Load(buildProps);
-                    foreach (var el in xdoc.Descendants())
-                    {
-                        if (el.Name.LocalName is "Version" or "PackageVersion" or "VersionPrefix" &&
-                            !string.IsNullOrWhiteSpace(el.Value) && !el.Value.Contains("$("))
-                        {
-                            rootBuildVersion ??= el.Value.Trim();
-                        }
-                        else if (el.Name.LocalName == "IsPackable" && bool.TryParse(el.Value.Trim(), out var b))
-                        {
-                            rootBuildIsPackable = b;
-                        }
-                    }
-                }
-                catch { }
+                chain.Add(dir);
             }
+            chain.Reverse();
+            return chain;
+        }
+
+        foreach (var kvp in ReadDirectoryPackagesProps(root))
+        {
+            index.CentralPackageVersions[kvp.Key] = kvp.Value;
         }
 
         // 4. Parse every project's metadata, references, packability, and declared C# types/extensions.
         foreach (var projPath in allProjectPaths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
         {
             var info = discoveredProjects.FirstOrDefault(p => PathsEqual(p.Path, projPath)) ?? ReadProject(projPath);
+            string? inheritedVersion = null;
+            bool? inheritedIsPackable = null;
+            var projectCentralVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var projDir = Path.GetDirectoryName(projPath);
+            if (projDir is not null)
+            {
+                foreach (var dir in GetAncestorChain(projDir))
+                {
+                    var bp = ReadDirectoryBuildProps(dir);
+                    if (bp.Version is not null) { inheritedVersion = bp.Version; }
+                    if (bp.IsPackable.HasValue) { inheritedIsPackable = bp.IsPackable.Value; }
+                    foreach (var kvp in ReadDirectoryPackagesProps(dir))
+                    {
+                        projectCentralVersions[kvp.Key] = kvp.Value;
+                    }
+                }
+            }
+
             var meta = new RunActionProjectMeta
             {
                 FullPath = projPath,
                 RelPath = Rel(root, projPath),
                 AssemblyName = info.AssemblyName,
                 PackageId = string.IsNullOrWhiteSpace(info.PackageId) ? info.AssemblyName : info.PackageId!,
-                IsPackable = !info.IsTest && (rootBuildIsPackable ?? true),
+                IsPackable = !info.IsTest && (inheritedIsPackable ?? true),
                 IsTest = info.IsTest,
-                Version = rootBuildVersion
+                Version = inheritedVersion
             };
+            foreach (var kvp in projectCentralVersions)
+            {
+                meta.CentralPackageVersions[kvp.Key] = kvp.Value;
+            }
 
             try
             {
@@ -508,7 +552,7 @@ internal static class DocfxValidator
                             var pkgVer = el.Attribute("Version")?.Value?.Trim() ?? el.Element(el.Name.Namespace + "Version")?.Value?.Trim();
                             if (!string.IsNullOrEmpty(pkgId))
                             {
-                                if (string.IsNullOrEmpty(pkgVer) && index.CentralPackageVersions.TryGetValue(pkgId, out var cver))
+                                if (string.IsNullOrEmpty(pkgVer) && meta.CentralPackageVersions.TryGetValue(pkgId, out var cver))
                                 {
                                     pkgVer = cver;
                                 }
@@ -1054,18 +1098,25 @@ internal static class DocfxValidator
                 EnsureUsing(declaredNs);
             }
             if (entry.HasReturnValue) { EnsureUsing("System"); }
-            var expr = entryMethod.ExpressionBody.Expression.ToString().Trim();
+            var exprNode = entryMethod.ExpressionBody.Expression;
+            var expr = exprNode.ToString().Trim();
+            var hasAsyncModifier = entryMethod.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword));
+            var needsAwait = entry.IsAsync && !hasAsyncModifier;
+            var awaitedExpr = needsAwait
+                ? (exprNode is InvocationExpressionSyntax or MemberAccessExpressionSyntax or IdentifierNameSyntax or ParenthesizedExpressionSyntax or ObjectCreationExpressionSyntax
+                    ? $"await {expr}"
+                    : $"await ({expr})")
+                : expr;
             var sb = new StringBuilder();
             foreach (var u in usings) { sb.AppendLine(u); }
             if (usings.Count > 0) { sb.AppendLine(); }
             if (entry.HasReturnValue)
             {
-                var call = entry.IsAsync ? $"await {expr}" : expr;
-                sb.Append($"Console.WriteLine({call});");
+                sb.Append($"Console.WriteLine({awaitedExpr});");
             }
             else
             {
-                sb.Append(entry.IsAsync ? $"await {expr};" : $"{expr};");
+                sb.Append($"{awaitedExpr};");
             }
             return sb.ToString().Replace("\r\n", "\n").TrimEnd('\r', '\n');
         }
@@ -1319,11 +1370,29 @@ internal static class DocfxValidator
         }
 
         // 4. Resolve remaining `using` directives (external packages, ASP.NET Core, xUnit, single-owner repo namespaces).
-        var allExternalPkgRefs = index.ProjectsByPath.Values
-            .SelectMany(p => p.PackageReferences)
-            .Where(r => !string.IsNullOrEmpty(r.Version))
-            .GroupBy(r => r.Id, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First().Version!, StringComparer.OrdinalIgnoreCase);
+        var allExternalPkgRefs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Prefer versions from the example's own required projects first, then other packable projects, then non-packable projects, then root Directory.Packages.props.
+        foreach (var proj in requiredProjects.Values.OrderBy(p => p.FullPath, StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var r in proj.PackageReferences.Where(r => !string.IsNullOrEmpty(r.Version)))
+            {
+                allExternalPkgRefs.TryAdd(r.Id, r.Version!);
+            }
+            foreach (var kvp in proj.CentralPackageVersions)
+            {
+                allExternalPkgRefs.TryAdd(kvp.Key, kvp.Value);
+            }
+        }
+        foreach (var proj in index.ProjectsByPath.Values
+            .OrderByDescending(p => p.IsPackable)
+            .ThenBy(p => p.IsTest)
+            .ThenBy(p => p.FullPath, StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var r in proj.PackageReferences.Where(r => !string.IsNullOrEmpty(r.Version)))
+            {
+                allExternalPkgRefs.TryAdd(r.Id, r.Version!);
+            }
+        }
         foreach (var kvp in index.CentralPackageVersions)
         {
             allExternalPkgRefs.TryAdd(kvp.Key, kvp.Value);
