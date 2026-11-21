@@ -718,4 +718,494 @@ foreach ($case in $templateOrderCases) {
     } finally { $inventoryOverride = $null }
 }
 
-Write-Host "Run-action delivery passed: paired console, test, dependency-backed test and repository test; exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"
+# ===========================================================================
+# Deterministic run-action workflow regression (all 8 blockers & CLI surface)
+# ===========================================================================
+$detRoot = Join-Path $work 'deterministic-workflow'
+$null = [IO.Directory]::CreateDirectory("$detRoot/docs")
+$null = [IO.Directory]::CreateDirectory("$detRoot/src/Acme.Net")
+$null = [IO.Directory]::CreateDirectory("$detRoot/src/Acme.Internal")
+$null = [IO.Directory]::CreateDirectory("$detRoot/src/Acme.Xml")
+
+[IO.File]::WriteAllText("$detRoot/src/Acme.Net/Acme.Net.csproj", @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>Acme.Net</PackageId>
+    <Version>11.0.0</Version>
+  </PropertyGroup>
+</Project>
+'@)
+[IO.File]::WriteAllText("$detRoot/src/Acme.Net/HttpManager.cs", @'
+namespace Acme.Net.Http;
+public sealed class HttpManager { }
+'@)
+
+[IO.File]::WriteAllText("$detRoot/src/Acme.Internal/Acme.Internal.csproj", @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>
+'@)
+[IO.File]::WriteAllText("$detRoot/src/Acme.Internal/SecretHelper.cs", @'
+namespace Acme.Internal;
+public sealed class SecretHelper { }
+'@)
+
+[IO.File]::WriteAllText("$detRoot/src/Acme.Xml/Acme.Xml.csproj", @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>Acme.Xml</PackageId>
+    <Version>11.0.0</Version>
+  </PropertyGroup>
+</Project>
+'@)
+[IO.File]::WriteAllText("$detRoot/src/Acme.Xml/XmlConvert.cs", @'
+namespace Acme.Xml.Serialization;
+public static class XmlConvert { }
+'@)
+
+[IO.File]::WriteAllText("$detRoot/docfx.json", (@{
+    metadata = @(@{
+        src = @(@{ files = @('src/Acme.Net/Acme.Net.csproj', 'src/Acme.Internal/Acme.Internal.csproj', 'src/Acme.Xml/Acme.Xml.csproj') })
+        properties = @{ TargetFramework = 'net10.0' }
+    })
+    build = @{
+        content = @(@{ files = @('docs/*.md') })
+        template = @('default', 'modern')
+        dest = '_site'
+    }
+} | ConvertTo-Json -Depth 10))
+
+$cleanWrapperMd = @"
+---
+uid: Demo.WrapperClean
+---
+# Clean wrapper
+
+``````csharp
+using System;
+
+public sealed class CleanExample
+{
+    public void Demonstrate()
+    {
+        Console.WriteLine("clean-ok");
+    }
+}
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $cleanWrapperMd)
+
+$membersWrapperMd = @"
+---
+uid: Demo.WrapperMembers
+---
+# Wrapper with members
+
+``````csharp
+using System;
+
+namespace Demo;
+
+public sealed class MemberExample
+{
+    private readonly string _msg = "members-ok";
+    public void Demonstrate() => Console.WriteLine(Format());
+    private string Format() => _msg;
+}
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/WrapperMembers.md", $membersWrapperMd)
+
+$hostParamMd = @"
+---
+uid: Demo.HostParam
+---
+# Parameterized host method
+
+``````csharp
+using Microsoft.Extensions.DependencyInjection;
+
+public sealed class StartupExample
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+    }
+}
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/HostParam.md", $hostParamMd)
+
+$noEntryMd = @"
+---
+uid: Demo.NoEntry
+---
+# Options model without entry
+
+``````csharp
+public sealed class JustOptions
+{
+    public int Timeout { get; set; } = 30;
+}
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/NoEntry.md", $noEntryMd)
+
+$silentConsoleMd = @"
+---
+uid: Demo.SilentConsole
+---
+# Silent console
+
+``````csharp
+var x = 1 + 1;
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/SilentConsole.md", $silentConsoleMd)
+
+$hostBlockingMd = @"
+---
+uid: Demo.AppTagHelperOptions
+---
+# Blocking ASP.NET Core host
+
+``````csharp
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+app.MapGet("/", () => "host-harness-ok");
+app.Run();
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/HostBlocking.md", $hostBlockingMd)
+
+$splitPkgMd = @"
+---
+uid: Acme.Net.Http.HttpManager
+---
+# Split package type ownership
+
+``````csharp
+using Acme.Net.Http;
+
+var mgr = new HttpManager();
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/SplitPkg.md", $splitPkgMd)
+
+$unpublishedMd = @"
+---
+uid: Acme.Internal.SecretHelper
+---
+# Unpublished project ownership
+
+``````csharp
+using Acme.Internal;
+
+var helper = new SecretHelper();
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/Unpublished.md", $unpublishedMd)
+
+$ambiguousMd = @"
+---
+uid: Acme.Xml.Serialization.XmlConvert
+---
+# Ambiguous type collision
+
+``````csharp
+using System.Xml;
+using Acme.Xml.Serialization;
+
+var t = typeof(XmlConvert);
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/Ambiguous.md", $ambiguousMd)
+
+$multiFenceMd = @"
+---
+uid: Demo.MultiFence
+---
+# Multi-fence page
+
+First example:
+
+``````csharp
+using System;
+Console.WriteLine("fence-one");
+``````
+
+Second example:
+
+``````csharp
+using System;
+Console.WriteLine("fence-two");
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/MultiFence.md", $multiFenceMd)
+
+$intrinsicMd = @"
+---
+uid: Demo.IntrinsicOnly
+---
+# Intrinsic only
+
+``````csharp
+public interface IMarkerOnly { }
+``````
+"@
+[IO.File]::WriteAllText("$detRoot/docs/Intrinsic.md", $intrinsicMd)
+$intrinsicHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes('public interface IMarkerOnly { }')))
+$fenceTwoHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes("using System;`nConsole.WriteLine(`"fence-two`");")))
+[IO.File]::WriteAllText("$detRoot/run-actions.settings.json", (@{
+    examples = @(
+        @{ uid = 'Demo.IntrinsicOnly'; exampleId = 'Demo.IntrinsicOnly#1'; fenceOrdinal = 1; sourceSha256 = $intrinsicHash; intrinsicLimitation = 'Marker interface with no observable runtime behavior.' }
+        @{ uid = 'Demo.MultiFence'; exampleId = 'Demo.MultiFence#2'; fenceOrdinal = 2; sourceSha256 = $fenceTwoHash; manifest = @{ schemaVersion = 1; mode = 'console'; framework = 'net10.0'; dependsOn = @() } }
+    )
+} | ConvertTo-Json -Depth 15))
+
+# 1. --run-action-plan --json and --explain <uid>
+$planJson = (& $generator -RepoRoot $detRoot --run-action-plan --json) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $planJson.schemaVersion -ne 2) { throw 'Expected --run-action-plan --json to succeed with schemaVersion 2.' }
+$planById = @{}
+foreach ($item in $planJson.examples) { $planById[$item.exampleId] = $item }
+if ($planById['Demo.WrapperClean#1'].category -ne 'wrapper-clean' -or -not $planById['Demo.WrapperClean#1'].convertible -or $planById['Demo.WrapperClean#1'].blockingConstruct -notlike '*CleanExample*') {
+    throw "wrapper-clean classification failed: $($planById['Demo.WrapperClean#1'] | ConvertTo-Json -Compress)"
+}
+if ($planById['Demo.WrapperMembers#1'].category -ne 'wrapper-members' -or -not $planById['Demo.WrapperMembers#1'].convertible -or $planById['Demo.WrapperMembers#1'].blockingConstruct -notlike '*_msg*') {
+    throw "wrapper-members classification failed: $($planById['Demo.WrapperMembers#1'] | ConvertTo-Json -Compress)"
+}
+if ($planById['Demo.HostParam#1'].category -ne 'host-parameterized' -or $planById['Demo.HostParam#1'].convertible -or $planById['Demo.HostParam#1'].blockingConstruct -notlike '*ConfigureServices*') {
+    throw "host-parameterized classification failed: $($planById['Demo.HostParam#1'] | ConvertTo-Json -Compress)"
+}
+if ($planById['Demo.NoEntry#1'].category -ne 'no-entry' -or $planById['Demo.NoEntry#1'].convertible) {
+    throw "no-entry classification failed: $($planById['Demo.NoEntry#1'] | ConvertTo-Json -Compress)"
+}
+if ($planById['Demo.AppTagHelperOptions#1'].category -ne 'host-blocking' -or -not $planById['Demo.AppTagHelperOptions#1'].convertible -or $planById['Demo.AppTagHelperOptions#1'].suggestedMode -ne 'host') {
+    throw "host-blocking classification failed: $($planById['Demo.AppTagHelperOptions#1'] | ConvertTo-Json -Compress)"
+}
+if ($planById['Demo.IntrinsicOnly#1'].category -ne 'intrinsic' -or $planById['Demo.IntrinsicOnly#1'].convertible) {
+    throw "intrinsic classification failed: $($planById['Demo.IntrinsicOnly#1'] | ConvertTo-Json -Compress)"
+}
+if (-not $planById.ContainsKey('Demo.MultiFence#1') -or -not $planById.ContainsKey('Demo.MultiFence#2')) {
+    throw 'Multi-fence page must emit stable uid#1 and uid#2 exampleIds.'
+}
+$explainText = (& $generator -RepoRoot $detRoot --explain Demo.HostParam) -join "`n"
+if ($LASTEXITCODE -ne 0 -or $explainText -notlike '*host-parameterized*' -or $explainText -notlike '*ConfigureServices*') {
+    throw "--explain prose output was incomplete: $explainText"
+}
+
+# 2. --resolve-dependencies <uid> (split package, unpublished project, CS0104 ambiguity)
+$splitDep = (& $generator -RepoRoot $detRoot --resolve-dependencies Acme.Net.Http.HttpManager) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $splitDep.preflightPassed -or ($splitDep.dependsOn -notcontains 'Acme.Net@11.0.0') -or ($splitDep.dependsOn -contains 'Acme.Net.Http@11.0.0')) {
+    throw "Split-package dependency resolution failed: $($splitDep | ConvertTo-Json -Compress)"
+}
+$unpubDep = (& $generator -RepoRoot $detRoot --resolve-dependencies Acme.Internal.SecretHelper) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 1 -or $unpubDep.preflightPassed -or -not (@($unpubDep.errors | Where-Object { $_ -like 'missing-package: SecretHelper -> Acme.Internal*' }).Count)) {
+    throw "Unpublished project preflight must fail with missing-package: $($unpubDep | ConvertTo-Json -Compress)"
+}
+$ambigDep = (& $generator -RepoRoot $detRoot --resolve-dependencies Acme.Xml.Serialization.XmlConvert) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 1 -or $ambigDep.preflightPassed -or -not (@($ambigDep.errors | Where-Object { $_ -like 'ambiguous-type: XmlConvert ->*System.Xml.XmlConvert*' -and $_ -like '*Acme.Xml.Serialization.XmlConvert*' }).Count)) {
+    throw "Ambiguous type preflight must fail with ambiguous-type: $($ambigDep | ConvertTo-Json -Compress)"
+}
+
+# 3. --validate-run-action and guarded --apply-run-action (with real dotnet run --file and host harness!)
+$refusedApply = (& $generator -RepoRoot $detRoot --apply-run-action Demo.WrapperClean) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 1 -or $refusedApply.applied -or $refusedApply.reasonCode -ne 'validation-required') {
+    throw "--apply-run-action must refuse when validation has not passed: $($refusedApply | ConvertTo-Json -Compress)"
+}
+if ([IO.File]::ReadAllText("$detRoot/docs/WrapperClean.md") -cne $cleanWrapperMd) {
+    throw 'Refused --apply-run-action must not modify the Markdown file.'
+}
+$silentVal = (& $generator -RepoRoot $detRoot --validate-run-action Demo.SilentConsole) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 1 -or $silentVal.validated -or $silentVal.reasonCode -ne 'empty-console-output') {
+    throw "Console validation must reject empty stdout: $($silentVal | ConvertTo-Json -Compress)"
+}
+$cleanVal = (& $generator -RepoRoot $detRoot --validate-run-action Demo.WrapperClean) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $cleanVal.validated -or -not $cleanVal.converted -or $cleanVal.stdout -notlike '*clean-ok*' -or -not $cleanVal.recipeSha256) {
+    throw "wrapper-clean validation failed: $($cleanVal | ConvertTo-Json -Compress)"
+}
+if ([IO.File]::ReadAllText("$detRoot/docs/WrapperClean.md") -cne $cleanWrapperMd) {
+    throw '--validate-run-action must not edit repository files.'
+}
+$cleanApplied = (& $generator -RepoRoot $detRoot --apply-run-action Demo.WrapperClean) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $cleanApplied.applied -or -not $cleanApplied.fenceUpdated -or $cleanApplied.recipeSha256 -cne $cleanVal.recipeSha256) {
+    throw "--apply-run-action failed after validation: $($cleanApplied | ConvertTo-Json -Compress)"
+}
+$membersVal = (& $generator -RepoRoot $detRoot --validate-run-action Demo.WrapperMembers) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $membersVal.validated -or $membersVal.stdout -notlike '*members-ok*') {
+    throw "wrapper-members validation failed: $($membersVal | ConvertTo-Json -Compress)"
+}
+$membersApplied = (& $generator -RepoRoot $detRoot --apply-run-action Demo.WrapperMembers) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $membersApplied.applied) {
+    throw "--apply-run-action failed for wrapper-members: $($membersApplied | ConvertTo-Json -Compress)"
+}
+
+# 4. Multi-fence apply safety & --check-recipes --json (moved, duplicate-uid, whitespace-only vs semantic orphan)
+$ambigFenceVal = (& $generator -RepoRoot $detRoot --validate-run-action Demo.MultiFence) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 3 -or $ambigFenceVal.reasonCode -ne 'ambiguous-multi-fence-uid') {
+    throw 'Bare multi-fence UID must exit 3 with explicit uid#ordinal candidates.'
+}
+$mf1Val = (& $generator -RepoRoot $detRoot --validate-run-action Demo.MultiFence#1) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $mf1Val.validated) { throw "MultiFence#1 validation failed: $($mf1Val | ConvertTo-Json -Compress)" }
+$mf1Applied = (& $generator -RepoRoot $detRoot --apply-run-action Demo.MultiFence#1) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $mf1Applied.applied) { throw "MultiFence#1 apply failed: $($mf1Applied | ConvertTo-Json -Compress)" }
+$settingsAfterMf1 = (Get-Content "$detRoot/run-actions.settings.json" -Raw | ConvertFrom-Json).examples
+if (-not (@($settingsAfterMf1 | Where-Object { $_.uid -eq 'Demo.MultiFence' -and $_.sourceSha256 -ceq $fenceTwoHash }).Count)) {
+    throw 'Applying a recipe for fence #1 must NEVER overwrite an existing recipe matching fence #2.'
+}
+
+# 5. Host harness (Blocker 8): real ASP.NET Core host validation, apply, generation, and BuildRunActions.ps1 parity
+$hostVal = (& $generator -RepoRoot $detRoot --validate-run-action Demo.AppTagHelperOptions) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $hostVal.validated -or $hostVal.mode -ne 'host' -or $hostVal.stdout -notlike '*host-harness-ok*') {
+    throw "Host harness validation failed: $($hostVal | ConvertTo-Json -Compress)"
+}
+$hostApplied = (& $generator -RepoRoot $detRoot --apply-run-action Demo.AppTagHelperOptions) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $hostApplied.applied) { throw "Host harness apply failed: $($hostApplied | ConvertTo-Json -Compress)" }
+
+# Clean recipe check before mutating fences for negative tests
+$cleanCheck = (& $generator -RepoRoot $detRoot --check-recipes --json) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $cleanCheck.issues.Count -ne 0 -or $cleanCheck.normalization.lineEndings -ne 'LF') {
+    throw "Expected clean --check-recipes --json: $($cleanCheck | ConvertTo-Json -Depth 10)"
+}
+
+# Generate manifest & materialize BuildRunActions.ps1 (including host strategy!)
+$detGenSummary = (& $generator -RepoRoot $detRoot --summary-json) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 2 -or $detGenSummary.schemaVersion -ne 2 -or $detGenSummary.intrinsic -ne 1 -or $detGenSummary.unresolved -lt 1 -or -not $detGenSummary.'skipped-by-category') {
+    throw "Unexpected --summary-json output: $($detGenSummary | ConvertTo-Json -Depth 5)"
+}
+$hostGenEntry = $detGenSummary.examples | Where-Object exampleId -ceq 'Demo.AppTagHelperOptions#1'
+if (-not $hostGenEntry -or $hostGenEntry.strategy -ne 'host' -or $hostGenEntry.coverage -ne 'Paired') {
+    throw "Expected paired host strategy entry: $($hostGenEntry | ConvertTo-Json -Compress)"
+}
+$global:LASTEXITCODE = 0
+& "$detRoot/BuildRunActions.ps1" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'BuildRunActions.ps1 failed for host strategy manifest.' }
+foreach ($t in @('native', 'docker')) {
+    $hostScriptPath = "$detRoot/run-actions/$($hostGenEntry.id)/$t.ps1"
+    if (-not (Test-Path -LiteralPath $hostScriptPath)) { throw "BuildRunActions.ps1 did not materialize host $t.ps1" }
+    $actualHostHash = (Get-FileHash -LiteralPath $hostScriptPath -Algorithm SHA256).Hash
+    if ($actualHostHash -cne $hostGenEntry."${t}Sha256") { throw "BuildRunActions.ps1 host $t.ps1 hash drifted from generator." }
+}
+
+# 6. Negative recipe health checks: moved, duplicate-uid, whitespace-only orphan, semantic orphan
+$savedSettingsRaw = [IO.File]::ReadAllText("$detRoot/run-actions.settings.json")
+$savedMultiRaw = [IO.File]::ReadAllText("$detRoot/docs/MultiFence.md")
+$savedCleanRaw = [IO.File]::ReadAllText("$detRoot/docs/WrapperClean.md")
+try {
+    # Moved: swap fence-one and fence-two in MultiFence.md
+    [IO.File]::WriteAllText("$detRoot/docs/MultiFence.md", $savedMultiRaw.Replace('fence-one', '__TMP__').Replace('fence-two', 'fence-one').Replace('__TMP__', 'fence-two'))
+    $movedCheck = (& $generator -RepoRoot $detRoot --check-recipes --json) | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 1 -or -not (@($movedCheck.issues | Where-Object kind -eq 'moved').Count)) {
+        throw "Expected moved recipe detection: $($movedCheck | ConvertTo-Json -Depth 10)"
+    }
+    [IO.File]::WriteAllText("$detRoot/docs/MultiFence.md", $savedMultiRaw)
+
+    # Whitespace-only orphan: append trailing spaces to Console.WriteLine("clean-ok");
+    [IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $savedCleanRaw.Replace('Console.WriteLine("clean-ok");', 'Console.WriteLine("clean-ok");   '))
+    $wsCheck = (& $generator -RepoRoot $detRoot --check-recipes --json) | ConvertFrom-Json
+    $wsIssue = $wsCheck.issues | Where-Object { $_.kind -eq 'orphaned' -and $_.uid -eq 'Demo.WrapperClean' } | Select-Object -First 1
+    if ($LASTEXITCODE -ne 1 -or -not $wsIssue -or $wsIssue.diffKind -ne 'whitespace-only' -or -not $wsIssue.currentSourceSha256 -or $wsIssue.suggestedUpdate.action -ne 'update-source-sha256') {
+        throw "Expected whitespace-only orphan classification: $($wsCheck | ConvertTo-Json -Depth 10)"
+    }
+
+    # Semantic orphan: change printed string
+    [IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $savedCleanRaw.Replace('clean-ok', 'changed-semantics'))
+    $semCheck = (& $generator -RepoRoot $detRoot --check-recipes --json) | ConvertFrom-Json
+    $semIssue = $semCheck.issues | Where-Object { $_.kind -eq 'orphaned' -and $_.uid -eq 'Demo.WrapperClean' } | Select-Object -First 1
+    if ($LASTEXITCODE -ne 1 -or -not $semIssue -or $semIssue.diffKind -ne 'semantic' -or $semIssue.suggestedUpdate.action -ne 're-validate-and-apply') {
+        throw "Expected semantic orphan classification: $($semCheck | ConvertTo-Json -Depth 10)"
+    }
+    [IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $savedCleanRaw)
+
+    # Duplicate-uid check
+    $dupDoc = $savedSettingsRaw | ConvertFrom-Json
+    $dupExamples = @($dupDoc.examples) + @($dupDoc.examples | Where-Object uid -eq 'Demo.WrapperClean' | Select-Object -First 1)
+    [IO.File]::WriteAllText("$detRoot/run-actions.settings.json", (@{ examples = $dupExamples } | ConvertTo-Json -Depth 20))
+    $dupCheck = (& $generator -RepoRoot $detRoot --check-recipes --json) | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 1 -or -not (@($dupCheck.issues | Where-Object kind -eq 'duplicate-uid').Count)) {
+        throw "Expected duplicate-uid detection: $($dupCheck | ConvertTo-Json -Depth 10)"
+    }
+} finally {
+    [IO.File]::WriteAllText("$detRoot/run-actions.settings.json", $savedSettingsRaw)
+    [IO.File]::WriteAllText("$detRoot/docs/MultiFence.md", $savedMultiRaw)
+    [IO.File]::WriteAllText("$detRoot/docs/WrapperClean.md", $savedCleanRaw)
+}
+
+# 7. Blocker 6: Verification failure (GitHub 403, no cached engine) preserves previous manifest and pages atomically!
+$manifestBefore403 = [IO.File]::ReadAllText("$detRoot/run-actions.manifest.json")
+$pageBefore403 = [IO.File]::ReadAllText("$detRoot/docs/WrapperClean.md")
+$emptyCache403 = Join-Path $work 'empty-cache-403'
+$prevCache403 = $env:CSRUN_CACHE_DIR
+$env:CSRUN_CACHE_DIR = $emptyCache403
+function Invoke-WebRequest {
+    param([string] $Uri, [hashtable] $Headers, [switch] $SkipHttpErrorCheck, [string] $OutFile)
+    return [pscustomobject]@{ StatusCode = 403; Headers = @{}; Content = '{"message":"API rate limit exceeded"}' }
+}
+try {
+    $fail403 = (& $generator -RepoRoot $detRoot --verify Native --summary-json) | ConvertFrom-Json
+    $exit403 = $LASTEXITCODE
+} finally {
+    Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+    $env:CSRUN_CACHE_DIR = $prevCache403
+    if (Test-Path -LiteralPath $emptyCache403) { Remove-Item -LiteralPath $emptyCache403 -Recurse -Force }
+}
+if ($exit403 -ne 1 -or $fail403.failureReason -ne 'github-403-no-cached-engine' -or -not $fail403.manifestPreserved) {
+    throw "GitHub 403 verification failure must exit 1 with github-403-no-cached-engine: $($fail403 | ConvertTo-Json -Compress)"
+}
+if ([IO.File]::ReadAllText("$detRoot/run-actions.manifest.json") -cne $manifestBefore403 -or
+    [IO.File]::ReadAllText("$detRoot/docs/WrapperClean.md") -cne $pageBefore403) {
+    throw 'Failed verification destroyed or mutated the previous manifest or Markdown associations!'
+}
+
+# 8. Blocker 7: --verify Native --engine-path, --verify-changed reuse, and --verify --id <uid>
+$detEngine = Join-Path $work 'det-csrun.ps1'
+[IO.File]::WriteAllText($detEngine, $mockEngineContent, [Text.UTF8Encoding]::new($false))
+$detVerifyCalls = [Collections.Generic.List[string]]::new()
+function pwsh {
+    $fileIndex = [Array]::IndexOf($args, '-File')
+    $detVerifyCalls.Add([string]$args[$fileIndex + 1])
+    $global:LASTEXITCODE = 0
+}
+try {
+    $vAll = (& $generator -RepoRoot $detRoot --verify Native --engine-path $detEngine --summary-json) | ConvertFrom-Json
+    $vAllCount = $detVerifyCalls.Count
+    $detVerifyCalls.Clear()
+
+    $vChanged = (& $generator -RepoRoot $detRoot --verify-changed --engine-path $detEngine --summary-json) | ConvertFrom-Json
+    $vChangedCount = $detVerifyCalls.Count
+    $detVerifyCalls.Clear()
+
+    $vSingle = (& $generator -RepoRoot $detRoot --verify --id Demo.WrapperMembers#1 --engine-path $detEngine --summary-json) | ConvertFrom-Json
+    $vSingleCount = $detVerifyCalls.Count
+    $detVerifyCalls.Clear()
+
+    $vMissing = (& $generator -RepoRoot $detRoot --verify --id Does.Not.Exist --engine-path $detEngine --summary-json)
+    $vMissingExit = $LASTEXITCODE
+} finally {
+    Remove-Item Function:\pwsh -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $detEngine) { Remove-Item -LiteralPath $detEngine -Force }
+}
+if ($vAllCount -lt 5 -or $vAll.verified -lt 5) {
+    throw "Expected full --verify Native run to execute >=5 examples; executed=$vAllCount verified=$($vAll.verified)"
+}
+if ($vChangedCount -ne 0 -or $vChanged.verification.reused -lt 5 -or $vChanged.verifyScope -ne 'changed') {
+    throw "Expected --verify-changed to reuse all unchanged verified examples; executed=$vChangedCount reused=$($vChanged.verification.reused)"
+}
+if ($vSingleCount -ne 1 -or $vSingle.verifyScope -ne 'id') {
+    throw "Expected --verify --id to execute exactly 1 example; executed=$vSingleCount scope=$($vSingle.verifyScope)"
+}
+$manifestAfterSingle = (Get-Content "$detRoot/run-actions.manifest.json" -Raw | ConvertFrom-Json).examples
+if ($manifestAfterSingle.Count -lt 5) {
+    throw 'Scoped --verify --id must preserve all other entries in run-actions.manifest.json.'
+}
+if ($vMissingExit -ne 3) {
+    throw "Expected unmatched --id selector to exit 3; got $vMissingExit"
+}
+
+$global:LASTEXITCODE = 0
+Write-Host "Run-action delivery passed: paired console, test, dependency-backed test, repository test and host harness; deterministic plan/explain, type-owned dependency resolution/preflight, validation-gated apply, multi-fence uid#ordinal identity, whitespace/semantic recipe check, atomic manifest preservation, --summary-json/--verify-changed/--verify --id, exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"
+exit 0
