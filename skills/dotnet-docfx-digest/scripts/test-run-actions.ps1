@@ -1501,9 +1501,26 @@ Start-Sleep -Milliseconds 400
 [Console]::Write('ok')
 "@, [Text.UTF8Encoding]::new($false))
 
+$resolvedAppExe = (Get-Command $app.Executable -CommandType Application | Select-Object -First 1).Source
+$paraSubprocessShim = Join-Path $work 'invoke-generator-shim.ps1'
+$escapedAppExe = $resolvedAppExe.Replace("'", "''")
+$escapedAppPrefix = (@($app.ArgumentPrefix | ForEach-Object { "'" + ([string]$_).Replace("'", "''") + "'" }) -join ', ')
+$escapedGenerator = $generator.Replace("'", "''")
+[IO.File]::WriteAllText($paraSubprocessShim, @"
+`$ErrorActionPreference = 'Stop'
+`$appExe = '$escapedAppExe'
+`$appPrefix = @($escapedAppPrefix)
+function dotnet {
+    & `$appExe @(`$appPrefix + @(`$args | Select-Object -Skip ([Array]::IndexOf(`$args, '--repo-root'))))
+    `$global:LASTEXITCODE = `$LASTEXITCODE
+}
+& '$escapedGenerator' @args
+exit `$LASTEXITCODE
+"@, [Text.UTF8Encoding]::new($false))
+
 function Invoke-GeneratorSubprocess([string[]] $ExtraArgs) {
     $psi = [Diagnostics.ProcessStartInfo]::new($pwshExe)
-    foreach ($a in @('-NoProfile', '-NonInteractive', '-File', $generator, '-RepoRoot', $paraRoot)) { $psi.ArgumentList.Add($a) }
+    foreach ($a in @('-NoProfile', '-NonInteractive', '-File', $paraSubprocessShim, '-RepoRoot', $paraRoot)) { $psi.ArgumentList.Add($a) }
     foreach ($a in $ExtraArgs) { $psi.ArgumentList.Add($a) }
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
