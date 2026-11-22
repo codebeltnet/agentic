@@ -296,6 +296,15 @@ A .NET file-based app (`dotnet run --file <app>.cs`) re-runs SDK, restore, and M
 - When the helper cannot prepare or locate a cached build it falls back to `dotnet run --file`, so behavior is never worse than the unoptimized path, only slower.
 - Do not reintroduce per-call `dotnet run --file` in a deterministic suite. Measure the suite before and after any change to how it invokes a file-based app.
 
+## Complementary Tool Observability and Concurrency
+
+Repository and skill complementary tools (validators, generators, verifiers, audit/update runners, and other bundled scripts) must be observable during long runs and optimized for bounded concurrency wherever independent work would otherwise run slowly in sequence.
+
+- **Append-only `stderr` progress and heartbeats:** Emit append-only, plain-text progress lines (such as `[12/425] ... -> Verified (1.8s)`) and/or periodic heartbeats (for example every 10 seconds when an item or phase is still running) to `stderr` without cursor rewriting or ANSI-dependent formatting. Keep `stdout` strictly reserved for clean, parseable structured output (`--json`, `--summary-json`) so pipelines never break. Support `--quiet` and/or `--no-heartbeat` when callers need reduced `stderr` output.
+- **Bounded concurrency by default:** Where work items are independent (multi-example verification, package/feed lookups, isolated builds, or multi-target audits), execute them concurrently with bounded parallelism rather than slow sequential loops. Derive sensible CPU-aware defaults with a hard upper bound (configurable via flags such as `--max-parallel`), and keep heavier shared resources such as Docker containers or external APIs conservatively capped (or separately configurable).
+- **Thread-safe aggregation and atomic writes:** Isolate per-worker temp files and logs, collect results deterministically, and write shared outputs or manifests atomically (temp file + rename) once workers finish, preserving the last good state on failure.
+- **Deterministic test coverage:** Cover bounded parallel execution, cache reuse where applicable, and clean `stdout` vs append-only `stderr` progress output in the tool's deterministic test suite.
+
 ## Scaffold Invariants
 
 For repo-managed .NET scaffolding skills, preserve semantic versioning infrastructure unless you are replacing it end-to-end in the same change.

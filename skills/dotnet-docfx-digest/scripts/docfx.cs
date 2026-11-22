@@ -114,21 +114,47 @@ internal static class DocfxValidator
                     MarkdownTextByPath = new(StringComparer.OrdinalIgnoreCase), OverwriteSections = [], SkipAllowlistEntries = []
                 };
                 EnsureNamespaceProjectMap(workspace);
-                var platformReferences = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
+                var platformAssemblyPaths = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
                     .Where(p => Path.GetFileName(p).StartsWith("System.", StringComparison.Ordinal) || Path.GetFileName(p) is "netstandard.dll" or "mscorlib.dll")
+                    .ToArray();
+                var platformReferences = platformAssemblyPaths
                     .Select(p => MetadataReference.CreateFromFile(p)).ToArray();
+                var dependencyIndex = BuildRunActionDependencyIndex(root, projects, platformAssemblyPaths);
                 var associatedPages = files.Where(file => workspace.ReadMarkdown(file).Contains("<!-- docfx-run-actions:start -->", StringComparison.Ordinal));
                 var examples = files.SelectMany(file =>
                 {
                     var sections = ExtractOverwriteSections(file);
-                    return ExtractFences(file).Select(sample =>
+                    var rawLines = workspace.ReadMarkdown(file).Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
+                    var fences = ExtractFences(file);
+                    var resolvedOwners = fences.Select(sample => (Sample: sample, Owner: ResolveSampleOwner(sections, sample))).ToList();
+                    var totalByUid = resolvedOwners
+                        .GroupBy(x => x.Owner.Uid ?? Rel(root, x.Sample.File), StringComparer.Ordinal)
+                        .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+                    var seenByUid = new Dictionary<string, int>(StringComparer.Ordinal);
+                    return resolvedOwners.Select(item =>
                     {
-                        var owner = ResolveSampleOwner(sections, sample);
+                        var sample = item.Sample;
+                        var owner = item.Owner;
+                        var uidKey = owner.Uid ?? Rel(root, sample.File);
+                        seenByUid.TryGetValue(uidKey, out var ordinal);
+                        ordinal++;
+                        seenByUid[uidKey] = ordinal;
+                        var fenceCountOnUid = totalByUid[uidKey];
+                        var exampleId = $"{uidKey}#{ordinal}";
+                        var endLine = sample.StartLine;
+                        while (endLine < rawLines.Length && !rawLines[endLine].TrimStart().StartsWith("```", StringComparison.Ordinal))
+                        {
+                            endLine++;
+                        }
+                        var closingLine = Math.Min(endLine + 1, rawLines.Length);
                         var error = ResolveSampleContext(sample, root, out var context);
                         var code = context is null ? sample.Code : string.Join("\n", sample.Code.Split('\n').Skip(2));
                         var tree = CSharpSyntaxTree.ParseText(code);
                         var syntax = tree.GetCompilationUnitRoot();
-                        var sourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(code.Replace("\r\n", "\n").TrimEnd('\r', '\n'))));
+                        var normalizedCode = code.Replace("\r\n", "\n").TrimEnd('\r', '\n');
+                        var sourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(normalizedCode)));
+                        var wsCanonical = CanonicalizeWhitespaceForDiff(normalizedCode);
+                        var whitespaceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(wsCanonical)));
                         var ns = LongestNamespacePrefix(owner.Uid ?? Path.GetFileNameWithoutExtension(file), workspace);
                         var standalone = !tree.GetDiagnostics().Any(d => d.Severity == DiagnosticSeverity.Error) &&
                             (syntax.Members.OfType<GlobalStatementSyntax>().Any() || syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Any(m => m.Identifier.ValueText == "Main"));
@@ -139,19 +165,50 @@ internal static class DocfxValidator
                         var eligible = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).All(d =>
                             isTest && d.Location.IsInSource && d.Id is "CS0246" or "CS0103" &&
                             tree.GetText().ToString(d.Location.SourceSpan) is "Xunit" or "Fact" or "Theory" or "Assert");
-                        return new { sample.File, sample.StartLine, sample.Code, owner.Uid,
-                            Source = context?.Source, Project = context?.Project, ContextError = error, Standalone = standalone,
-                            Eligible = eligible, IsTest = isTest, SourceSha256 = sourceHash,
+                        var classification = ClassifyRunActionExample(syntax, tree, normalizedCode, isTest, eligible, dependencyIndex);
+                        var dependencies = ResolveRunActionDependencies(syntax, dependencyIndex, owner.Uid, isTest, classification.SuggestedMode == "host");
+                        return new
+                        {
+                            sample.File,
+                            sample.StartLine,
+                            EndLine = closingLine,
+                            FileFenceOrdinal = sample.FenceIndex,
+                            FenceOrdinal = ordinal,
+                            FenceCountOnUid = fenceCountOnUid,
+                            ExampleId = exampleId,
+                            sample.Code,
+                            owner.Uid,
+                            Source = context?.Source,
+                            Project = context?.Project,
+                            ContextError = error,
+                            Standalone = standalone,
+                            Eligible = eligible,
+                            IsTest = isTest,
+                            SourceSha256 = sourceHash,
+                            WhitespaceSha256 = whitespaceHash,
                             OwnerProjects = ns is null ? [] : workspace.NamespaceProjects[ns].Select(p => Rel(root, p.Path)).ToArray(),
-                            Imports = syntax.DescendantNodes().OfType<UsingDirectiveSyntax>().Select(u => u.Name?.ToString()).ToArray() };
+                            Imports = syntax.DescendantNodes().OfType<UsingDirectiveSyntax>().Select(u => u.Name?.ToString()).Where(s => !string.IsNullOrEmpty(s)).ToArray(),
+                            Classification = classification,
+                            Dependencies = dependencies
+                        };
                     });
                 }).ToArray();
-                var projectEvidence = projects.Select(p => new
+                var projectEvidence = projects.Select(p =>
                 {
-                    Path = Rel(root, p.Path), p.PackageId, p.AssemblyName, p.TargetFrameworks,
-                    MetadataFrameworks = groups.Where(g => g.ProjectPaths.Any(path => PathsEqual(path, p.Path)))
-                        .Select(g => g.Properties.GetValueOrDefault("TargetFramework")).Where(f => f is not null).Distinct(),
-                    BuildInputs = RunActionProjectInputs(root, p.Path)
+                    dependencyIndex.ProjectsByPath.TryGetValue(Path.GetFullPath(p.Path), out var meta);
+                    return new
+                    {
+                        Path = Rel(root, p.Path),
+                        p.PackageId,
+                        p.AssemblyName,
+                        p.TargetFrameworks,
+                        IsPackable = meta?.IsPackable ?? !p.IsTest,
+                        Version = meta?.Version,
+                        Sdk = meta?.Sdk ?? "Microsoft.NET.Sdk",
+                        MetadataFrameworks = groups.Where(g => g.ProjectPaths.Any(path => PathsEqual(path, p.Path)))
+                            .Select(g => g.Properties.GetValueOrDefault("TargetFramework")).Where(f => f is not null).Distinct(),
+                        BuildInputs = RunActionProjectInputs(root, p.Path)
+                    };
                 });
                 Console.WriteLine(JsonSerializer.Serialize(new { config, examples, associatedPages, projects = projectEvidence, warnings = report.Warnings }, JsonOptions));
                 return 0;
@@ -196,6 +253,1260 @@ internal static class DocfxValidator
                 if (File.Exists(path)) { yield return Rel(root, path); }
             }
         }
+    }
+
+    private sealed class RunActionProjectMeta
+    {
+        public required string FullPath { get; init; }
+        public required string RelPath { get; init; }
+        public required string AssemblyName { get; init; }
+        public required string PackageId { get; init; }
+        public bool IsPackable { get; set; } = true;
+        public bool IsTest { get; init; }
+        public string? Version { get; set; }
+        public string Sdk { get; set; } = "Microsoft.NET.Sdk";
+        public List<(string Id, string? Version)> PackageReferences { get; } = new();
+        public List<string> ProjectReferences { get; } = new();
+        public List<string> FrameworkReferences { get; } = new();
+        public Dictionary<string, string> CentralPackageVersions { get; } = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private sealed record RunActionTypeOwner(
+        string SimpleName,
+        string Namespace,
+        string FullName,
+        RunActionProjectMeta Project);
+
+    private sealed record RunActionExtensionOwner(
+        string MethodName,
+        string Namespace,
+        string DeclaringType,
+        RunActionProjectMeta Project);
+
+    private sealed class RunActionDependencyIndex
+    {
+        public Dictionary<string, RunActionProjectMeta> ProjectsByPath { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> CentralPackageVersions { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> BclNamespaces { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, HashSet<string>> BclTypesBySimpleName { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, List<RunActionTypeOwner>> RepoTypesBySimpleName { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, List<RunActionProjectMeta>> RepoNamespaces { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, List<RunActionExtensionOwner>> RepoExtensionMethods { get; } = new(StringComparer.Ordinal);
+    }
+
+    private sealed record RunActionEntryPoint(
+        string Type,
+        string Method,
+        bool IsStatic,
+        bool IsAsync,
+        string ReturnType,
+        bool HasReturnValue);
+
+    private sealed record RunActionClassification(
+        string Category,
+        string ReasonCode,
+        bool Convertible,
+        string SuggestedMode,
+        RunActionEntryPoint? EntryPoint,
+        string? BlockingConstruct,
+        int? BlockingLine,
+        string? ManualHarness,
+        string? CandidateSource);
+
+    private static readonly HashSet<string> HostParameterizedTypes = new(StringComparer.Ordinal)
+    {
+        "IServiceCollection", "IApplicationBuilder", "IEndpointRouteBuilder", "IHostBuilder",
+        "IWebHostBuilder", "WebApplicationBuilder", "HostApplicationBuilder", "HttpContext",
+        "MvcOptions", "IConfiguration", "ILoggingBuilder", "WebApplication", "IHost",
+        "IServiceProvider", "IMvcBuilder", "IRouteBuilder", "IWebHostEnvironment",
+        "IHostEnvironment", "WebHostBuilderContext", "HostBuilderContext", "IMiddleware",
+        "RequestDelegate", "IApplicationLifetime", "IHostApplicationLifetime", "IHttpClientBuilder"
+    };
+
+    private static readonly string[] PreferredEntryMethodNames =
+    [
+        "Demonstrate", "DemonstrateAsync", "Run", "RunAsync", "Execute", "ExecuteAsync",
+        "Example", "ExampleAsync", "Invoke", "InvokeAsync", "Show", "ShowAsync"
+    ];
+
+    private static string CanonicalizeWhitespaceForDiff(string text)
+    {
+        var lines = text.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
+            .Select(l => l.TrimEnd(' ', '\t'));
+        return string.Join("\n", lines).TrimEnd('\n');
+    }
+
+    private static RunActionDependencyIndex BuildRunActionDependencyIndex(
+        string root,
+        List<ProjectInfo> discoveredProjects,
+        string[] platformAssemblyPaths)
+    {
+        var index = new RunActionDependencyIndex();
+
+        // 1. Index BCL public types and namespaces from TRUSTED_PLATFORM_ASSEMBLIES.
+        try
+        {
+            var resolver = new PathAssemblyResolver(platformAssemblyPaths);
+            using var mlc = new MetadataLoadContext(resolver);
+            foreach (var asmPath in platformAssemblyPaths)
+            {
+                try
+                {
+                    var asm = mlc.LoadFromAssemblyPath(asmPath);
+                    Type[] types;
+                    try
+                    {
+                        types = asm.GetExportedTypes();
+                    }
+                    catch (ReflectionTypeLoadException rtle)
+                    {
+                        types = rtle.Types.Where(t => t is not null).ToArray()!;
+                    }
+
+                    foreach (var t in types)
+                    {
+                        if (string.IsNullOrEmpty(t.Namespace)) { continue; }
+                        index.BclNamespaces.Add(t.Namespace);
+                        var name = t.Name;
+                        var tick = name.IndexOf('`');
+                        if (tick >= 0) { name = name[..tick]; }
+                        if (!index.BclTypesBySimpleName.TryGetValue(name, out var nsSet))
+                        {
+                            nsSet = new HashSet<string>(StringComparer.Ordinal);
+                            index.BclTypesBySimpleName[name] = nsSet;
+                        }
+                        nsSet.Add(t.Namespace);
+                    }
+                }
+                catch
+                {
+                    // Skip unloadable platform assemblies.
+                }
+            }
+        }
+        catch
+        {
+            // Fall back to empty BCL index if MetadataLoadContext fails.
+        }
+
+        // 2. Collect all relevant projects: docfx.json metadata projects + any src/**/*.csproj.
+        var allProjectPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in discoveredProjects)
+        {
+            allProjectPaths.Add(Path.GetFullPath(p.Path));
+        }
+        var srcDir = Path.Combine(root, "src");
+        if (Directory.Exists(srcDir))
+        {
+            foreach (var csproj in EnumerateFiles(srcDir, "*.csproj"))
+            {
+                allProjectPaths.Add(Path.GetFullPath(csproj));
+            }
+        }
+
+        // 3. Parse Directory.Packages.props and Directory.Build.props per directory, then resolve strictly along each project's own parent chain.
+        var dirBuildPropsCache = new Dictionary<string, (string? Version, bool? IsPackable)>(StringComparer.OrdinalIgnoreCase);
+        var dirPackageVersionsCache = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+
+        (string? Version, bool? IsPackable) ReadDirectoryBuildProps(string dir)
+        {
+            if (dirBuildPropsCache.TryGetValue(dir, out var cached)) { return cached; }
+            string? version = null;
+            bool? isPackable = null;
+            var buildProps = Path.Combine(dir, "Directory.Build.props");
+            if (File.Exists(buildProps))
+            {
+                try
+                {
+                    var xdoc = XDocument.Load(buildProps);
+                    foreach (var el in xdoc.Descendants())
+                    {
+                        if (el.Name.LocalName is "Version" or "PackageVersion" or "VersionPrefix" &&
+                            !string.IsNullOrWhiteSpace(el.Value) && !el.Value.Contains("$("))
+                        {
+                            version = el.Value.Trim();
+                        }
+                        else if (el.Name.LocalName == "IsPackable" && bool.TryParse(el.Value.Trim(), out var b))
+                        {
+                            isPackable = b;
+                        }
+                    }
+                }
+                catch { }
+            }
+            var parsed = (version, isPackable);
+            dirBuildPropsCache[dir] = parsed;
+            return parsed;
+        }
+
+        Dictionary<string, string> ReadDirectoryPackagesProps(string dir)
+        {
+            if (dirPackageVersionsCache.TryGetValue(dir, out var cached)) { return cached; }
+            var versions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var pkgProps = Path.Combine(dir, "Directory.Packages.props");
+            if (File.Exists(pkgProps))
+            {
+                try
+                {
+                    var xdoc = XDocument.Load(pkgProps);
+                    foreach (var el in xdoc.Descendants().Where(e => e.Name.LocalName == "PackageVersion"))
+                    {
+                        var id = el.Attribute("Include")?.Value?.Trim();
+                        var ver = el.Attribute("Version")?.Value?.Trim();
+                        if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(ver))
+                        {
+                            versions[id] = ver;
+                        }
+                    }
+                }
+                catch { }
+            }
+            dirPackageVersionsCache[dir] = versions;
+            return versions;
+        }
+
+        List<string> GetAncestorChain(string startDir)
+        {
+            var chain = new List<string>();
+            for (var dir = startDir;
+                dir is not null && (PathsEqual(dir, root) || IsPathUnderDirectory(dir, root));
+                dir = Path.GetDirectoryName(dir))
+            {
+                chain.Add(dir);
+            }
+            chain.Reverse();
+            return chain;
+        }
+
+        foreach (var kvp in ReadDirectoryPackagesProps(root))
+        {
+            index.CentralPackageVersions[kvp.Key] = kvp.Value;
+        }
+
+        // 4. Parse every project's metadata, references, packability, and declared C# types/extensions.
+        foreach (var projPath in allProjectPaths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+        {
+            var info = discoveredProjects.FirstOrDefault(p => PathsEqual(p.Path, projPath)) ?? ReadProject(projPath);
+            string? inheritedVersion = null;
+            bool? inheritedIsPackable = null;
+            var projectCentralVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var projDir = Path.GetDirectoryName(projPath);
+            if (projDir is not null)
+            {
+                foreach (var dir in GetAncestorChain(projDir))
+                {
+                    var bp = ReadDirectoryBuildProps(dir);
+                    if (bp.Version is not null) { inheritedVersion = bp.Version; }
+                    if (bp.IsPackable.HasValue) { inheritedIsPackable = bp.IsPackable.Value; }
+                    foreach (var kvp in ReadDirectoryPackagesProps(dir))
+                    {
+                        projectCentralVersions[kvp.Key] = kvp.Value;
+                    }
+                }
+            }
+
+            var meta = new RunActionProjectMeta
+            {
+                FullPath = projPath,
+                RelPath = Rel(root, projPath),
+                AssemblyName = info.AssemblyName,
+                PackageId = string.IsNullOrWhiteSpace(info.PackageId) ? info.AssemblyName : info.PackageId!,
+                IsPackable = !info.IsTest && (inheritedIsPackable ?? true),
+                IsTest = info.IsTest,
+                Version = inheritedVersion
+            };
+            foreach (var kvp in projectCentralVersions)
+            {
+                meta.CentralPackageVersions[kvp.Key] = kvp.Value;
+            }
+
+            try
+            {
+                var xdoc = XDocument.Load(projPath);
+                var sdkAttr = xdoc.Root?.Attribute("Sdk")?.Value?.Trim();
+                if (!string.IsNullOrEmpty(sdkAttr)) { meta.Sdk = sdkAttr; }
+                foreach (var el in xdoc.Descendants())
+                {
+                    switch (el.Name.LocalName)
+                    {
+                        case "IsPackable":
+                            if (bool.TryParse(el.Value.Trim(), out var packable)) { meta.IsPackable = packable; }
+                            break;
+                        case "OutputType":
+                            if (el.Value.Trim().Equals("Exe", StringComparison.OrdinalIgnoreCase) ||
+                                el.Value.Trim().Equals("WinExe", StringComparison.OrdinalIgnoreCase))
+                            {
+                                meta.IsPackable = false;
+                            }
+                            break;
+                        case "Version":
+                        case "PackageVersion":
+                        case "VersionPrefix":
+                            if (!string.IsNullOrWhiteSpace(el.Value) && !el.Value.Contains("$("))
+                            {
+                                meta.Version = el.Value.Trim();
+                            }
+                            break;
+                        case "PackageReference":
+                            var pkgId = el.Attribute("Include")?.Value?.Trim();
+                            var pkgVer = el.Attribute("Version")?.Value?.Trim() ?? el.Element(el.Name.Namespace + "Version")?.Value?.Trim();
+                            if (!string.IsNullOrEmpty(pkgId))
+                            {
+                                if (string.IsNullOrEmpty(pkgVer) && meta.CentralPackageVersions.TryGetValue(pkgId, out var cver))
+                                {
+                                    pkgVer = cver;
+                                }
+                                meta.PackageReferences.Add((pkgId, pkgVer));
+                            }
+                            break;
+                        case "ProjectReference":
+                            var relRef = el.Attribute("Include")?.Value?.Trim();
+                            if (!string.IsNullOrEmpty(relRef))
+                            {
+                                var normalizedRef = relRef.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
+                                var fullRef = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(projPath)!, normalizedRef));
+                                meta.ProjectReferences.Add(fullRef);
+                            }
+                            break;
+                        case "FrameworkReference":
+                            var fw = el.Attribute("Include")?.Value?.Trim();
+                            if (!string.IsNullOrEmpty(fw))
+                            {
+                                meta.FrameworkReferences.Add(fw);
+                                if (fw.Equals("Microsoft.AspNetCore.App", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    meta.Sdk = "Microsoft.NET.Sdk.Web";
+                                }
+                            }
+                            break;
+                    }
+                }
+            }
+            catch { }
+
+            index.ProjectsByPath[projPath] = meta;
+
+            if (info.IsTest) { continue; }
+
+            foreach (var csFile in EnumerateProjectSourceFiles(info))
+            {
+                string sourceText;
+                try { sourceText = File.ReadAllText(csFile); }
+                catch { continue; }
+
+                var tree = CSharpSyntaxTree.ParseText(sourceText);
+                var cu = tree.GetCompilationUnitRoot();
+
+                foreach (var nsDecl in cu.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>())
+                {
+                    var nsName = nsDecl.Name.ToString();
+                    if (!index.RepoNamespaces.TryGetValue(nsName, out var projList))
+                    {
+                        projList = new List<RunActionProjectMeta>();
+                        index.RepoNamespaces[nsName] = projList;
+                    }
+                    if (!projList.Any(p => PathsEqual(p.FullPath, meta.FullPath)))
+                    {
+                        projList.Add(meta);
+                    }
+                }
+
+                foreach (var typeDecl in cu.DescendantNodes().OfType<BaseTypeDeclarationSyntax>())
+                {
+                    if (!typeDecl.Modifiers.Any(m => m.IsKind(SyntaxKind.PublicKeyword))) { continue; }
+                    var nsName = GetEnclosingNamespace(typeDecl);
+                    if (string.IsNullOrEmpty(nsName)) { continue; }
+                    var simpleName = typeDecl.Identifier.ValueText;
+                    var fullName = $"{nsName}.{simpleName}";
+                    if (!index.RepoTypesBySimpleName.TryGetValue(simpleName, out var owners))
+                    {
+                        owners = new List<RunActionTypeOwner>();
+                        index.RepoTypesBySimpleName[simpleName] = owners;
+                    }
+                    if (!owners.Any(o => o.FullName == fullName && PathsEqual(o.Project.FullPath, meta.FullPath)))
+                    {
+                        owners.Add(new RunActionTypeOwner(simpleName, nsName, fullName, meta));
+                    }
+
+                    if (!index.RepoNamespaces.TryGetValue(nsName, out var projList))
+                    {
+                        projList = new List<RunActionProjectMeta>();
+                        index.RepoNamespaces[nsName] = projList;
+                    }
+                    if (!projList.Any(p => PathsEqual(p.FullPath, meta.FullPath)))
+                    {
+                        projList.Add(meta);
+                    }
+
+                    if (typeDecl is ClassDeclarationSyntax classDecl &&
+                        classDecl.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword)))
+                    {
+                        foreach (var method in classDecl.Members.OfType<MethodDeclarationSyntax>())
+                        {
+                            if (!method.Modifiers.Any(m => m.IsKind(SyntaxKind.PublicKeyword)) ||
+                                !method.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword)))
+                            {
+                                continue;
+                            }
+                            if (method.ParameterList.Parameters.Count > 0 &&
+                                method.ParameterList.Parameters[0].Modifiers.Any(m => m.IsKind(SyntaxKind.ThisKeyword)))
+                            {
+                                var mName = method.Identifier.ValueText;
+                                if (!index.RepoExtensionMethods.TryGetValue(mName, out var extList))
+                                {
+                                    extList = new List<RunActionExtensionOwner>();
+                                    index.RepoExtensionMethods[mName] = extList;
+                                }
+                                if (!extList.Any(e => e.Namespace == nsName && PathsEqual(e.Project.FullPath, meta.FullPath)))
+                                {
+                                    extList.Add(new RunActionExtensionOwner(mName, nsName, simpleName, meta));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return index;
+    }
+
+    private static string GetEnclosingNamespace(SyntaxNode node)
+    {
+        var parts = new Stack<string>();
+        for (var cur = node.Parent; cur is not null; cur = cur.Parent)
+        {
+            if (cur is BaseNamespaceDeclarationSyntax ns)
+            {
+                parts.Push(ns.Name.ToString());
+            }
+        }
+        return string.Join(".", parts);
+    }
+
+    private static int GetOneBasedLine(SyntaxTree tree, SyntaxNode node)
+        => tree.GetLineSpan(node.Span).StartLinePosition.Line + 1;
+
+    private static bool HasBlockingHostRun(CompilationUnitSyntax syntax, out SyntaxNode? runNode)
+    {
+        runNode = null;
+        var text = syntax.ToFullString();
+        var mentionsHostBuilder =
+            text.Contains("WebApplication.CreateBuilder", StringComparison.Ordinal) ||
+            text.Contains("WebApplication.CreateSlimBuilder", StringComparison.Ordinal) ||
+            text.Contains("Host.CreateDefaultBuilder", StringComparison.Ordinal) ||
+            text.Contains("Host.CreateApplicationBuilder", StringComparison.Ordinal) ||
+            text.Contains("WebHost.CreateDefaultBuilder", StringComparison.Ordinal) ||
+            text.Contains("IWebHostBuilder", StringComparison.Ordinal) ||
+            text.Contains("IHostBuilder", StringComparison.Ordinal);
+
+        if (!mentionsHostBuilder) { return false; }
+
+        foreach (var inv in syntax.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (inv.Expression is MemberAccessExpressionSyntax ma &&
+                ma.Name.Identifier.ValueText is "Run" or "RunAsync" &&
+                inv.ArgumentList.Arguments.Count == 0)
+            {
+                runNode = inv;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static string FormatTypeHeader(BaseTypeDeclarationSyntax typeDecl)
+    {
+        var mods = typeDecl.Modifiers.ToString();
+        var keyword = typeDecl switch
+        {
+            ClassDeclarationSyntax => "class",
+            StructDeclarationSyntax => "struct",
+            InterfaceDeclarationSyntax => "interface",
+            RecordDeclarationSyntax r => r.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword) ? "record struct" : "record",
+            EnumDeclarationSyntax => "enum",
+            _ => "type"
+        };
+        var generic = typeDecl is TypeDeclarationSyntax td && td.TypeParameterList is not null
+            ? td.TypeParameterList.ToString()
+            : string.Empty;
+        return string.IsNullOrWhiteSpace(mods)
+            ? $"{keyword} {typeDecl.Identifier.ValueText}{generic}"
+            : $"{mods} {keyword} {typeDecl.Identifier.ValueText}{generic}";
+    }
+
+    private static string FormatMethodSignature(MethodDeclarationSyntax method)
+    {
+        var mods = method.Modifiers.ToString();
+        var generic = method.TypeParameterList?.ToString() ?? string.Empty;
+        var sig = $"{method.ReturnType} {method.Identifier.ValueText}{generic}{method.ParameterList}";
+        return string.IsNullOrWhiteSpace(mods) ? sig : $"{mods} {sig}";
+    }
+
+    private static string FormatMemberHeader(MemberDeclarationSyntax member)
+    {
+        return member switch
+        {
+            FieldDeclarationSyntax f => f.ToString().Split('\n')[0].Trim(),
+            PropertyDeclarationSyntax p => $"{p.Modifiers} {p.Type} {p.Identifier.ValueText}".Trim(),
+            ConstructorDeclarationSyntax c => $"{c.Modifiers} {c.Identifier.ValueText}{c.ParameterList}".Trim(),
+            MethodDeclarationSyntax m => FormatMethodSignature(m),
+            BaseTypeDeclarationSyntax t => FormatTypeHeader(t),
+            _ => member.ToString().Split('\n')[0].Trim()
+        };
+    }
+
+    private static bool IsAsyncReturnType(string returnType)
+        => returnType is "Task" or "ValueTask" ||
+           returnType.StartsWith("Task<", StringComparison.Ordinal) ||
+           returnType.StartsWith("ValueTask<", StringComparison.Ordinal) ||
+           returnType.EndsWith(".Task", StringComparison.Ordinal) ||
+           returnType.Contains(".Task<", StringComparison.Ordinal) ||
+           returnType.EndsWith(".ValueTask", StringComparison.Ordinal) ||
+           returnType.Contains(".ValueTask<", StringComparison.Ordinal);
+
+    private static bool MethodReturnsValue(string returnType)
+        => returnType is not ("void" or "Task" or "ValueTask" or "System.Threading.Tasks.Task" or "System.Threading.Tasks.ValueTask");
+
+    private static RunActionClassification ClassifyRunActionExample(
+        CompilationUnitSyntax syntax,
+        SyntaxTree tree,
+        string normalizedCode,
+        bool isTest,
+        bool eligible,
+        RunActionDependencyIndex index)
+    {
+        var firstSyntaxError = tree.GetDiagnostics().FirstOrDefault(d => d.Severity == DiagnosticSeverity.Error);
+        if (firstSyntaxError is not null)
+        {
+            var errLine = firstSyntaxError.Location.GetLineSpan().StartLinePosition.Line + 1;
+            return new RunActionClassification(
+                Category: "syntax-error",
+                ReasonCode: "syntax-error",
+                Convertible: false,
+                SuggestedMode: "console",
+                EntryPoint: null,
+                BlockingConstruct: firstSyntaxError.GetMessage(),
+                BlockingLine: errLine,
+                ManualHarness: "Fix the C# syntax error or supply a complete compilable example.",
+                CandidateSource: null);
+        }
+
+        if (HasBlockingHostRun(syntax, out var hostRunNode) && hostRunNode is not null)
+        {
+            return new RunActionClassification(
+                Category: "host-blocking",
+                ReasonCode: "blocking-host-run",
+                Convertible: true,
+                SuggestedMode: "host",
+                EntryPoint: null,
+                BlockingConstruct: hostRunNode.ToString().Trim(),
+                BlockingLine: GetOneBasedLine(tree, hostRunNode),
+                ManualHarness: "Use a mode: host / hostHarness recipe that starts the host, probes or performs the demonstrated action, and shuts down within a timeout.",
+                CandidateSource: normalizedCode);
+        }
+
+        if (isTest)
+        {
+            return new RunActionClassification(
+                Category: "already-standalone",
+                ReasonCode: "xunit-test",
+                Convertible: true,
+                SuggestedMode: "test",
+                EntryPoint: null,
+                BlockingConstruct: null,
+                BlockingLine: null,
+                ManualHarness: null,
+                CandidateSource: normalizedCode);
+        }
+
+        var mainMethod = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .FirstOrDefault(m => m.Identifier.ValueText == "Main" && m.Modifiers.Any(mod => mod.IsKind(SyntaxKind.StaticKeyword)));
+        if (mainMethod is not null)
+        {
+            return new RunActionClassification(
+                Category: "already-standalone",
+                ReasonCode: "has-main",
+                Convertible: true,
+                SuggestedMode: "console",
+                EntryPoint: new RunActionEntryPoint(
+                    (mainMethod.Parent as TypeDeclarationSyntax)?.Identifier.ValueText ?? "Program",
+                    "Main",
+                    true,
+                    IsAsyncReturnType(mainMethod.ReturnType.ToString()),
+                    mainMethod.ReturnType.ToString(),
+                    false),
+                BlockingConstruct: null,
+                BlockingLine: null,
+                ManualHarness: null,
+                CandidateSource: normalizedCode);
+        }
+
+        if (syntax.Members.OfType<GlobalStatementSyntax>().Any())
+        {
+            return new RunActionClassification(
+                Category: eligible ? "already-standalone" : "top-level",
+                ReasonCode: eligible ? "top-level-program" : "top-level-statements",
+                Convertible: true,
+                SuggestedMode: "console",
+                EntryPoint: null,
+                BlockingConstruct: null,
+                BlockingLine: null,
+                ManualHarness: null,
+                CandidateSource: normalizedCode);
+        }
+
+        var allTypes = syntax.DescendantNodes().OfType<BaseTypeDeclarationSyntax>()
+            .Where(t => t.Parent is CompilationUnitSyntax or BaseNamespaceDeclarationSyntax)
+            .ToList();
+
+        // Find parameterless entry method candidates on instantiable or static types.
+        var entryCandidates = new List<(TypeDeclarationSyntax Type, MethodDeclarationSyntax Method, int Priority)>();
+        foreach (var td in allTypes.OfType<TypeDeclarationSyntax>())
+        {
+            if (td is InterfaceDeclarationSyntax) { continue; }
+            if (td.TypeParameterList is not null && td.TypeParameterList.Parameters.Count > 0) { continue; }
+            var isStaticType = td.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword));
+            var isAbstractType = td.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword)) && !isStaticType;
+            var ctors = td.Members.OfType<ConstructorDeclarationSyntax>()
+                .Where(c => !c.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword))).ToList();
+            var hasDefaultCtor = !isAbstractType && !isStaticType && (
+                ctors.Count == 0 ||
+                ctors.Any(c => c.ParameterList.Parameters.All(p => p.Default is not null) &&
+                               !c.Modifiers.Any(m => m.IsKind(SyntaxKind.PrivateKeyword) || m.IsKind(SyntaxKind.ProtectedKeyword))));
+            // Also check primary constructor parameters on C# 12 classes/records.
+            if (td.ParameterList is not null && td.ParameterList.Parameters.Any(p => p.Default is null))
+            {
+                hasDefaultCtor = false;
+            }
+
+            foreach (var m in td.Members.OfType<MethodDeclarationSyntax>())
+            {
+                if (m.Modifiers.Any(mod => mod.IsKind(SyntaxKind.AbstractKeyword))) { continue; }
+                if (m.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PrivateKeyword) || mod.IsKind(SyntaxKind.ProtectedKeyword))) { continue; }
+                if (m.TypeParameterList is not null && m.TypeParameterList.Parameters.Count > 0) { continue; }
+                if (m.ParameterList.Parameters.Any(p => p.Default is null)) { continue; }
+
+                var isStaticMethod = m.Modifiers.Any(mod => mod.IsKind(SyntaxKind.StaticKeyword));
+                if (!isStaticMethod && !hasDefaultCtor) { continue; }
+
+                var prefIdx = Array.IndexOf(PreferredEntryMethodNames, m.Identifier.ValueText);
+                var priority = prefIdx >= 0 ? prefIdx : 100;
+                entryCandidates.Add((td, m, priority));
+            }
+        }
+
+        if (entryCandidates.Count > 0)
+        {
+            var chosen = entryCandidates
+                .OrderBy(c => c.Priority)
+                .ThenBy(c => c.Method.SpanStart)
+                .First();
+            var ownerType = chosen.Type;
+            var entryMethod = chosen.Method;
+            var isStaticMethod = entryMethod.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword));
+            var retType = entryMethod.ReturnType.ToString();
+            var isAsync = entryMethod.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword)) || IsAsyncReturnType(retType);
+            var hasRet = MethodReturnsValue(retType);
+
+            var hasThisRef = entryMethod.DescendantNodes().OfType<ThisExpressionSyntax>().Any();
+            var otherMembers = ownerType.Members.Where(m => !ReferenceEquals(m, entryMethod)).ToList();
+            var isClean = allTypes.Count == 1 &&
+                          ownerType.BaseList is null &&
+                          otherMembers.Count == 0 &&
+                          !hasThisRef;
+
+            var entryInfo = new RunActionEntryPoint(
+                ownerType.Identifier.ValueText,
+                entryMethod.Identifier.ValueText,
+                isStaticMethod,
+                isAsync,
+                retType,
+                hasRet);
+
+            var candidate = BuildConvertedConsoleSource(syntax, ownerType, entryMethod, entryInfo, isClean, index);
+
+            if (isClean)
+            {
+                return new RunActionClassification(
+                    Category: "wrapper-clean",
+                    ReasonCode: "clean-wrapper-entry-method",
+                    Convertible: true,
+                    SuggestedMode: "console",
+                    EntryPoint: entryInfo,
+                    BlockingConstruct: FormatTypeHeader(ownerType),
+                    BlockingLine: GetOneBasedLine(tree, ownerType),
+                    ManualHarness: null,
+                    CandidateSource: candidate);
+            }
+
+            SyntaxNode blockerNode = otherMembers.Count > 0
+                ? otherMembers[0]
+                : allTypes.FirstOrDefault(t => !ReferenceEquals(t, ownerType)) as SyntaxNode
+                  ?? (SyntaxNode?)ownerType.BaseList
+                  ?? ownerType;
+            var blockerText = blockerNode switch
+            {
+                MemberDeclarationSyntax mem => FormatMemberHeader(mem),
+                BaseListSyntax bl => $"{FormatTypeHeader(ownerType)} {bl}",
+                _ => FormatTypeHeader(ownerType)
+            };
+
+            return new RunActionClassification(
+                Category: "wrapper-members",
+                ReasonCode: "wrapper-requires-member-hoisting",
+                Convertible: true,
+                SuggestedMode: "console",
+                EntryPoint: entryInfo,
+                BlockingConstruct: blockerText,
+                BlockingLine: GetOneBasedLine(tree, blockerNode),
+                ManualHarness: null,
+                CandidateSource: candidate);
+        }
+
+        // Check for parameterized host/DI methods (ConfigureServices(IServiceCollection), Configure(IApplicationBuilder), etc.).
+        var allMethods = syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().ToList();
+        var hostMethod = allMethods.FirstOrDefault(m =>
+            m.ParameterList.Parameters.Any(p =>
+            {
+                var pType = p.Type?.ToString() ?? string.Empty;
+                var simpleType = pType.Split('.').Last().Split('<')[0].TrimEnd('?');
+                return HostParameterizedTypes.Contains(simpleType);
+            }));
+
+        if (hostMethod is not null)
+        {
+            var sig = FormatMethodSignature(hostMethod);
+            return new RunActionClassification(
+                Category: "host-parameterized",
+                ReasonCode: "parameterized-host-method",
+                Convertible: false,
+                SuggestedMode: "host",
+                EntryPoint: null,
+                BlockingConstruct: sig,
+                BlockingLine: GetOneBasedLine(tree, hostMethod),
+                ManualHarness: $"Requires a host/DI harness invoking '{sig}' (use a mode: host / hostHarness recipe or build ServiceCollection/WebApplication to execute it).",
+                CandidateSource: null);
+        }
+
+        // Otherwise classify why there is no usable entry point.
+        if (allTypes.Count > 0)
+        {
+            var firstType = allTypes[0];
+            var allAbstractOrInterface = allTypes.All(t =>
+                t is InterfaceDeclarationSyntax or EnumDeclarationSyntax ||
+                (t is TypeDeclarationSyntax td && td.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword)) && !td.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword))));
+            var allGeneric = allTypes.OfType<TypeDeclarationSyntax>().All(td => td.TypeParameterList is not null && td.TypeParameterList.Parameters.Count > 0);
+
+            string reasonCode;
+            SyntaxNode blocker = firstType;
+            string blockerText = FormatTypeHeader(firstType);
+
+            if (allAbstractOrInterface)
+            {
+                reasonCode = "abstract-or-interface-only";
+            }
+            else if (allGeneric && allTypes.OfType<TypeDeclarationSyntax>().Any())
+            {
+                reasonCode = "generic-type-only";
+            }
+            else if (allMethods.Count > 0)
+            {
+                reasonCode = "parameterized-methods-only";
+                blocker = allMethods[0];
+                blockerText = FormatMethodSignature(allMethods[0]);
+            }
+            else
+            {
+                reasonCode = "no-entry-point";
+            }
+
+            return new RunActionClassification(
+                Category: "no-entry",
+                ReasonCode: reasonCode,
+                Convertible: false,
+                SuggestedMode: "console",
+                EntryPoint: null,
+                BlockingConstruct: blockerText,
+                BlockingLine: GetOneBasedLine(tree, blocker),
+                ManualHarness: "Author a concrete invocation or driver exercising the documented API and writing an observable result.",
+                CandidateSource: null);
+        }
+
+        return new RunActionClassification(
+            Category: "no-entry",
+            ReasonCode: "no-entry-point",
+            Convertible: false,
+            SuggestedMode: "console",
+            EntryPoint: null,
+            BlockingConstruct: normalizedCode.Split('\n').FirstOrDefault()?.Trim(),
+            BlockingLine: 1,
+            ManualHarness: "Author a complete standalone program or xUnit v3 test demonstrating the API.",
+            CandidateSource: null);
+    }
+
+    private static string BuildConvertedConsoleSource(
+        CompilationUnitSyntax syntax,
+        TypeDeclarationSyntax ownerType,
+        MethodDeclarationSyntax entryMethod,
+        RunActionEntryPoint entry,
+        bool isClean,
+        RunActionDependencyIndex index)
+    {
+        var usings = syntax.Usings.Select(u => u.ToString().Trim()).ToList();
+        var declaredNs = GetEnclosingNamespace(ownerType);
+
+        void EnsureUsing(string ns)
+        {
+            var directive = $"using {ns};";
+            if (!usings.Any(u => string.Equals(u, directive, StringComparison.Ordinal)))
+            {
+                usings.Add(directive);
+            }
+        }
+
+        // Unwrap clean wrapper directly to top-level statements when safe (no return statements inside block).
+        if (isClean && entryMethod.Body is not null &&
+            !entryMethod.Body.DescendantNodes().OfType<ReturnStatementSyntax>().Any())
+        {
+            if (!string.IsNullOrEmpty(declaredNs) && index.RepoNamespaces.ContainsKey(declaredNs))
+            {
+                EnsureUsing(declaredNs);
+            }
+
+            var rawBody = entryMethod.Body.Statements.ToFullString().Replace("\r\n", "\n").Trim('\r', '\n');
+            var bodyLines = rawBody.Split('\n');
+            var nonEmptyIndents = bodyLines
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .Select(l => l.TakeWhile(c => c is ' ' or '\t').Count())
+                .ToList();
+            var minIndent = nonEmptyIndents.Count > 0 ? nonEmptyIndents.Min() : 0;
+            var dedented = string.Join("\n", bodyLines.Select(l =>
+                l.Length >= minIndent ? l[minIndent..] : l.TrimStart()));
+
+            var sb = new StringBuilder();
+            foreach (var u in usings) { sb.AppendLine(u); }
+            if (usings.Count > 0) { sb.AppendLine(); }
+            sb.Append(dedented.TrimEnd());
+            return sb.ToString().Replace("\r\n", "\n").TrimEnd('\r', '\n');
+        }
+
+        if (isClean && entryMethod.ExpressionBody is not null)
+        {
+            if (!string.IsNullOrEmpty(declaredNs) && index.RepoNamespaces.ContainsKey(declaredNs))
+            {
+                EnsureUsing(declaredNs);
+            }
+            if (entry.HasReturnValue) { EnsureUsing("System"); }
+            var exprNode = entryMethod.ExpressionBody.Expression;
+            var expr = exprNode.ToString().Trim();
+            var hasAsyncModifier = entryMethod.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword));
+            var needsAwait = entry.IsAsync && !hasAsyncModifier;
+            var awaitedExpr = needsAwait
+                ? (exprNode is InvocationExpressionSyntax or MemberAccessExpressionSyntax or IdentifierNameSyntax or ParenthesizedExpressionSyntax or ObjectCreationExpressionSyntax
+                    ? $"await {expr}"
+                    : $"await ({expr})")
+                : expr;
+            var sb = new StringBuilder();
+            foreach (var u in usings) { sb.AppendLine(u); }
+            if (usings.Count > 0) { sb.AppendLine(); }
+            if (entry.HasReturnValue)
+            {
+                sb.Append($"Console.WriteLine({awaitedExpr});");
+            }
+            else
+            {
+                sb.Append($"{awaitedExpr};");
+            }
+            return sb.ToString().Replace("\r\n", "\n").TrimEnd('\r', '\n');
+        }
+
+        // Preserve types/members and hoist a top-level driver statement before type/namespace declarations.
+        if (entry.HasReturnValue) { EnsureUsing("System"); }
+        if (!string.IsNullOrEmpty(declaredNs)) { EnsureUsing(declaredNs); }
+
+        var invokeExpr = entry.IsStatic
+            ? $"{entry.Type}.{entry.Method}()"
+            : $"new {entry.Type}().{entry.Method}()";
+        if (entry.IsAsync) { invokeExpr = $"await {invokeExpr}"; }
+        var driverLine = entry.HasReturnValue
+            ? $"Console.WriteLine({invokeExpr});"
+            : $"{invokeExpr};";
+
+        var sbHoist = new StringBuilder();
+        foreach (var u in usings) { sbHoist.AppendLine(u); }
+        if (usings.Count > 0) { sbHoist.AppendLine(); }
+        sbHoist.AppendLine(driverLine);
+        sbHoist.AppendLine();
+
+        foreach (var member in syntax.Members)
+        {
+            if (member is FileScopedNamespaceDeclarationSyntax fsns)
+            {
+                sbHoist.AppendLine($"namespace {fsns.Name}");
+                sbHoist.AppendLine("{");
+                foreach (var inner in fsns.Members)
+                {
+                    var innerLines = inner.ToFullString().Replace("\r\n", "\n").Trim('\r', '\n').Split('\n');
+                    foreach (var line in innerLines)
+                    {
+                        sbHoist.AppendLine(string.IsNullOrWhiteSpace(line) ? string.Empty : "    " + line);
+                    }
+                }
+                sbHoist.AppendLine("}");
+            }
+            else
+            {
+                sbHoist.AppendLine(member.ToFullString().Replace("\r\n", "\n").Trim('\r', '\n'));
+            }
+        }
+
+        return sbHoist.ToString().Replace("\r\n", "\n").TrimEnd('\r', '\n');
+    }
+
+    private sealed record RunActionMissingPackage(
+        string Type,
+        string Package,
+        string? Project,
+        string Reason,
+        string Diagnostic);
+
+    private sealed record RunActionAmbiguousType(
+        string Type,
+        string[] Candidates,
+        string Diagnostic);
+
+    private static object ResolveRunActionDependencies(
+        CompilationUnitSyntax syntax,
+        RunActionDependencyIndex index,
+        string? ownerUid,
+        bool isTest,
+        bool isHostMode)
+    {
+        var importedNamespaces = new HashSet<string>(StringComparer.Ordinal);
+        var aliasedNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var u in syntax.DescendantNodes().OfType<UsingDirectiveSyntax>())
+        {
+            if (u.Alias is not null)
+            {
+                aliasedNames.Add(u.Alias.Name.Identifier.ValueText);
+                continue;
+            }
+            var nsName = u.Name?.ToString();
+            if (!string.IsNullOrEmpty(nsName))
+            {
+                importedNamespaces.Add(nsName);
+            }
+        }
+
+        var localNamespaces = new HashSet<string>(
+            syntax.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>().Select(n => n.Name.ToString()),
+            StringComparer.Ordinal);
+        var localTypes = new HashSet<string>(
+            syntax.DescendantNodes().OfType<BaseTypeDeclarationSyntax>().Select(t => t.Identifier.ValueText),
+            StringComparer.Ordinal);
+
+        // Collect unqualified type identifiers and static-access type identifiers referenced in the fence.
+        var referencedSimpleTypes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var node in syntax.DescendantNodes())
+        {
+            switch (node)
+            {
+                case ObjectCreationExpressionSyntax obj when obj.Type is SimpleNameSyntax s:
+                    referencedSimpleTypes.Add(s.Identifier.ValueText);
+                    break;
+                case VariableDeclarationSyntax vd when vd.Type is SimpleNameSyntax s && !s.IsVar:
+                    referencedSimpleTypes.Add(s.Identifier.ValueText);
+                    break;
+                case ParameterSyntax p when p.Type is SimpleNameSyntax s:
+                    referencedSimpleTypes.Add(s.Identifier.ValueText);
+                    break;
+                case BaseTypeSyntax bt when bt.Type is SimpleNameSyntax s:
+                    referencedSimpleTypes.Add(s.Identifier.ValueText);
+                    break;
+                case TypeOfExpressionSyntax to when to.Type is SimpleNameSyntax s:
+                    referencedSimpleTypes.Add(s.Identifier.ValueText);
+                    break;
+                case CastExpressionSyntax cast when cast.Type is SimpleNameSyntax s:
+                    referencedSimpleTypes.Add(s.Identifier.ValueText);
+                    break;
+                case GenericNameSyntax gn:
+                    referencedSimpleTypes.Add(gn.Identifier.ValueText);
+                    break;
+                case AttributeSyntax attr:
+                    var aName = attr.Name.GetLastToken().ValueText;
+                    referencedSimpleTypes.Add(aName);
+                    if (!aName.EndsWith("Attribute", StringComparison.Ordinal))
+                    {
+                        referencedSimpleTypes.Add(aName + "Attribute");
+                    }
+                    break;
+                case MemberAccessExpressionSyntax ma when ma.Expression is IdentifierNameSyntax id &&
+                    id.Identifier.ValueText.Length > 0 && char.IsUpper(id.Identifier.ValueText[0]):
+                    referencedSimpleTypes.Add(id.Identifier.ValueText);
+                    break;
+            }
+        }
+        referencedSimpleTypes.ExceptWith(localTypes);
+
+        var invokedMethodNames = new HashSet<string>(
+            syntax.DescendantNodes().OfType<InvocationExpressionSyntax>()
+                .Select(i => i.Expression is MemberAccessExpressionSyntax ma ? ma.Name.Identifier.ValueText : null)
+                .Where(n => !string.IsNullOrEmpty(n))!,
+            StringComparer.Ordinal);
+
+        var requiredProjects = new Dictionary<string, RunActionProjectMeta>(StringComparer.OrdinalIgnoreCase);
+        var typeOwnership = new List<object>();
+        var missingPackages = new List<RunActionMissingPackage>();
+        var ambiguousTypes = new List<RunActionAmbiguousType>();
+        var unresolvedUsings = new List<string>();
+        var unversionedPackages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var externalPins = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var frameworkReferences = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var sdk = isHostMode ? "Microsoft.NET.Sdk.Web" : "Microsoft.NET.Sdk";
+        var resolvedNamespacesByType = new HashSet<string>(StringComparer.Ordinal);
+
+        void AddProjectRequirement(RunActionProjectMeta proj, string? matchedType, string? matchedNs)
+        {
+            if (!proj.IsPackable)
+            {
+                var label = matchedType ?? matchedNs ?? proj.PackageId;
+                var diag = $"missing-package: {label} -> {proj.PackageId} (unpublished project {proj.RelPath})";
+                if (!missingPackages.Any(m => m.Diagnostic == diag))
+                {
+                    missingPackages.Add(new RunActionMissingPackage(label, proj.PackageId, proj.RelPath, "unpublished-project", diag));
+                }
+                return;
+            }
+
+            requiredProjects[proj.FullPath] = proj;
+            if (proj.Sdk.Equals("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase))
+            {
+                sdk = "Microsoft.NET.Sdk.Web";
+                frameworkReferences.Add("Microsoft.AspNetCore.App");
+            }
+            foreach (var fw in proj.FrameworkReferences)
+            {
+                frameworkReferences.Add(fw);
+            }
+            if (string.IsNullOrEmpty(proj.Version))
+            {
+                unversionedPackages.Add(proj.PackageId);
+            }
+        }
+
+        // 1. Resolve referenced simple types against repo type ownership.
+        var searchNamespaces = new HashSet<string>(importedNamespaces, StringComparer.Ordinal);
+        foreach (var lns in localNamespaces) { searchNamespaces.Add(lns); }
+
+        foreach (var typeName in referencedSimpleTypes.OrderBy(t => t, StringComparer.Ordinal))
+        {
+            if (index.RepoTypesBySimpleName.TryGetValue(typeName, out var owners))
+            {
+                var matchingOwners = owners.Where(o => searchNamespaces.Contains(o.Namespace)).ToList();
+                if (matchingOwners.Count == 0 && owners.Count == 1 && !string.IsNullOrEmpty(ownerUid) &&
+                    ownerUid.StartsWith(owners[0].Namespace, StringComparison.Ordinal))
+                {
+                    matchingOwners = owners;
+                }
+
+                foreach (var owner in matchingOwners)
+                {
+                    resolvedNamespacesByType.Add(owner.Namespace);
+                    typeOwnership.Add(new
+                    {
+                        type = owner.SimpleName,
+                        @namespace = owner.Namespace,
+                        package = owner.Project.PackageId,
+                        project = owner.Project.RelPath,
+                        packable = owner.Project.IsPackable,
+                        version = owner.Project.Version
+                    });
+                    AddProjectRequirement(owner.Project, owner.SimpleName, owner.Namespace);
+                }
+            }
+        }
+
+        // 2. Resolve extension method calls against repo extension ownership.
+        foreach (var mName in invokedMethodNames)
+        {
+            if (index.RepoExtensionMethods.TryGetValue(mName, out var extOwners))
+            {
+                foreach (var ext in extOwners.Where(e => searchNamespaces.Contains(e.Namespace)))
+                {
+                    resolvedNamespacesByType.Add(ext.Namespace);
+                    AddProjectRequirement(ext.Project, $"{ext.DeclaringType}.{ext.MethodName}", ext.Namespace);
+                }
+            }
+        }
+
+        // 3. Detect CS0104 ambiguities for unqualified referenced types across BCL + Repo types in imported namespaces.
+        foreach (var typeName in referencedSimpleTypes.OrderBy(t => t, StringComparer.Ordinal))
+        {
+            if (aliasedNames.Contains(typeName)) { continue; }
+            var candidates = new SortedSet<string>(StringComparer.Ordinal);
+            if (index.BclTypesBySimpleName.TryGetValue(typeName, out var bclNs))
+            {
+                foreach (var ns in bclNs.Where(importedNamespaces.Contains))
+                {
+                    candidates.Add($"{ns}.{typeName}");
+                }
+            }
+            if (index.RepoTypesBySimpleName.TryGetValue(typeName, out var repoOwners))
+            {
+                foreach (var o in repoOwners.Where(o => importedNamespaces.Contains(o.Namespace)))
+                {
+                    candidates.Add(o.FullName);
+                }
+            }
+            if (candidates.Count > 1)
+            {
+                var list = candidates.ToArray();
+                ambiguousTypes.Add(new RunActionAmbiguousType(
+                    typeName,
+                    list,
+                    $"ambiguous-type: {typeName} -> {string.Join(" | ", list)}"));
+            }
+        }
+
+        // 4. Resolve remaining `using` directives (external packages, ASP.NET Core, xUnit, single-owner repo namespaces).
+        var allExternalPkgRefs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Prefer versions from the example's own required projects first, then other packable projects, then non-packable projects, then root Directory.Packages.props.
+        foreach (var proj in requiredProjects.Values.OrderBy(p => p.FullPath, StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var r in proj.PackageReferences.Where(r => !string.IsNullOrEmpty(r.Version)))
+            {
+                allExternalPkgRefs.TryAdd(r.Id, r.Version!);
+            }
+            foreach (var kvp in proj.CentralPackageVersions)
+            {
+                allExternalPkgRefs.TryAdd(kvp.Key, kvp.Value);
+            }
+        }
+        foreach (var proj in index.ProjectsByPath.Values
+            .OrderByDescending(p => p.IsPackable)
+            .ThenBy(p => p.IsTest)
+            .ThenBy(p => p.FullPath, StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var r in proj.PackageReferences.Where(r => !string.IsNullOrEmpty(r.Version)))
+            {
+                allExternalPkgRefs.TryAdd(r.Id, r.Version!);
+            }
+        }
+        foreach (var kvp in index.CentralPackageVersions)
+        {
+            allExternalPkgRefs.TryAdd(kvp.Key, kvp.Value);
+        }
+
+        foreach (var ns in importedNamespaces.OrderBy(n => n, StringComparer.Ordinal))
+        {
+            if (localNamespaces.Contains(ns)) { continue; }
+            if (ns == "Xunit" || ns.StartsWith("Xunit.", StringComparison.Ordinal))
+            {
+                externalPins.TryAdd("xunit.v3", "4.0.3");
+                continue;
+            }
+            if (ns == "Microsoft.AspNetCore" || ns.StartsWith("Microsoft.AspNetCore.", StringComparison.Ordinal))
+            {
+                sdk = "Microsoft.NET.Sdk.Web";
+                frameworkReferences.Add("Microsoft.AspNetCore.App");
+                continue;
+            }
+            if (index.BclNamespaces.Contains(ns) || ns == "System" || ns.StartsWith("System.", StringComparison.Ordinal))
+            {
+                if (!index.BclNamespaces.Contains(ns) && allExternalPkgRefs.TryGetValue(ns, out var sysPkgVer))
+                {
+                    externalPins[ns] = sysPkgVer;
+                }
+                continue;
+            }
+            if (resolvedNamespacesByType.Contains(ns)) { continue; }
+
+            if (index.RepoNamespaces.TryGetValue(ns, out var repoProjs) && repoProjs.Count > 0)
+            {
+                if (repoProjs.Count == 1)
+                {
+                    AddProjectRequirement(repoProjs[0], null, ns);
+                }
+                else
+                {
+                    var matched = repoProjs.Where(p => !string.IsNullOrEmpty(ownerUid) && ownerUid.StartsWith(p.PackageId, StringComparison.OrdinalIgnoreCase)).ToList();
+                    foreach (var p in (matched.Count > 0 ? matched : repoProjs.Where(p => p.IsPackable).Take(1).ToList()))
+                    {
+                        AddProjectRequirement(p, null, ns);
+                    }
+                }
+                continue;
+            }
+
+            var bestPkg = allExternalPkgRefs.Keys
+                .Where(pkg => (ns.Equals(pkg, StringComparison.OrdinalIgnoreCase) || ns.StartsWith(pkg + ".", StringComparison.OrdinalIgnoreCase)) &&
+                              !pkg.Equals("xunit.v3.assert", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(pkg => pkg.Length)
+                .FirstOrDefault();
+
+            if (bestPkg is not null)
+            {
+                externalPins[bestPkg] = allExternalPkgRefs[bestPkg];
+                continue;
+            }
+
+            var prefixRoot = ns.Split('.')[0];
+            var relatedExternal = allExternalPkgRefs.Keys
+                .Where(pkg => pkg.StartsWith(prefixRoot + ".", StringComparison.OrdinalIgnoreCase) &&
+                              !pkg.Equals("xunit.v3.assert", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(pkg => pkg.Length)
+                .FirstOrDefault();
+            if (relatedExternal is not null)
+            {
+                externalPins[relatedExternal] = allExternalPkgRefs[relatedExternal];
+                continue;
+            }
+
+            unresolvedUsings.Add(ns);
+            missingPackages.Add(new RunActionMissingPackage(
+                ns,
+                "unknown",
+                null,
+                "unresolved-using",
+                $"missing-package: {ns} -> <unknown>"));
+        }
+
+        if (isTest)
+        {
+            externalPins.TryAdd("xunit.v3", "4.0.3");
+        }
+
+        var dependsOn = new List<string>();
+        foreach (var proj in requiredProjects.Values.OrderBy(p => p.PackageId, StringComparer.OrdinalIgnoreCase))
+        {
+            dependsOn.Add(string.IsNullOrEmpty(proj.Version) ? proj.PackageId : $"{proj.PackageId}@{proj.Version}");
+        }
+        foreach (var kvp in externalPins.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!requiredProjects.Values.Any(p => p.PackageId.Equals(kvp.Key, StringComparison.OrdinalIgnoreCase)))
+            {
+                dependsOn.Add($"{kvp.Key}@{kvp.Value}");
+            }
+        }
+
+        var errors = missingPackages.Select(m => m.Diagnostic)
+            .Concat(ambiguousTypes.Select(a => a.Diagnostic))
+            .ToArray();
+
+        return new
+        {
+            dependsOn = dependsOn.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            sdk,
+            frameworkReferences = frameworkReferences.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToArray(),
+            typeOwnership = typeOwnership.ToArray(),
+            missingPackages = missingPackages.ToArray(),
+            ambiguousTypes = ambiguousTypes.ToArray(),
+            unresolvedUsings = unresolvedUsings.ToArray(),
+            unversionedPackages = unversionedPackages.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray(),
+            preflightPassed = errors.Length == 0,
+            errors
+        };
     }
 
     private static int Validate(Options options)
@@ -9483,8 +10794,9 @@ internal static class DocfxValidator
               --configuration <name>   Build configuration (only used by build/sample paths). Default: Release.
               --framework <tfm>        Optional runnable consumer TFM to validate against. Choose the
                                       TFM that selects the asset containing a conditional API; use net48
-                                      for NETSTANDARD2_0 assets when modern assets omit the API. Never
-                                      use netstandard* as an executable target.
+                                      for NETSTANDARD2_0 assets when modern assets omit the API
+                                      (Native-only; Docker is Unsupported for .NET Framework targets).
+                                      Never use netstandard* as an executable target.
               --validate-samples       Compile C# samples (opt-in). Default: disabled.
               --no-validate-samples    Explicitly disable sample compilation (already the default).
               --sample-reference-mode <project|package>

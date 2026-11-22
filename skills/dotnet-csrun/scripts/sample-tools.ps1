@@ -220,3 +220,282 @@ function Set-CsrunSourceRegion {
     if ([Convert]::ToBase64String($bytes) -cne [Convert]::ToBase64String($roundTrip)) { throw 'Encoding is not losslessly supported.' }
     [IO.File]::WriteAllBytes($full, $output)
 }
+
+function Resolve-CsrunEngine {
+    [CmdletBinding()]
+    param(
+        [string] $CacheDirectory,
+        [ValidateRange(0, 10080)][int] $MaxAgeMinutes = 60,
+        [switch] $ForceRefresh,
+        [string] $ReleaseApiUrl = 'https://api.github.com/repos/codebeltnet/csrun/releases/latest'
+    )
+    if (-not $CacheDirectory) {
+        if ($env:CSRUN_CACHE_DIR) {
+            $CacheDirectory = $env:CSRUN_CACHE_DIR
+        } elseif ($IsWindows) {
+            $base = [Environment]::GetFolderPath('LocalApplicationData')
+            if (-not $base) { throw 'LocalApplicationData is unavailable for the csrun engine cache.' }
+            $CacheDirectory = Join-Path $base 'codebeltnet/csrun-cache'
+        } else {
+            if (-not $HOME) { throw 'HOME is unavailable for the csrun engine cache.' }
+            $CacheDirectory = Join-Path $HOME '.cache/codebeltnet/csrun-cache'
+        }
+    }
+    if (-not [IO.Path]::IsPathFullyQualified($CacheDirectory)) {
+        throw "csrun engine cache directory must be an absolute path: $CacheDirectory"
+    }
+    $CacheDirectory = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($CacheDirectory))
+    $currentOwner = if ($IsWindows) { [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } else { (& id -u).Trim() }
+    $windowsTrustedSids = if ($IsWindows) {
+        [Collections.Generic.HashSet[string]]::new(
+            [string[]]@(
+                $currentOwner,
+                [Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::LocalSystemSid, $null).Value,
+                [Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null).Value
+            ),
+            [StringComparer]::OrdinalIgnoreCase
+        )
+    } else { $null }
+    $windowsWriteMask = if ($IsWindows) {
+        [int64](
+            [Security.AccessControl.FileSystemRights]::WriteData -bor
+            [Security.AccessControl.FileSystemRights]::AppendData -bor
+            [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+            [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+            [Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+            [Security.AccessControl.FileSystemRights]::Delete -bor
+            [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+            [Security.AccessControl.FileSystemRights]::TakeOwnership
+        ) -bor [int64]0x10000000 -bor [int64]0x40000000
+    } else { [int64]0 }
+
+    function New-PrivateWindowsDirectorySecurity {
+        $ds = [Security.AccessControl.DirectorySecurity]::new()
+        $ds.SetAccessRuleProtection($true, $false)
+        $inherit = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+        $prop = [Security.AccessControl.PropagationFlags]::None
+        $full = [Security.AccessControl.FileSystemRights]::FullControl
+        $allow = [Security.AccessControl.AccessControlType]::Allow
+        foreach ($sidValue in $windowsTrustedSids) {
+            $sid = [Security.Principal.SecurityIdentifier]::new($sidValue)
+            $ds.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, $full, $inherit, $prop, $allow))
+        }
+        return $ds
+    }
+
+    function Set-PrivateWindowsFileAcl([string] $Path) {
+        $fs = [Security.AccessControl.FileSecurity]::new()
+        $fs.SetAccessRuleProtection($true, $false)
+        $full = [Security.AccessControl.FileSystemRights]::FullControl
+        $allow = [Security.AccessControl.AccessControlType]::Allow
+        foreach ($sidValue in $windowsTrustedSids) {
+            $sid = [Security.Principal.SecurityIdentifier]::new($sidValue)
+            $fs.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, $full, $allow))
+        }
+        [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($Path), $fs)
+    }
+
+    function Test-PrivateWindowsAcl([string] $Path) {
+        $acl = Get-Acl -LiteralPath $Path
+        if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $currentOwner) { return $false }
+        $rules = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])
+        foreach ($rule in $rules) {
+            if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+            $sid = $rule.IdentityReference.Value
+            if ($windowsTrustedSids.Contains($sid)) { continue }
+            if ($sid -eq 'S-1-3-0' -and ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+            $rights = [int64]$rule.FileSystemRights.value__
+            if (($rights -band $windowsWriteMask) -ne 0) { return $false }
+        }
+        return $true
+    }
+
+    function Get-UnixItemMetadata([string] $Path) {
+        $statArgs = if ($IsMacOS) { @('-f', '%u %l %p', $Path) } else { @('-c', '%u %h %f', '--', $Path) }
+        $metadata = & stat @statArgs 2>$null
+        if ($LASTEXITCODE -ne 0 -or $metadata -notmatch '\A(\d+) (\d+) ([0-9a-f]+)\z') { return $null }
+        $radix = if ($IsMacOS) { 8 } else { 16 }
+        return @{ Owner = $Matches[1]; Links = [int]$Matches[2]; Mode = [Convert]::ToInt32($Matches[3], $radix) }
+    }
+
+    function Test-PrivateCachePath([string] $Path, [switch] $Directory) {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        if (-not $item -or $item.PSIsContainer -ne $Directory.IsPresent) { return $false }
+        $linkProp = $item.PSObject.Properties['LinkType']
+        if (($linkProp -and $linkProp.Value) -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+        if ($IsWindows) {
+            try { return (Test-PrivateWindowsAcl $Path) }
+            catch { return $false }
+        }
+        $metadata = Get-UnixItemMetadata $Path
+        if (-not $metadata) { return $false }
+        return $metadata.Owner -eq $currentOwner -and ($metadata.Mode -band 63) -eq 0 -and
+            ($Directory -or (($metadata.Mode -band 0xF000) -eq 0x8000 -and $metadata.Links -eq 1))
+    }
+
+    if (-not (Get-Item -LiteralPath $CacheDirectory -Force -ErrorAction SilentlyContinue)) {
+        if ($IsWindows) {
+            $parentDir = [IO.Path]::GetDirectoryName($CacheDirectory)
+            if ($parentDir -and -not (Test-Path -LiteralPath $parentDir)) {
+                $null = [IO.Directory]::CreateDirectory($parentDir)
+            }
+            $null = [IO.FileSystemAclExtensions]::CreateDirectory((New-PrivateWindowsDirectorySecurity), $CacheDirectory)
+        } else {
+            $null = [IO.Directory]::CreateDirectory($CacheDirectory)
+            & chmod 700 -- $CacheDirectory
+        }
+    }
+    if (-not (Test-PrivateCachePath $CacheDirectory -Directory)) {
+        throw "csrun engine cache directory failed ownership, ACL, or symlink checks: $CacheDirectory"
+    }
+
+    $scriptPath = Join-Path $CacheDirectory 'csrun.ps1'
+    $metaPath = Join-Path $CacheDirectory 'engine.json'
+    $lockPath = Join-Path $CacheDirectory 'engine.lock'
+    $utf8NoBom = [Text.UTF8Encoding]::new($false)
+
+    function Read-VerifiedCache {
+        if (-not (Test-PrivateCachePath $scriptPath) -or -not (Test-PrivateCachePath $metaPath)) { return $null }
+        try {
+            $meta = [IO.File]::ReadAllText($metaPath) | ConvertFrom-Json -AsHashtable
+            if (-not $meta -or -not $meta.ContainsKey('sha256') -or -not $meta.ContainsKey('fetchedUtc') -or -not $meta.ContainsKey('tag')) { return $null }
+            $expectedSha = [string] $meta['sha256']
+            if ($expectedSha -notmatch '^[0-9A-Fa-f]{64}$') { return $null }
+            $fetched = [DateTimeOffset]::Parse([string] $meta['fetchedUtc'], [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
+            $actualSha = (Get-FileHash -LiteralPath $scriptPath -Algorithm SHA256).Hash
+            if ($actualSha -ine $expectedSha) { return $null }
+            return [pscustomobject]@{
+                Path = $scriptPath
+                Tag = [string] $meta['tag']
+                Sha256 = $actualSha.ToUpperInvariant()
+                ETag = if ($meta.ContainsKey('etag')) { [string] $meta['etag'] } else { $null }
+                DownloadUrl = if ($meta.ContainsKey('downloadUrl')) { [string] $meta['downloadUrl'] } else { $null }
+                FetchedUtc = $fetched
+            }
+        } catch {
+            return $null
+        }
+    }
+
+    function Write-CacheMetadata([string] $Tag, [string] $Sha256, [string] $ETag, [string] $DownloadUrl, [DateTimeOffset] $FetchedUtc) {
+        $tmpMeta = Join-Path $CacheDirectory ('engine-' + [guid]::NewGuid().ToString('N') + '.tmp')
+        try {
+            $payload = [ordered]@{
+                tag = $Tag
+                sha256 = $Sha256.ToUpperInvariant()
+                etag = $ETag
+                downloadUrl = $DownloadUrl
+                fetchedUtc = $FetchedUtc.ToUniversalTime().ToString('O')
+            } | ConvertTo-Json -Compress
+            [IO.File]::WriteAllText($tmpMeta, $payload, $utf8NoBom)
+            if ($IsWindows) { Set-PrivateWindowsFileAcl $tmpMeta } else { & chmod 600 -- $tmpMeta }
+            [IO.File]::Move($tmpMeta, $metaPath, $true)
+        } finally {
+            if (Test-Path -LiteralPath $tmpMeta) { Remove-Item -LiteralPath $tmpMeta -Force }
+        }
+    }
+
+    $lockStream = $null
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    while ($null -eq $lockStream) {
+        try {
+            $lockStream = [IO.FileStream]::new($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        } catch [IO.IOException] {
+            if ([DateTimeOffset]::UtcNow -ge $deadline) {
+                throw "Timed out waiting for csrun engine cache lock: $lockPath"
+            }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+
+    $tmpScript = $null
+    try {
+        if ($IsWindows) { Set-PrivateWindowsFileAcl $lockPath } else { & chmod 600 -- $lockPath 2>$null }
+        $now = [DateTimeOffset]::UtcNow
+        $cached = Read-VerifiedCache
+        if ($cached -and -not $ForceRefresh -and $MaxAgeMinutes -gt 0 -and ($now - $cached.FetchedUtc).TotalMinutes -lt $MaxAgeMinutes) {
+            return [pscustomobject]@{
+                Path = $cached.Path
+                Tag = $cached.Tag
+                Sha256 = $cached.Sha256
+                FetchedUtc = $cached.FetchedUtc.ToUniversalTime().ToString('O')
+                Source = 'Cache'
+            }
+        }
+
+        $headers = @{ Accept = 'application/vnd.github+json' }
+        if ($cached -and $cached.ETag) { $headers['If-None-Match'] = $cached.ETag }
+
+        $response = Invoke-WebRequest -Uri $ReleaseApiUrl -Headers $headers -SkipHttpErrorCheck
+        $statusCode = [int] $response.StatusCode
+        $responseEtag = $null
+        if ($response.Headers -and $response.Headers.ContainsKey('ETag')) {
+            $responseEtag = @($response.Headers['ETag']) | Select-Object -First 1
+        }
+
+        if ($statusCode -eq 304) {
+            if (-not $cached) { throw 'Received HTTP 304 Not Modified without a verified cached csrun engine.' }
+            $effectiveEtag = if ($responseEtag) { $responseEtag } else { $cached.ETag }
+            Write-CacheMetadata -Tag $cached.Tag -Sha256 $cached.Sha256 -ETag $effectiveEtag -DownloadUrl $cached.DownloadUrl -FetchedUtc $now
+            $reverified = (Get-FileHash -LiteralPath $scriptPath -Algorithm SHA256).Hash
+            if ($reverified -ine $cached.Sha256) { throw "Cached csrun engine checksum changed unexpectedly: $reverified" }
+            return [pscustomobject]@{
+                Path = $scriptPath
+                Tag = $cached.Tag
+                Sha256 = $reverified.ToUpperInvariant()
+                FetchedUtc = $now.ToString('O')
+                Source = 'NotModified'
+            }
+        }
+
+        if ($statusCode -in @(403, 429)) {
+            if ($cached) {
+                Write-Warning "GitHub API returned HTTP $statusCode while checking csrun releases; reusing locally verified cached engine $($cached.Tag) (SHA256 $($cached.Sha256), fetched $($cached.FetchedUtc.ToUniversalTime().ToString('O')))."
+                return [pscustomobject]@{
+                    Path = $cached.Path
+                    Tag = $cached.Tag
+                    Sha256 = $cached.Sha256
+                    FetchedUtc = $cached.FetchedUtc.ToUniversalTime().ToString('O')
+                    Source = 'StaleCacheFallback'
+                }
+            }
+            throw "GitHub API returned HTTP $statusCode while resolving csrun release and no verified cached engine is available."
+        }
+
+        if ($statusCode -ne 200) {
+            throw "Failed to resolve csrun release from $ReleaseApiUrl (HTTP $statusCode)."
+        }
+
+        $release = $response.Content | ConvertFrom-Json
+        $assets = @($release.assets | Where-Object name -CEQ 'csrun.ps1')
+        if ($assets.Count -ne 1 -or $assets[0].digest -notmatch '^sha256:[0-9a-f]{64}$') {
+            throw "csrun release $($release.tag_name) must publish one csrun.ps1 asset with a SHA-256 digest."
+        }
+        $asset = $assets[0]
+        $expectedSha = $asset.digest.Substring(7).ToUpperInvariant()
+
+        if (-not $cached -or $cached.Sha256 -ine $expectedSha) {
+            $tmpScript = Join-Path $CacheDirectory ('csrun-' + [guid]::NewGuid().ToString('N') + '.tmp')
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmpScript
+            $actualHash = (Get-FileHash -LiteralPath $tmpScript -Algorithm SHA256).Hash
+            if ("sha256:$actualHash" -ne $asset.digest) {
+                throw "csrun asset checksum mismatch: $actualHash"
+            }
+            if ($IsWindows) { Set-PrivateWindowsFileAcl $tmpScript } else { & chmod 600 -- $tmpScript }
+            [IO.File]::Move($tmpScript, $scriptPath, $true)
+            $tmpScript = $null
+        }
+
+        Write-CacheMetadata -Tag ([string] $release.tag_name) -Sha256 $expectedSha -ETag $responseEtag -DownloadUrl ([string] $asset.browser_download_url) -FetchedUtc $now
+        return [pscustomobject]@{
+            Path = $scriptPath
+            Tag = [string] $release.tag_name
+            Sha256 = $expectedSha
+            FetchedUtc = $now.ToString('O')
+            Source = 'GitHub'
+        }
+    } finally {
+        if ($tmpScript -and (Test-Path -LiteralPath $tmpScript)) { Remove-Item -LiteralPath $tmpScript -Force }
+        if ($lockStream) { $lockStream.Dispose() }
+    }
+}

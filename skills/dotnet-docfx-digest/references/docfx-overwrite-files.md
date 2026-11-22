@@ -89,7 +89,7 @@ If a public non-abstraction type lacks an example, create a matching type-UID ov
 - Keep examples and remarks close to the API item or namespace they explain.
 - Create per-type overwrite files for missing concrete-type examples even when the repository currently has only namespace overview files.
 - Keep namespace overview Markdown under `.docfx/api/namespaces/` and type overwrite Markdown under `.docfx/api/types/`. Move legacy `.docfx/api/*.md` files into the appropriate subdirectory: namespace UIDs go to `api/namespaces/`, type UIDs go to `api/types/`.
-- Under `.docfx/api/`, `[!INCLUDE ...]` directives (such as availability includes) are only allowed in `.docfx/api/namespaces/*` — never in `.docfx/api/types/*` or after examples. Only modify DocFX Markdown files under `.docfx/api/`; leave Markdown files outside `.docfx/api/` untouched.
+- Under `.docfx/api/`, `[!INCLUDE ...]` directives (such as availability includes) are only allowed in `.docfx/api/namespaces/*` — never in `.docfx/api/types/*` or after examples. During DocFX API documentation or `csrun` runs, limit DocFX Markdown edits to `.docfx/api/` and leave Markdown files outside `.docfx/api/` untouched.
 - Keep `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite` only; do not use `api/**/*.md` under `build.content` or `build.overwrite`.
 - Add examples through overwrite sections when XML comments or generated metadata do not already provide developer-friendly examples.
 - Preserve existing hand-written overwrite sections unless they are stale or contradictory.
