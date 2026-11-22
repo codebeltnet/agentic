@@ -1638,6 +1638,120 @@ if ($invalidParallelRun.ExitCode -ne 3) {
     throw "Expected --max-parallel 0 to exit 3; got $($invalidParallelRun.ExitCode)"
 }
 
+# 12. Legacy .NET Framework (net48) standalone recipes: automatic Native-only delivery (docker: Unsupported), --validate-run-action on Windows, BuildRunActions.ps1 materialization, Markdown association, --summary-json exit 0, explicit docker reason preservation, and non-Windows verification/validation guards.
+$net48Root = Join-Path $work 'net48-native-only'
+$null = [IO.Directory]::CreateDirectory("$net48Root/docs")
+[IO.File]::WriteAllText("$net48Root/docfx.json", (@{
+    build = @{
+        content = @(@{ files = @('docs/*.md') })
+        template = @('default', 'modern')
+        dest = '_site'
+    }
+} | ConvertTo-Json -Depth 10))
+$net48Source = @'
+using System;
+using System.Runtime.InteropServices;
+
+Console.WriteLine("NET48_OK:" + RuntimeInformation.FrameworkDescription);
+'@.Replace("`r`n", "`n").TrimEnd("`n")
+$net48ExplicitSource = @'
+using System;
+
+Console.WriteLine("NET48_EXPLICIT_OK");
+'@.Replace("`r`n", "`n").TrimEnd("`n")
+$net48Md = "---`nuid: Polyfill.CallerArgumentExpressionAttribute`n---`n# Polyfill`n`n``````csharp`n$net48Source`n```````n"
+$net48ExplicitMd = "---`nuid: Polyfill.ExplicitDockerReason`n---`n# Explicit reason`n`n``````csharp`n$net48ExplicitSource`n```````n"
+[IO.File]::WriteAllText("$net48Root/docs/Polyfill.md", $net48Md)
+[IO.File]::WriteAllText("$net48Root/docs/ExplicitReason.md", $net48ExplicitMd)
+$net48Hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($net48Source)))
+$net48ExplicitHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($net48ExplicitSource)))
+[IO.File]::WriteAllText("$net48Root/run-actions.settings.json", (@{
+    examples = @(
+        @{
+            uid = 'Polyfill.CallerArgumentExpressionAttribute'
+            exampleId = 'Polyfill.CallerArgumentExpressionAttribute#1'
+            fenceOrdinal = 1
+            sourceSha256 = $net48Hash
+            manifest = @{ schemaVersion = 1; mode = 'console'; framework = 'net48'; dependsOn = @() }
+        }
+        @{
+            uid = 'Polyfill.ExplicitDockerReason'
+            exampleId = 'Polyfill.ExplicitDockerReason#1'
+            fenceOrdinal = 1
+            sourceSha256 = $net48ExplicitHash
+            manifest = @{ schemaVersion = 1; mode = 'console'; framework = 'net48'; dependsOn = @() }
+            unsupportedTransports = @{ docker = 'Custom explicit .NET Framework Docker limitation.' }
+        }
+    )
+} | ConvertTo-Json -Depth 15))
+
+if ($IsWindows) {
+    $net48Val = (& $generator -RepoRoot $net48Root --validate-run-action Polyfill.CallerArgumentExpressionAttribute#1) | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or -not $net48Val.validated -or $net48Val.framework -cne 'net48' -or $net48Val.stdout -notlike '*NET48_OK:.NET Framework*') {
+        throw "Windows --validate-run-action failed for net48 standalone recipe: $($net48Val | ConvertTo-Json -Compress)"
+    }
+}
+
+$net48Engine = Join-Path $work 'net48-csrun.ps1'
+[IO.File]::WriteAllText($net48Engine, "param([string]`$ManifestJson)`n`$m = `$ManifestJson | ConvertFrom-Json`nif (`$m.framework -cne 'net48') { throw `"Expected net48 framework, got `$(`$m.framework)`" }`n[Console]::Write('net48-verified')", [Text.UTF8Encoding]::new($false))
+$net48VerifySummary = (& $generator -RepoRoot $net48Root --verify Native --engine-path $net48Engine --summary-json) | ConvertFrom-Json
+$net48VerifyExit = $LASTEXITCODE
+if ($net48VerifyExit -ne 0 -or $net48VerifySummary.exitCode -ne 0 -or $net48VerifySummary.failed -ne 0 -or $net48VerifySummary.unresolved -ne 0) {
+    throw "net48 --verify Native --summary-json must exit 0 cleanly: $($net48VerifySummary | ConvertTo-Json -Depth 5 -Compress)"
+}
+$net48Entry = $net48VerifySummary.examples | Where-Object exampleId -ceq 'Polyfill.CallerArgumentExpressionAttribute#1'
+$net48ExplicitEntry = $net48VerifySummary.examples | Where-Object exampleId -ceq 'Polyfill.ExplicitDockerReason#1'
+$expectedNet48NativeState = if ($IsWindows) { 'Verified' } else { 'Unverified' }
+if (-not $net48Entry -or $net48Entry.native -ne $expectedNet48NativeState -or $net48Entry.docker -ne 'Unsupported' -or $net48Entry.dockerReason -notlike '*.NET Framework*') {
+    throw "net48 entry must report native=$expectedNet48NativeState and docker=Unsupported with a clear reason: $($net48Entry | ConvertTo-Json -Compress)"
+}
+if (-not $net48ExplicitEntry -or $net48ExplicitEntry.docker -ne 'Unsupported' -or $net48ExplicitEntry.dockerReason -cne 'Custom explicit .NET Framework Docker limitation.') {
+    throw "Explicit unsupportedTransports.docker reason must be preserved on net48 recipes: $($net48ExplicitEntry | ConvertTo-Json -Compress)"
+}
+
+$net48ManifestDoc = Get-Content "$net48Root/run-actions.manifest.json" -Raw | ConvertFrom-Json
+$net48ManifestEntry = $net48ManifestDoc.examples | Where-Object exampleId -ceq 'Polyfill.CallerArgumentExpressionAttribute#1'
+if (-not $net48ManifestEntry -or (@($net48ManifestEntry.transports) -join ',') -cne 'native' -or $net48ManifestEntry.manifest.framework -cne 'net48') {
+    throw "run-actions.manifest.json must record transports=['native'] and manifest.framework='net48': $($net48ManifestEntry | ConvertTo-Json -Depth 10 -Compress)"
+}
+
 $global:LASTEXITCODE = 0
-Write-Host "Run-action delivery passed: paired console, test, dependency-backed test, repository test and host harness; deterministic plan/explain, type-owned dependency resolution/preflight, validation-gated apply, multi-fence uid#ordinal identity, whitespace/semantic recipe check, atomic manifest preservation, bounded parallel verification and append-only stderr progress/heartbeat, --summary-json/--verify-changed/--verify --id, exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"
+& "$net48Root/BuildRunActions.ps1" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'BuildRunActions.ps1 failed for net48 manifest.' }
+$net48NativePath = "$net48Root/run-actions/$($net48Entry.id)/native.ps1"
+$net48DockerPath = "$net48Root/run-actions/$($net48Entry.id)/docker.ps1"
+if (-not (Test-Path -LiteralPath $net48NativePath) -or (Test-Path -LiteralPath $net48DockerPath)) {
+    throw 'BuildRunActions.ps1 must materialize only native.ps1 (no docker.ps1) for net48 recipes.'
+}
+if ((Get-FileHash -LiteralPath $net48NativePath -Algorithm SHA256).Hash -cne $net48Entry.nativeSha256) {
+    throw 'Materialized net48 native.ps1 hash drifted from generator.'
+}
+$net48PageText = Get-Content "$net48Root/docs/Polyfill.md" -Raw
+if (-not $net48PageText.Contains('View Native Script') -or $net48PageText.Contains('View Docker Script')) {
+    throw 'Markdown association for net48 recipe must render only the Native run action.'
+}
+
+# Simulated non-Windows host guard: --verify Native skips net48 cleanly without corrupting the manifest, and --validate-run-action fails fast.
+$nonWinGenPath = Join-Path $work 'generate-run-actions-nonwin.ps1'
+$escapedSkillScriptsDir = $PSScriptRoot.Replace("'", "''")
+$nonWinGenText = ([IO.File]::ReadAllText($generator)).Replace('$isWindowsHost = $IsWindows', '$isWindowsHost = $false').Replace('Join-Path $PSScriptRoot ', "Join-Path '$escapedSkillScriptsDir' ")
+if ($nonWinGenText -ceq [IO.File]::ReadAllText($generator)) { throw 'Could not construct non-Windows generator simulation.' }
+[IO.File]::WriteAllText($nonWinGenPath, $nonWinGenText, [Text.UTF8Encoding]::new($false))
+$net48ManifestBeforeNonWin = [IO.File]::ReadAllText("$net48Root/run-actions.manifest.json")
+$nonWinSummary = (& $nonWinGenPath -RepoRoot $net48Root --verify Native --summary-json 2>$null) | ConvertFrom-Json
+$nonWinExit = $LASTEXITCODE
+$nonWinEntry = $nonWinSummary.examples | Where-Object exampleId -ceq 'Polyfill.CallerArgumentExpressionAttribute#1'
+if ($nonWinExit -ne 0 -or $nonWinSummary.failed -ne 0 -or -not $nonWinEntry -or $nonWinEntry.native -ne 'Unverified' -or $nonWinEntry.docker -ne 'Unsupported' -or $nonWinEntry.nativeReason -notlike '*Windows*') {
+    throw "Non-Windows --verify Native must skip net48 cleanly and surface Windows prerequisite: $($nonWinSummary | ConvertTo-Json -Depth 5 -Compress)"
+}
+if ([IO.File]::ReadAllText("$net48Root/run-actions.manifest.json") -cne $net48ManifestBeforeNonWin) {
+    throw 'Non-Windows --verify Native corrupted run-actions.manifest.json.'
+}
+$nonWinVal = (& $nonWinGenPath -RepoRoot $net48Root --validate-run-action Polyfill.CallerArgumentExpressionAttribute#1) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 1 -or $nonWinVal.validated -or $nonWinVal.reasonCode -cne 'windows-required-for-netframework') {
+    throw "Non-Windows --validate-run-action for net48 must fail fast with windows-required-for-netframework: $($nonWinVal | ConvertTo-Json -Compress)"
+}
+
+$global:LASTEXITCODE = 0
+Write-Host "Run-action delivery passed: paired console, test, dependency-backed test, repository test, host harness and net48 Native-only legacy .NET Framework recipes; deterministic plan/explain, type-owned dependency resolution/preflight, validation-gated apply, multi-fence uid#ordinal identity, whitespace/semantic recipe check, atomic manifest preservation, bounded parallel verification and append-only stderr progress/heartbeat, --summary-json/--verify-changed/--verify --id, exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"
 exit 0
