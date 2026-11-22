@@ -19,10 +19,17 @@ param(
     [switch] $VerifyChanged,
     [Alias('Id')][string[]] $TargetId,
     [int] $TimeoutSeconds = 60,
+    [int] $MaxParallel = 0,
+    [int] $MaxDockerParallel = 0,
+    [switch] $Quiet,
+    [switch] $NoHeartbeat,
+    [int] $HeartbeatSeconds = 10,
     [Parameter(ValueFromRemainingArguments = $true)][string[]] $CliArgs
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+$maxParallelExplicit = $PSBoundParameters.ContainsKey('MaxParallel')
+$maxDockerParallelExplicit = $PSBoundParameters.ContainsKey('MaxDockerParallel')
 . (Join-Path $PSScriptRoot 'integration-example.ps1')
 $helpers = Join-Path $PSScriptRoot '../../dotnet-csrun/scripts/sample-tools.ps1'
 if (-not (Test-Path $helpers)) { throw "Install dotnet-csrun beside this skill: $helpers" }
@@ -100,6 +107,34 @@ if ($CliArgs -and $CliArgs.Count -gt 0) {
                 if (($i + 1) -ge $CliArgs.Count) { [Console]::Error.WriteLine('Missing value for --timeout-seconds'); exit 3 }
                 $TimeoutSeconds = [int]$CliArgs[++$i]
             }
+            '--max-parallel' {
+                if (($i + 1) -ge $CliArgs.Count) { [Console]::Error.WriteLine('Missing value for --max-parallel'); exit 3 }
+                $parsedMaxParallel = 0
+                if (-not [int]::TryParse([string]$CliArgs[++$i], [ref]$parsedMaxParallel)) {
+                    [Console]::Error.WriteLine('--max-parallel must be an integer between 1 and 64.'); exit 3
+                }
+                $MaxParallel = $parsedMaxParallel
+                $maxParallelExplicit = $true
+            }
+            '--max-docker-parallel' {
+                if (($i + 1) -ge $CliArgs.Count) { [Console]::Error.WriteLine('Missing value for --max-docker-parallel'); exit 3 }
+                $parsedMaxDocker = 0
+                if (-not [int]::TryParse([string]$CliArgs[++$i], [ref]$parsedMaxDocker)) {
+                    [Console]::Error.WriteLine('--max-docker-parallel must be an integer between 1 and 16.'); exit 3
+                }
+                $MaxDockerParallel = $parsedMaxDocker
+                $maxDockerParallelExplicit = $true
+            }
+            '--quiet' { $Quiet = $true }
+            '--no-heartbeat' { $NoHeartbeat = $true }
+            '--heartbeat-seconds' {
+                if (($i + 1) -ge $CliArgs.Count) { [Console]::Error.WriteLine('Missing value for --heartbeat-seconds'); exit 3 }
+                $parsedHb = 0
+                if (-not [int]::TryParse([string]$CliArgs[++$i], [ref]$parsedHb)) {
+                    [Console]::Error.WriteLine('--heartbeat-seconds must be an integer between 1 and 300.'); exit 3
+                }
+                $HeartbeatSeconds = $parsedHb
+            }
             default {
                 [Console]::Error.WriteLine("Unknown argument: $arg")
                 exit 3
@@ -111,6 +146,21 @@ if ($CliArgs -and $CliArgs.Count -gt 0) {
 if ($VerifyChanged -and $Verify -eq 'None') { $Verify = 'Native' }
 if (-not $RepoRoot) { [Console]::Error.WriteLine('Missing required parameter: -RepoRoot / --repo-root'); exit 3 }
 if ($TimeoutSeconds -lt 3 -or $TimeoutSeconds -gt 600) { [Console]::Error.WriteLine('--timeout-seconds must be between 3 and 600.'); exit 3 }
+if ($maxParallelExplicit -and ($MaxParallel -lt 1 -or $MaxParallel -gt 64)) { [Console]::Error.WriteLine('--max-parallel must be between 1 and 64.'); exit 3 }
+if ($maxDockerParallelExplicit -and ($MaxDockerParallel -lt 1 -or $MaxDockerParallel -gt 16)) { [Console]::Error.WriteLine('--max-docker-parallel must be between 1 and 16.'); exit 3 }
+if ($HeartbeatSeconds -lt 1 -or $HeartbeatSeconds -gt 300) { [Console]::Error.WriteLine('--heartbeat-seconds must be between 1 and 300.'); exit 3 }
+
+$cpuCount = [Math]::Max(1, [Environment]::ProcessorCount)
+$defaultNativeParallel = [Math]::Max(1, [Math]::Min($cpuCount, 8))
+$effectiveNativeParallel = if ($maxParallelExplicit) { $MaxParallel } else { $defaultNativeParallel }
+$defaultDockerCap = [Math]::Max(1, [Math]::Min($effectiveNativeParallel, 2))
+$effectiveDockerParallel = if ($maxDockerParallelExplicit) {
+    $MaxDockerParallel
+} elseif ($maxParallelExplicit -and $Verify -eq 'Docker') {
+    $MaxParallel
+} else {
+    $defaultDockerCap
+}
 
 function Hash([string] $Text) { [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Text))) }
 function Normalize([string] $Text) { $Text.Replace("`r`n", "`n").TrimEnd("`n", "`r") }
@@ -1479,7 +1529,8 @@ if ($idList.Count -gt 0) {
 }
 
 $toolHash = Hash ((Get-Content $PSCommandPath -Raw) + (Get-Content (Join-Path $PSScriptRoot 'docfx.cs') -Raw) + (Get-Content (Join-Path $PSScriptRoot 'integration-example.ps1') -Raw) + (Get-Content $helpers -Raw) + $script:Csrun021Asset + $script:Csrun021Sha256 + $script:CsrunTestVerificationTemplate)
-$results = [Collections.Generic.List[object]]::new()
+$resultMaps = [Collections.Generic.List[object]]::new()
+$pendingVerifications = [Collections.Generic.List[object]]::new()
 $manifestEntries = [Collections.Generic.List[object]]::new()
 $associations = [hashtable]::new([StringComparer]::Ordinal)
 $pages = @((@($inventory.examples.file) + @($inventory.associatedPages)) | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
@@ -1778,33 +1829,18 @@ foreach ($exObj in $normalizedExamples) {
                     }
                     $executionScript = Normalize $verifyPair.$transport
                 }
-                $runName = "docfx-run-$id-$transport-" + [guid]::NewGuid().ToString('N')
-                $tempScript = Join-Path $evidenceDirectory "$runName.ps1"
-                $log = Join-Path $evidenceDirectory "$runName.log"
-                try {
-                    [IO.File]::WriteAllText($tempScript, $executionScript, [Text.UTF8Encoding]::new($false))
-                    [IO.File]::WriteAllText($log, '')
-                    & pwsh -NoProfile -NonInteractive -File $tempScript *> $log
-                    $verificationExecuted++
-                    $result[$transport] = if ($LASTEXITCODE -eq 0) { 'Verified' } else { 'Failed' }
-                    if ($result[$transport] -eq 'Failed') { $verificationFailedCount++ }
-                    $result["${transport}Evidence"] = $log
-                    $pendingEvidence = Join-Path $evidenceDirectory "$runName.tmp"
-                    try {
-                        $evidence = [ordered]@{ state = $result[$transport]; log = "$runName.log" }
-                        if ($strategy -eq 'standalone' -and $resolvedVerificationEngine) {
-                            $evidence.engineSha256 = $resolvedVerificationEngine.Sha256
-                            if ($resolvedVerificationEngine.Tag) { $evidence.engineTag = $resolvedVerificationEngine.Tag }
-                        }
-                        [IO.File]::WriteAllText($pendingEvidence, ($evidence | ConvertTo-Json -Compress))
-                        if (-not $IsWindows) { & chmod 600 -- $pendingEvidence $log }
-                        [IO.File]::Move($pendingEvidence, $evidencePath, $true)
-                    } finally {
-                        [IO.File]::Delete($pendingEvidence)
-                    }
-                } finally {
-                    if (Test-Path -LiteralPath $tempScript) { Remove-Item -LiteralPath $tempScript -Force }
-                }
+                $pendingVerifications.Add([pscustomobject]@{
+                    ResultIndex = $resultMaps.Count
+                    Id = $id
+                    ExampleId = $exObj.exampleId
+                    Transport = $transport
+                    TransportLabel = if ($transport -eq 'native') { 'Native' } else { 'Docker' }
+                    Strategy = $strategy
+                    ExecutionScript = $executionScript
+                    EvidencePath = $evidencePath
+                    EngineSha256 = if ($strategy -eq 'standalone' -and $resolvedVerificationEngine) { $resolvedVerificationEngine.Sha256 } else { $null }
+                    EngineTag = if ($strategy -eq 'standalone' -and $resolvedVerificationEngine) { $resolvedVerificationEngine.Tag } else { $null }
+                })
             } elseif ($cachedState) {
                 $result[$transport] = $cachedState
                 $result["${transport}Evidence"] = $cachedLog
@@ -1829,8 +1865,200 @@ foreach ($exObj in $normalizedExamples) {
         if (-not $associations.ContainsKey($example.file)) { $associations[$example.file] = @{} }
         $associations[$example.file][[int]$example.startLine] = "<!-- docfx-run-actions:start -->`n$link`n<!-- docfx-run-actions:end -->"
     } catch { $result.status='failed'; $result.reason=$_.Exception.Message }
-    finally { $results.Add([pscustomobject]$result) }
+    finally { $resultMaps.Add($result) }
 }
+
+if ($pendingVerifications.Count -gt 0) {
+    $pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -First 1
+    $isMockedPwsh = ($null -ne $pwshCmd -and $pwshCmd.CommandType -eq 'Function')
+    $pwshExe = if (-not $isMockedPwsh) {
+        (Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    } else { $null }
+
+    $totalPending = $pendingVerifications.Count
+    $verifySw = [Diagnostics.Stopwatch]::StartNew()
+    $progressLock = [object]::new()
+    $progressState = [hashtable]::Synchronized(@{
+        Completed = 0
+        InFlight = 0
+        Verified = 0
+        Failed = 0
+        LastActivityUtc = [DateTimeOffset]::UtcNow
+    })
+
+    $nativeBatch = @($pendingVerifications | Where-Object { $_.Transport -eq 'native' })
+    $dockerBatch = @($pendingVerifications | Where-Object { $_.Transport -eq 'docker' })
+    $verifyBatches = [Collections.Generic.List[object]]::new()
+    if ($nativeBatch.Count -gt 0) {
+        $verifyBatches.Add([pscustomobject]@{ Transport = 'native'; Items = $nativeBatch; ThrottleLimit = $effectiveNativeParallel })
+    }
+    if ($dockerBatch.Count -gt 0) {
+        $verifyBatches.Add([pscustomobject]@{ Transport = 'docker'; Items = $dockerBatch; ThrottleLimit = $effectiveDockerParallel })
+    }
+
+    foreach ($batch in $verifyBatches) {
+        $batchResults = @()
+        if ($isMockedPwsh) {
+            $seqList = [Collections.Generic.List[object]]::new()
+            foreach ($item in $batch.Items) {
+                $itemSw = [Diagnostics.Stopwatch]::StartNew()
+                $runName = "docfx-run-$($item.Id)-$($item.Transport)-" + [guid]::NewGuid().ToString('N')
+                $tempScript = Join-Path $evidenceDirectory "$runName.ps1"
+                $log = Join-Path $evidenceDirectory "$runName.log"
+                $state = 'Failed'
+                $workerError = $null
+                try {
+                    [IO.File]::WriteAllText($tempScript, $item.ExecutionScript, [Text.UTF8Encoding]::new($false))
+                    [IO.File]::WriteAllText($log, '')
+                    & pwsh -NoProfile -NonInteractive -File $tempScript *> $log
+                    $state = if ($LASTEXITCODE -eq 0) { 'Verified' } else { 'Failed' }
+                    $pendingEvidence = Join-Path $evidenceDirectory "$runName.tmp"
+                    try {
+                        $evidence = [ordered]@{ state = $state; log = "$runName.log" }
+                        if ($item.Strategy -eq 'standalone' -and $item.EngineSha256) {
+                            $evidence.engineSha256 = $item.EngineSha256
+                            if ($item.EngineTag) { $evidence.engineTag = $item.EngineTag }
+                        }
+                        [IO.File]::WriteAllText($pendingEvidence, ($evidence | ConvertTo-Json -Compress))
+                        if (-not $IsWindows) { & chmod 600 -- $pendingEvidence $log }
+                        [IO.File]::Move($pendingEvidence, $item.EvidencePath, $true)
+                    } finally {
+                        if (Test-Path -LiteralPath $pendingEvidence) { [IO.File]::Delete($pendingEvidence) }
+                    }
+                } catch {
+                    $state = 'Failed'
+                    $workerError = $_.Exception.Message
+                } finally {
+                    if (Test-Path -LiteralPath $tempScript) { Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue }
+                    $itemSw.Stop()
+                    $elapsedSec = $itemSw.Elapsed.TotalSeconds
+                    $progressState.Completed++
+                    if ($state -eq 'Verified') { $progressState.Verified++ } else { $progressState.Failed++ }
+                    $progressState.LastActivityUtc = [DateTimeOffset]::UtcNow
+                    if (-not $Quiet) {
+                        $elapsedText = $elapsedSec.ToString('F1', [Globalization.CultureInfo]::InvariantCulture)
+                        [Console]::Error.WriteLine("[$($progressState.Completed)/$totalPending] Verifying $($item.ExampleId) ($($item.TransportLabel)) -> $state (${elapsedText}s)")
+                    }
+                }
+                $seqList.Add([pscustomobject]@{
+                    ResultIndex = $item.ResultIndex
+                    Transport = $item.Transport
+                    State = $state
+                    EvidencePath = $log
+                    ElapsedSeconds = [Math]::Round($elapsedSec, 3)
+                    Error = $workerError
+                })
+            }
+            $batchResults = @($seqList)
+        } else {
+            $job = $batch.Items | ForEach-Object -ThrottleLimit $batch.ThrottleLimit -AsJob -Parallel {
+                $ErrorActionPreference = 'Stop'
+                $PSNativeCommandUseErrorActionPreference = $false
+                $item = $_
+                $lockRef = $using:progressLock
+                $stateRef = $using:progressState
+                $evidenceDirRef = $using:evidenceDirectory
+                $pwshExeRef = $using:pwshExe
+                $isWinRef = $using:IsWindows
+                $quietRef = $using:Quiet
+                $totalPendingRef = $using:totalPending
+                $itemSw = [Diagnostics.Stopwatch]::StartNew()
+                [Threading.Monitor]::Enter($lockRef)
+                try { $stateRef.InFlight++ } finally { [Threading.Monitor]::Exit($lockRef) }
+
+                $runName = "docfx-run-$($item.Id)-$($item.Transport)-" + [guid]::NewGuid().ToString('N')
+                $tempScript = Join-Path $evidenceDirRef "$runName.ps1"
+                $log = Join-Path $evidenceDirRef "$runName.log"
+                $state = 'Failed'
+                $workerError = $null
+                try {
+                    [IO.File]::WriteAllText($tempScript, $item.ExecutionScript, [Text.UTF8Encoding]::new($false))
+                    [IO.File]::WriteAllText($log, '')
+                    & $pwshExeRef -NoProfile -NonInteractive -File $tempScript *> $log
+                    $state = if ($LASTEXITCODE -eq 0) { 'Verified' } else { 'Failed' }
+                    $pendingEvidence = Join-Path $evidenceDirRef "$runName.tmp"
+                    try {
+                        $evidence = [ordered]@{ state = $state; log = "$runName.log" }
+                        if ($item.Strategy -eq 'standalone' -and $item.EngineSha256) {
+                            $evidence.engineSha256 = $item.EngineSha256
+                            if ($item.EngineTag) { $evidence.engineTag = $item.EngineTag }
+                        }
+                        [IO.File]::WriteAllText($pendingEvidence, ($evidence | ConvertTo-Json -Compress))
+                        if (-not $isWinRef) { & chmod 600 -- $pendingEvidence $log }
+                        [IO.File]::Move($pendingEvidence, $item.EvidencePath, $true)
+                    } finally {
+                        if (Test-Path -LiteralPath $pendingEvidence) { [IO.File]::Delete($pendingEvidence) }
+                    }
+                } catch {
+                    $state = 'Failed'
+                    $workerError = $_.Exception.Message
+                } finally {
+                    if (Test-Path -LiteralPath $tempScript) { Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue }
+                    $itemSw.Stop()
+                    $elapsedSec = $itemSw.Elapsed.TotalSeconds
+                    [Threading.Monitor]::Enter($lockRef)
+                    try {
+                        $stateRef.InFlight--
+                        $stateRef.Completed++
+                        if ($state -eq 'Verified') { $stateRef.Verified++ } else { $stateRef.Failed++ }
+                        $stateRef.LastActivityUtc = [DateTimeOffset]::UtcNow
+                        if (-not $quietRef) {
+                            $elapsedText = $elapsedSec.ToString('F1', [Globalization.CultureInfo]::InvariantCulture)
+                            [Console]::Error.WriteLine("[$($stateRef.Completed)/$totalPendingRef] Verifying $($item.ExampleId) ($($item.TransportLabel)) -> $state (${elapsedText}s)")
+                        }
+                    } finally {
+                        [Threading.Monitor]::Exit($lockRef)
+                    }
+                }
+                [pscustomobject]@{
+                    ResultIndex = $item.ResultIndex
+                    Transport = $item.Transport
+                    State = $state
+                    EvidencePath = $log
+                    ElapsedSeconds = [Math]::Round($elapsedSec, 3)
+                    Error = $workerError
+                }
+            }
+            try {
+                while ($job.State -in @('NotStarted', 'Running')) {
+                    Start-Sleep -Milliseconds 250
+                    if (-not $Quiet -and -not $NoHeartbeat) {
+                        $nowUtc = [DateTimeOffset]::UtcNow
+                        [Threading.Monitor]::Enter($progressLock)
+                        try {
+                            if (($nowUtc - $progressState.LastActivityUtc).TotalSeconds -ge $HeartbeatSeconds) {
+                                $totalElapsed = $verifySw.Elapsed.TotalSeconds.ToString('F1', [Globalization.CultureInfo]::InvariantCulture)
+                                [Console]::Error.WriteLine("[heartbeat] Verification progress: $($progressState.Completed)/$totalPending completed ($($progressState.InFlight) running, $($progressState.Verified) verified, $($progressState.Failed) failed, ${totalElapsed}s elapsed)")
+                                $progressState.LastActivityUtc = $nowUtc
+                            }
+                        } finally {
+                            [Threading.Monitor]::Exit($progressLock)
+                        }
+                    }
+                }
+                $batchResults = @(Receive-Job -Job $job -Wait)
+            } finally {
+                Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        foreach ($vr in $batchResults) {
+            if ($null -eq $vr) { continue }
+            $targetResult = $resultMaps[$vr.ResultIndex]
+            $targetResult[$vr.Transport] = $vr.State
+            $targetResult["$($vr.Transport)Evidence"] = $vr.EvidencePath
+            if ($vr.Error -and -not $targetResult.reason) {
+                $targetResult.reason = $vr.Error
+            }
+            $verificationExecuted++
+            if ($vr.State -eq 'Failed') { $verificationFailedCount++ }
+        }
+    }
+    $verifySw.Stop()
+}
+
+$results = [Collections.Generic.List[object]]::new()
+foreach ($rm in $resultMaps) { $results.Add([pscustomobject]$rm) }
 
 $hasHardFailure = (@($results | Where-Object { $_.status -eq 'failed' -or $_.native -eq 'Failed' -or $_.docker -eq 'Failed' }).Count -gt 0)
 $skipMutations = ($Verify -ne 'None' -and $hasHardFailure)
@@ -2180,6 +2408,8 @@ if ($SummaryJson) {
             executed = $verificationExecuted
             reused = $verificationReused
             failed = $verificationFailedCount
+            maxParallel = $effectiveNativeParallel
+            maxDockerParallel = $effectiveDockerParallel
         }
         examples = @($results)
     }

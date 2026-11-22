@@ -1473,6 +1473,154 @@ foreach ($t in @('native', 'docker')) {
     }
 }
 
+# 11. Bounded parallel verification, append-only stderr progress/heartbeat, --no-heartbeat / --quiet, --verify-changed reuse, and atomic manifest preservation on parallel failure.
+$paraRoot = Join-Path $work 'parallel-verify'
+$null = [IO.Directory]::CreateDirectory("$paraRoot/docs")
+[IO.File]::WriteAllText("$paraRoot/docfx.json", (@{
+    build = @{
+        content = @(@{ files = @('docs/*.md') })
+        template = @('default', 'modern')
+        dest = '_site'
+    }
+} | ConvertTo-Json -Depth 10))
+foreach ($label in @('One', 'Two', 'Three', 'Four')) {
+    $md = "---`nuid: Para.$label`n---`n# Parallel $label`n`n``````csharp`nSystem.Console.WriteLine(`"para-$label`");`n```````n"
+    [IO.File]::WriteAllText("$paraRoot/docs/$label.md", $md)
+}
+$paraTraceDir = Join-Path $work 'parallel-trace'
+$null = [IO.Directory]::CreateDirectory($paraTraceDir)
+$escapedTraceDir = $paraTraceDir.Replace("'", "''")
+$paraEngine = Join-Path $work 'parallel-csrun.ps1'
+[IO.File]::WriteAllText($paraEngine, @"
+param([string]`$ManifestJson)
+`$startTicks = [DateTimeOffset]::UtcNow.UtcTicks
+Start-Sleep -Milliseconds 400
+`$endTicks = [DateTimeOffset]::UtcNow.UtcTicks
+`$traceFile = Join-Path '$escapedTraceDir' ([guid]::NewGuid().ToString('N') + '.txt')
+[IO.File]::WriteAllText(`$traceFile, "`$startTicks|`$endTicks", [Text.UTF8Encoding]::new(`$false))
+[Console]::Write('ok')
+"@, [Text.UTF8Encoding]::new($false))
+
+function Invoke-GeneratorSubprocess([string[]] $ExtraArgs) {
+    $psi = [Diagnostics.ProcessStartInfo]::new($pwshExe)
+    foreach ($a in @('-NoProfile', '-NonInteractive', '-File', $generator, '-RepoRoot', $paraRoot)) { $psi.ArgumentList.Add($a) }
+    foreach ($a in $ExtraArgs) { $psi.ArgumentList.Add($a) }
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $proc = [Diagnostics.Process]::new()
+    $proc.StartInfo = $psi
+    try {
+        if (-not $proc.Start()) { throw 'Could not start generate-run-actions.ps1 subprocess.' }
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        if (-not $proc.WaitForExit(120000)) {
+            try { $proc.Kill($true) } catch {}
+            throw 'generate-run-actions.ps1 subprocess timed out.'
+        }
+        return [pscustomobject]@{
+            ExitCode = $proc.ExitCode
+            Stdout = $outTask.GetAwaiter().GetResult()
+            Stderr = $errTask.GetAwaiter().GetResult()
+        }
+    } finally {
+        $proc.Dispose()
+    }
+}
+
+$paraRun = Invoke-GeneratorSubprocess @('--verify', 'Native', '--max-parallel', '4', '--engine-path', $paraEngine, '--summary-json')
+if ($paraRun.ExitCode -ne 0) {
+    throw "Parallel --verify Native failed (exit=$($paraRun.ExitCode)). Stdout: $($paraRun.Stdout)`nStderr: $($paraRun.Stderr)"
+}
+$paraSummary = $paraRun.Stdout | ConvertFrom-Json
+if ($paraSummary.schemaVersion -ne 2 -or $paraSummary.verified -ne 4 -or $paraSummary.verification.executed -ne 4 -or $paraSummary.verification.maxParallel -ne 4) {
+    throw "Unexpected parallel summary JSON: $($paraRun.Stdout)"
+}
+$paraErrLines = @($paraRun.Stderr -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$paraProgressLines = @($paraErrLines | Where-Object { $_ -cmatch '^\[\d+/4\] Verifying Para\.(One|Two|Three|Four)#1 \(Native\) -> Verified \(\d+\.\ds\)$' })
+if ($paraProgressLines.Count -ne 4) {
+    throw "Expected 4 append-only stderr progress lines; got $($paraProgressLines.Count). Stderr:`n$($paraRun.Stderr)"
+}
+$traceIntervals = @(Get-ChildItem -LiteralPath $paraTraceDir -Filter '*.txt' | ForEach-Object {
+    $parts = ([IO.File]::ReadAllText($_.FullName).Trim()) -split '\|'
+    [pscustomobject]@{ Start = [int64]$parts[0]; End = [int64]$parts[1] }
+})
+if ($traceIntervals.Count -ne 4) { throw "Expected 4 parallel execution traces; got $($traceIntervals.Count)." }
+$overlapFound = $false
+for ($a = 0; $a -lt $traceIntervals.Count; $a++) {
+    for ($b = $a + 1; $b -lt $traceIntervals.Count; $b++) {
+        if ($traceIntervals[$a].Start -lt $traceIntervals[$b].End -and $traceIntervals[$b].Start -lt $traceIntervals[$a].End) {
+            $overlapFound = $true; break
+        }
+    }
+    if ($overlapFound) { break }
+}
+if (-not $overlapFound) { throw 'Parallel verification did not execute workers concurrently.' }
+$paraManifestAfterGood = [IO.File]::ReadAllText("$paraRoot/run-actions.manifest.json")
+if (@(($paraManifestAfterGood | ConvertFrom-Json).examples).Count -ne 4) {
+    throw 'Parallel verification did not write all 4 entries atomically to run-actions.manifest.json.'
+}
+
+# --verify-changed skips all 4 cached Verified examples without re-executing or emitting progress lines.
+$paraChangedRun = Invoke-GeneratorSubprocess @('--verify-changed', '--max-parallel', '4', '--engine-path', $paraEngine, '--summary-json')
+if ($paraChangedRun.ExitCode -ne 0) { throw "Parallel --verify-changed failed (exit=$($paraChangedRun.ExitCode)): $($paraChangedRun.Stderr)" }
+$paraChangedSummary = $paraChangedRun.Stdout | ConvertFrom-Json
+if ($paraChangedSummary.verification.executed -ne 0 -or $paraChangedSummary.verification.reused -ne 4) {
+    throw "Expected --verify-changed to reuse all 4 cached Verified examples: $($paraChangedRun.Stdout)"
+}
+if ($paraChangedRun.Stderr -match 'Verifying Para\.') {
+    throw "Expected no Verifying lines on full cache reuse; got: $($paraChangedRun.Stderr)"
+}
+
+# Heartbeat, --no-heartbeat, and --quiet behavior on a slow verification run.
+$slowEngine = Join-Path $work 'slow-csrun.ps1'
+[IO.File]::WriteAllText($slowEngine, "param([string]`$ManifestJson)`nStart-Sleep -Milliseconds 1300`n[Console]::Write('slow-ok')", [Text.UTF8Encoding]::new($false))
+$hbRun = Invoke-GeneratorSubprocess @('--verify', 'Native', '--id', 'Para.One#1', '--engine-path', $slowEngine, '--heartbeat-seconds', '1', '--summary-json')
+if ($hbRun.ExitCode -ne 0) { throw "Heartbeat verification run failed: $($hbRun.Stderr)" }
+$hbSummary = $hbRun.Stdout | ConvertFrom-Json
+if ($hbSummary.verification.executed -ne 1 -or $hbRun.Stderr -notmatch '\[heartbeat\] Verification progress:' -or $hbRun.Stderr -notmatch '\[1/1\] Verifying Para\.One#1 \(Native\) -> Verified') {
+    throw "Expected both heartbeat and completion lines on stderr with clean JSON stdout. Stderr:`n$($hbRun.Stderr)"
+}
+
+$noHbRun = Invoke-GeneratorSubprocess @('--verify', 'Native', '--id', 'Para.One#1', '--engine-path', $slowEngine, '--heartbeat-seconds', '1', '--no-heartbeat', '--summary-json')
+if ($noHbRun.ExitCode -ne 0) { throw "--no-heartbeat run failed: $($noHbRun.Stderr)" }
+$null = $noHbRun.Stdout | ConvertFrom-Json
+if ($noHbRun.Stderr -match '\[heartbeat\]' -or $noHbRun.Stderr -notmatch '\[1/1\] Verifying Para\.One#1 \(Native\) -> Verified') {
+    throw "--no-heartbeat must suppress heartbeat lines while keeping completion lines. Stderr:`n$($noHbRun.Stderr)"
+}
+
+$quietRun = Invoke-GeneratorSubprocess @('--verify', 'Native', '--id', 'Para.One#1', '--engine-path', $slowEngine, '--heartbeat-seconds', '1', '--quiet', '--summary-json')
+if ($quietRun.ExitCode -ne 0) { throw "--quiet run failed: $($quietRun.Stderr)" }
+$null = $quietRun.Stdout | ConvertFrom-Json
+if (-not [string]::IsNullOrWhiteSpace($quietRun.Stderr)) {
+    throw "--quiet must suppress all stderr progress and heartbeat output. Stderr:`n$($quietRun.Stderr)"
+}
+
+# Parallel partial failure must preserve the last good run-actions.manifest.json atomically.
+$partialFailEngine = Join-Path $work 'partial-fail-csrun.ps1'
+[IO.File]::WriteAllText($partialFailEngine, "param([string]`$ManifestJson)`nif (`$ManifestJson -like '*para-Two*') { exit 1 }`n[Console]::Write('ok')", [Text.UTF8Encoding]::new($false))
+$savedOneMd = [IO.File]::ReadAllText("$paraRoot/docs/One.md")
+try {
+    [IO.File]::WriteAllText("$paraRoot/docs/One.md", $savedOneMd.Replace('para-One', 'para-One-modified'))
+    $paraFailRun = Invoke-GeneratorSubprocess @('--verify', 'Native', '--max-parallel', '4', '--engine-path', $partialFailEngine, '--summary-json')
+    if ($paraFailRun.ExitCode -ne 1) { throw "Expected parallel partial failure to exit 1; got $($paraFailRun.ExitCode)" }
+    $paraFailSummary = $paraFailRun.Stdout | ConvertFrom-Json
+    if (-not $paraFailSummary.manifestPreserved -or $paraFailSummary.verification.failed -ne 1 -or $paraFailRun.Stderr -notmatch 'Para\.Two#1 \(Native\) -> Failed') {
+        throw "Parallel partial failure did not report manifestPreserved/failed status cleanly. Stdout: $($paraFailRun.Stdout)`nStderr: $($paraFailRun.Stderr)"
+    }
+    if ([IO.File]::ReadAllText("$paraRoot/run-actions.manifest.json") -cne $paraManifestAfterGood) {
+        throw 'Parallel verification failure overwrote the last good run-actions.manifest.json!'
+    }
+} finally {
+    [IO.File]::WriteAllText("$paraRoot/docs/One.md", $savedOneMd)
+}
+
+# Invalid --max-parallel exits 3.
+$invalidParallelRun = Invoke-GeneratorSubprocess @('--verify', 'Native', '--max-parallel', '0', '--engine-path', $paraEngine, '--summary-json')
+if ($invalidParallelRun.ExitCode -ne 3) {
+    throw "Expected --max-parallel 0 to exit 3; got $($invalidParallelRun.ExitCode)"
+}
+
 $global:LASTEXITCODE = 0
-Write-Host "Run-action delivery passed: paired console, test, dependency-backed test, repository test and host harness; deterministic plan/explain, type-owned dependency resolution/preflight, validation-gated apply, multi-fence uid#ordinal identity, whitespace/semantic recipe check, atomic manifest preservation, --summary-json/--verify-changed/--verify --id, exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"
+Write-Host "Run-action delivery passed: paired console, test, dependency-backed test, repository test and host harness; deterministic plan/explain, type-owned dependency resolution/preflight, validation-gated apply, multi-fence uid#ordinal identity, whitespace/semantic recipe check, atomic manifest preservation, bounded parallel verification and append-only stderr progress/heartbeat, --summary-json/--verify-changed/--verify --id, exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup, standalone BuildRunActions.ps1 materialization and modern DocFX render. Fixture: $work"
 exit 0
