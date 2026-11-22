@@ -11,7 +11,7 @@ function New-RepositoryExamplePair {
     )
     if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $Commit -notmatch '^[a-fA-F0-9]{40}$' -or
         $Project -notmatch '^[A-Za-z0-9_./-]+\.csproj$' -or $Project.Split('/') -contains '..' -or $Project.StartsWith('/') -or
-        $Test -notmatch '^[A-Za-z0-9_.+]+$' -or $Framework -notmatch '^net\d+\.\d+$' -or
+        $Test -notmatch '^[A-Za-z0-9_.+]+$' -or $Framework -notmatch '^(?:net\d+\.\d+|net4\d+)$' -or
         $Image -notmatch '^mcr\.microsoft\.com/dotnet/sdk:[A-Za-z0-9_.-]+$') {
         throw 'Expected a pinned GitHub repository, relative project, exact xUnit method, TFM and official SDK image.'
     }
@@ -111,10 +111,11 @@ function New-HostExamplePair {
         [int] $StartupDelayMs = 1000,
         [string] $Image = 'codebeltnet/csrun:10'
     )
-    if ($Framework -notmatch '^net\d+\.\d+$') { throw "Invalid host framework: $Framework" }
+    if ($Framework -notmatch '^(?:net\d+\.\d+|net4\d+)$') { throw "Invalid host framework: $Framework" }
     if ($Sdk -notmatch '^[A-Za-z0-9_.]+$') { throw "Invalid host SDK: $Sdk" }
     if ($ProbeMethod -notmatch '^(GET|HEAD|POST|PUT|DELETE|OPTIONS|PATCH)$') { throw "Invalid host probeMethod: $ProbeMethod" }
     if ($TimeoutSeconds -lt 3 -or $TimeoutSeconds -gt 300) { throw "Host timeoutSeconds must be between 3 and 300." }
+    $isNetFramework = ($Framework -match '^net4\d+$')
     $cleanDependsOn = @($DependsOn | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
     foreach ($pin in $cleanDependsOn) {
         if ($pin -notmatch '^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$') { throw "Invalid host dependsOn pin: $pin" }
@@ -123,8 +124,12 @@ function New-HostExamplePair {
         $parts = $_ -split '@', 2
         "    <PackageReference Include=""$($parts[0])"" Version=""$($parts[1])"" />"
     })
+    if ($isNetFramework -and -not ($cleanDependsOn | Where-Object { $_ -like 'Microsoft.NETFramework.ReferenceAssemblies@*' })) {
+        $pkgLines += '    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="[1.0.3]" PrivateAssets="All" />'
+    }
     $itemGroup = if ($pkgLines.Count) { "`n  <ItemGroup>`n" + ($pkgLines -join "`n") + "`n  </ItemGroup>" } else { '' }
-    $csproj = "<Project Sdk=""$Sdk"">`n  <PropertyGroup>`n    <OutputType>Exe</OutputType>`n    <TargetFramework>$Framework</TargetFramework>`n    <ImplicitUsings>enable</ImplicitUsings>`n    <Nullable>enable</Nullable>`n  </PropertyGroup>$itemGroup`n</Project>`n"
+    $langVersionLine = if ($isNetFramework) { "`n    <LangVersion>latest</LangVersion>" } else { '' }
+    $csproj = "<Project Sdk=""$Sdk"">`n  <PropertyGroup>`n    <OutputType>Exe</OutputType>`n    <TargetFramework>$Framework</TargetFramework>`n    <ImplicitUsings>enable</ImplicitUsings>`n    <Nullable>enable</Nullable>$langVersionLine`n  </PropertyGroup>$itemGroup`n</Project>`n"
     $payloadJson = ([ordered]@{
         csproj = $csproj
         source = $Source.Replace("`r`n", "`n").TrimEnd("`r", "`n") + "`n"

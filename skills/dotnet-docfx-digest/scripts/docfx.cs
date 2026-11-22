@@ -10794,8 +10794,9 @@ internal static class DocfxValidator
               --configuration <name>   Build configuration (only used by build/sample paths). Default: Release.
               --framework <tfm>        Optional runnable consumer TFM to validate against. Choose the
                                       TFM that selects the asset containing a conditional API; use net48
-                                      for NETSTANDARD2_0 assets when modern assets omit the API. Never
-                                      use netstandard* as an executable target.
+                                      for NETSTANDARD2_0 assets when modern assets omit the API
+                                      (Native-only; Docker is Unsupported for .NET Framework targets).
+                                      Never use netstandard* as an executable target.
               --validate-samples       Compile C# samples (opt-in). Default: disabled.
               --no-validate-samples    Explicitly disable sample compilation (already the default).
               --sample-reference-mode <project|package>

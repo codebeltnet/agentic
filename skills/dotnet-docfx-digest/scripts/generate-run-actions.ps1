@@ -28,8 +28,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+$frameworkExplicit = $PSBoundParameters.ContainsKey('Framework')
 $maxParallelExplicit = $PSBoundParameters.ContainsKey('MaxParallel')
 $maxDockerParallelExplicit = $PSBoundParameters.ContainsKey('MaxDockerParallel')
+$isWindowsHost = $IsWindows
+$NetFrameworkDockerUnsupportedReason = '.NET Framework targets require Windows and cannot execute in the Linux csrun container.'
+function Test-NetFrameworkTfm([string] $Tfm) { return (-not [string]::IsNullOrWhiteSpace($Tfm) -and $Tfm -match '^net4\d+$') }
 . (Join-Path $PSScriptRoot 'integration-example.ps1')
 $helpers = Join-Path $PSScriptRoot '../../dotnet-csrun/scripts/sample-tools.ps1'
 if (-not (Test-Path $helpers)) { throw "Install dotnet-csrun beside this skill: $helpers" }
@@ -59,6 +63,7 @@ if ($CliArgs -and $CliArgs.Count -gt 0) {
             '--framework' {
                 if (($i + 1) -ge $CliArgs.Count) { [Console]::Error.WriteLine('Missing value for --framework'); exit 3 }
                 $Framework = [string]$CliArgs[++$i]
+                $frameworkExplicit = $true
             }
             '--csrun-image' {
                 if (($i + 1) -ge $CliArgs.Count) { [Console]::Error.WriteLine('Missing value for --csrun-image'); exit 3 }
@@ -598,12 +603,24 @@ function Build-CandidateRecipeAndSource($ExampleObj) {
     $deps = @($ExampleObj.dependencies.dependsOn)
 
     if ($isHost) {
+        $resolvedFramework = if ($frameworkExplicit) {
+            $Framework
+        } elseif ($existing -and $existing.PSObject.Properties['hostHarness'] -and $existing.hostHarness -and $existing.hostHarness.PSObject.Properties['framework'] -and $existing.hostHarness.framework) {
+            [string]$existing.hostHarness.framework
+        } elseif ($existing -and $existing.manifest -and $existing.manifest.PSObject.Properties['framework'] -and $existing.manifest.framework) {
+            [string]$existing.manifest.framework
+        } else {
+            $Framework
+        }
         $hh = if ($existing -and $existing.PSObject.Properties['hostHarness'] -and $existing.hostHarness) {
-            $existing.hostHarness
+            $hhCopy = [ordered]@{}
+            foreach ($prop in $existing.hostHarness.PSObject.Properties) { $hhCopy[$prop.Name] = $prop.Value }
+            $hhCopy['framework'] = $resolvedFramework
+            $hhCopy
         } else {
             [ordered]@{
                 sdk = if ($ExampleObj.dependencies.sdk) { $ExampleObj.dependencies.sdk } else { 'Microsoft.NET.Sdk.Web' }
-                framework = $Framework
+                framework = $resolvedFramework
                 dependsOn = $deps
                 probePath = '/'
                 probeMethod = 'GET'
@@ -622,8 +639,18 @@ function Build-CandidateRecipeAndSource($ExampleObj) {
         $mode = 'host'
     } else {
         $mode = if ($ExampleObj.isTest -or $ExampleObj.classification.suggestedMode -eq 'test') { 'test' } else { 'console' }
+        if ($deps.Count -eq 0 -and $existing -and $existing.manifest -and $existing.manifest.PSObject.Properties['dependsOn'] -and $existing.manifest.dependsOn) {
+            $deps = @($existing.manifest.dependsOn)
+        }
         if ($mode -eq 'test' -and -not ($deps | Where-Object { $_ -like 'xunit.v3@*' })) {
             $deps = @($deps + 'xunit.v3@4.0.3')
+        }
+        $resolvedFramework = if ($frameworkExplicit) {
+            $Framework
+        } elseif ($existing -and $existing.manifest -and $existing.manifest.PSObject.Properties['framework'] -and $existing.manifest.framework) {
+            [string]$existing.manifest.framework
+        } else {
+            $Framework
         }
         $resolvedSdk = if ($ExampleObj.dependencies.sdk) { [string]$ExampleObj.dependencies.sdk } else { 'Microsoft.NET.Sdk' }
         $resolvedFwRefs = @($ExampleObj.dependencies.frameworkReferences | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
@@ -638,7 +665,7 @@ function Build-CandidateRecipeAndSource($ExampleObj) {
         $manifestObj = [ordered]@{
             schemaVersion = 1
             mode = $mode
-            framework = $Framework
+            framework = $resolvedFramework
             dependsOn = @($deps)
         }
         if ($resolvedSdk -and $resolvedSdk -ne 'Microsoft.NET.Sdk') {
@@ -661,6 +688,7 @@ function Build-CandidateRecipeAndSource($ExampleObj) {
     $recipeSha256 = Hash $recipeCanonical
     return [pscustomobject]@{
         mode = $mode
+        framework = $resolvedFramework
         isHost = $isHost
         converted = $converted
         candidateSource = $candidateSource
@@ -1150,54 +1178,62 @@ if ($ValidateRunAction) {
     try {
         if ($candidate.isHost) {
             $hh = $candidate.recipe.hostHarness
-            $hostPair = New-HostExamplePair `
-                -Source $candidate.candidateSource `
-                -Framework $(if ($hh.framework) { [string]$hh.framework } else { $Framework }) `
-                -Sdk $(if ($hh.sdk) { [string]$hh.sdk } else { 'Microsoft.NET.Sdk.Web' }) `
-                -DependsOn $(if ($hh.dependsOn) { [string[]]@($hh.dependsOn) } else { @() }) `
-                -ProbePath $(if ($null -ne $hh.probePath) { [string]$hh.probePath } else { '/' }) `
-                -ProbeMethod $(if ($hh.probeMethod) { [string]$hh.probeMethod } else { 'GET' }) `
-                -TimeoutSeconds $(if ($hh.timeoutSeconds) { [int]$hh.timeoutSeconds } else { [Math]::Min($TimeoutSeconds, 30) }) `
-                -ExpectedStatusCode $(if ($hh.expectedStatusCode) { [int]$hh.expectedStatusCode } else { 0 }) `
-                -ExpectedBodyContains $(if ($hh.expectedBodyContains) { [string]$hh.expectedBodyContains } else { '' }) `
-                -StartupDelayMs $(if ($hh.startupDelayMs) { [int]$hh.startupDelayMs } else { 1000 }) `
-                -Image $CsrunImage
-            $hostScript = Join-Path $tempDir 'validate-host.ps1'
-            [IO.File]::WriteAllText($hostScript, (Normalize $hostPair.Native), [Text.UTF8Encoding]::new($false))
-            $psi = [Diagnostics.ProcessStartInfo]::new('pwsh')
-            foreach ($a in @('-NoProfile', '-NonInteractive', '-File', $hostScript)) { $psi.ArgumentList.Add($a) }
-            $psi.WorkingDirectory = $tempDir
-            $psi.RedirectStandardOutput = $true
-            $psi.RedirectStandardError = $true
-            $psi.UseShellExecute = $false
-            $proc = [Diagnostics.Process]::new()
-            $proc.StartInfo = $psi
-            try {
-                if (-not $proc.Start()) { throw 'Could not start host validation process.' }
-                $outTask = $proc.StandardOutput.ReadToEndAsync()
-                $errTask = $proc.StandardError.ReadToEndAsync()
-                if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
-                    $timedOut = $true
-                    try { $proc.Kill($true) } catch {}
-                    $null = $proc.WaitForExit(5000)
+            $hostFramework = if ($hh.framework) { [string]$hh.framework } else { $candidate.framework }
+            if ((Test-NetFrameworkTfm $hostFramework) -and -not $isWindowsHost) {
+                $exitCode = 1
+                $stderr = "Framework '$hostFramework' targets .NET Framework and is only supported natively on Windows."
+                $failReason = 'windows-required-for-netframework'
+            } else {
+                $hostPair = New-HostExamplePair `
+                    -Source $candidate.candidateSource `
+                    -Framework $hostFramework `
+                    -Sdk $(if ($hh.sdk) { [string]$hh.sdk } else { 'Microsoft.NET.Sdk.Web' }) `
+                    -DependsOn $(if ($hh.dependsOn) { [string[]]@($hh.dependsOn) } else { @() }) `
+                    -ProbePath $(if ($null -ne $hh.probePath) { [string]$hh.probePath } else { '/' }) `
+                    -ProbeMethod $(if ($hh.probeMethod) { [string]$hh.probeMethod } else { 'GET' }) `
+                    -TimeoutSeconds $(if ($hh.timeoutSeconds) { [int]$hh.timeoutSeconds } else { [Math]::Min($TimeoutSeconds, 30) }) `
+                    -ExpectedStatusCode $(if ($hh.expectedStatusCode) { [int]$hh.expectedStatusCode } else { 0 }) `
+                    -ExpectedBodyContains $(if ($hh.expectedBodyContains) { [string]$hh.expectedBodyContains } else { '' }) `
+                    -StartupDelayMs $(if ($hh.startupDelayMs) { [int]$hh.startupDelayMs } else { 1000 }) `
+                    -Image $CsrunImage
+                $hostScript = Join-Path $tempDir 'validate-host.ps1'
+                [IO.File]::WriteAllText($hostScript, (Normalize $hostPair.Native), [Text.UTF8Encoding]::new($false))
+                $psi = [Diagnostics.ProcessStartInfo]::new('pwsh')
+                foreach ($a in @('-NoProfile', '-NonInteractive', '-File', $hostScript)) { $psi.ArgumentList.Add($a) }
+                $psi.WorkingDirectory = $tempDir
+                $psi.RedirectStandardOutput = $true
+                $psi.RedirectStandardError = $true
+                $psi.UseShellExecute = $false
+                $proc = [Diagnostics.Process]::new()
+                $proc.StartInfo = $psi
+                try {
+                    if (-not $proc.Start()) { throw 'Could not start host validation process.' }
+                    $outTask = $proc.StandardOutput.ReadToEndAsync()
+                    $errTask = $proc.StandardError.ReadToEndAsync()
+                    if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+                        $timedOut = $true
+                        try { $proc.Kill($true) } catch {}
+                        $null = $proc.WaitForExit(5000)
+                    }
+                    $exitCode = if ($timedOut) { 124 } else { $proc.ExitCode }
+                    $stdout = $outTask.GetAwaiter().GetResult()
+                    $stderr = $errTask.GetAwaiter().GetResult()
+                } finally {
+                    $proc.Dispose()
                 }
-                $exitCode = if ($timedOut) { 124 } else { $proc.ExitCode }
-                $stdout = $outTask.GetAwaiter().GetResult()
-                $stderr = $errTask.GetAwaiter().GetResult()
-            } finally {
-                $proc.Dispose()
+                if ($timedOut) { $failReason = 'execution-timeout' }
+                elseif ($exitCode -ne 0) { $failReason = 'host-execution-failed' }
+                elseif ([string]::IsNullOrWhiteSpace($stdout)) { $failReason = 'empty-host-output' }
             }
-            if ($timedOut) { $failReason = 'execution-timeout' }
-            elseif ($exitCode -ne 0) { $failReason = 'host-execution-failed' }
-            elseif ([string]::IsNullOrWhiteSpace($stdout)) { $failReason = 'empty-host-output' }
         } else {
             # Validate strictly from the saved recipe manifest so validation matches what csrun will execute.
             $manifestSpec = $candidate.recipe.manifest
             $manifestMode = [string]$manifestSpec['mode']
-            $manifestFramework = if ($manifestSpec.Contains('framework') -and $manifestSpec['framework']) { [string]$manifestSpec['framework'] } else { $Framework }
+            $manifestFramework = if ($manifestSpec.Contains('framework') -and $manifestSpec['framework']) { [string]$manifestSpec['framework'] } else { $candidate.framework }
             $manifestSdk = if ($manifestSpec.Contains('sdk') -and $manifestSpec['sdk']) { [string]$manifestSpec['sdk'] } else { 'Microsoft.NET.Sdk' }
             $manifestDeps = if ($manifestSpec.Contains('dependsOn') -and $manifestSpec['dependsOn']) { @($manifestSpec['dependsOn']) } else { @() }
             $manifestFwRefs = if ($manifestSpec.Contains('frameworkReferences') -and $manifestSpec['frameworkReferences']) { @($manifestSpec['frameworkReferences']) } else { @() }
+            $isNetFramework = Test-NetFrameworkTfm $manifestFramework
 
             $invalidManifestError = $null
             if ($manifestSdk -notin @('Microsoft.NET.Sdk', 'Microsoft.NET.Sdk.Web')) {
@@ -1213,21 +1249,39 @@ if ($ValidateRunAction) {
                 $exitCode = 1
                 $stderr = $invalidManifestError
                 $failReason = 'invalid-manifest'
+            } elseif ($isNetFramework -and -not $isWindowsHost) {
+                $exitCode = 1
+                $stderr = "Framework '$manifestFramework' targets .NET Framework and is only supported natively on Windows."
+                $failReason = 'windows-required-for-netframework'
             } else {
                 $dotnetExe = (Get-Command dotnet -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
                 $artifactsDir = Join-Path $tempDir 'artifacts'
-                $useTempProject = ($manifestMode -eq 'test' -and $manifestFwRefs.Count -gt 0)
+                $useTempProject = $isNetFramework -or ($manifestMode -eq 'test' -and $manifestFwRefs.Count -gt 0)
                 if ($useTempProject) {
                     $pkgLines = @($manifestDeps | ForEach-Object {
                         $parts = [string]$_ -split '@', 2
-                        "    <PackageReference Include=""$([Security.SecurityElement]::Escape($parts[0]))"" Version=""$([Security.SecurityElement]::Escape($parts[1]))"" />"
+                        "    <PackageReference Include=""$([Security.SecurityElement]::Escape($parts[0]))"" Version=""[$([Security.SecurityElement]::Escape($parts[1]))]"" />"
                     })
+                    if ($isNetFramework -and -not ($manifestDeps | Where-Object { $_ -like 'Microsoft.NETFramework.ReferenceAssemblies@*' })) {
+                        $pkgLines += '    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="[1.0.3]" PrivateAssets="All" />'
+                    }
                     $fwLines = @($manifestFwRefs | ForEach-Object {
                         "    <FrameworkReference Include=""$([Security.SecurityElement]::Escape([string]$_))"" />"
                     })
                     $itemLines = @($pkgLines + $fwLines)
                     $itemGroup = if ($itemLines.Count -gt 0) { "`n  <ItemGroup>`n" + ($itemLines -join "`n") + "`n  </ItemGroup>" } else { '' }
-                    $csprojText = "<Project Sdk=""$manifestSdk"">`n  <PropertyGroup>`n    <OutputType>Exe</OutputType>`n    <TargetFramework>$manifestFramework</TargetFramework>`n    <ImplicitUsings>enable</ImplicitUsings>`n    <Nullable>enable</Nullable>`n    <PublishAot>false</PublishAot>`n  </PropertyGroup>$itemGroup`n</Project>`n"
+                    $extraProps = [Collections.Generic.List[string]]::new()
+                    if ($isNetFramework) {
+                        $extraProps.Add('    <LangVersion>latest</LangVersion>')
+                        $extraProps.Add('    <WarningsAsErrors>NU1603;NU1605</WarningsAsErrors>')
+                    } else {
+                        $extraProps.Add('    <PublishAot>false</PublishAot>')
+                    }
+                    if ($manifestMode -eq 'test') {
+                        $extraProps.Add('    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>')
+                    }
+                    $extraPropsText = if ($extraProps.Count -gt 0) { "`n" + ($extraProps -join "`n") } else { '' }
+                    $csprojText = "<Project Sdk=""$manifestSdk"">`n  <PropertyGroup>`n    <OutputType>Exe</OutputType>`n    <TargetFramework>$manifestFramework</TargetFramework>`n    <ImplicitUsings>enable</ImplicitUsings>`n    <Nullable>enable</Nullable>$extraPropsText`n  </PropertyGroup>$itemGroup`n</Project>`n"
                     $buildTargetPath = Join-Path $tempDir 'candidate.csproj'
                     [IO.File]::WriteAllText($buildTargetPath, $csprojText, [Text.UTF8Encoding]::new($false))
                     [IO.File]::WriteAllText((Join-Path $tempDir 'Program.cs'), $candidate.candidateSource + "`n", [Text.UTF8Encoding]::new($false))
@@ -1277,14 +1331,27 @@ if ($ValidateRunAction) {
                     $stderr = ($buildOut + "`n" + $buildErr).Trim()
                     $failReason = 'build-failed'
                 } else {
-                    $builtDll = Get-ChildItem -LiteralPath $artifactsDir -Recurse -File -Filter 'candidate.dll' -ErrorAction SilentlyContinue |
-                        Sort-Object FullName | Select-Object -First 1
-                    if (-not $builtDll) {
+                    $builtTarget = if ($isNetFramework) {
+                        Get-ChildItem -LiteralPath $artifactsDir -Recurse -File -Filter 'candidate.exe' -ErrorAction SilentlyContinue |
+                            Sort-Object FullName | Select-Object -First 1
+                    } else {
+                        Get-ChildItem -LiteralPath $artifactsDir -Recurse -File -Filter 'candidate.dll' -ErrorAction SilentlyContinue |
+                            Sort-Object FullName | Select-Object -First 1
+                    }
+                    if (-not $builtTarget) {
                         $exitCode = 1
                         $failReason = 'build-output-missing'
                     } else {
-                        $psi = [Diagnostics.ProcessStartInfo]::new($dotnetExe)
-                        $psi.ArgumentList.Add($builtDll.FullName)
+                        $psi = if ($isNetFramework) {
+                            [Diagnostics.ProcessStartInfo]::new($builtTarget.FullName)
+                        } else {
+                            $p = [Diagnostics.ProcessStartInfo]::new($dotnetExe)
+                            $p.ArgumentList.Add($builtTarget.FullName)
+                            $p
+                        }
+                        if ($manifestMode -eq 'test') {
+                            foreach ($a in @('--show-live-output', 'on', '--progress', 'off', '--no-banner')) { $psi.ArgumentList.Add($a) }
+                        }
                         $psi.WorkingDirectory = $tempDir
                         $psi.RedirectStandardOutput = $true
                         $psi.RedirectStandardError = $true
@@ -1341,13 +1408,13 @@ if ($ValidateRunAction) {
             candidateSourceSha256 = $candidate.candidateSourceSha256
             recipeSha256 = $candidate.recipeSha256
             mode = $candidate.mode
-            framework = $Framework
+            framework = $candidate.framework
             passed = $true
         }
         $tmpReceipt = $receiptPath + '.tmp.' + [guid]::NewGuid().ToString('N')
         try {
             [IO.File]::WriteAllText($tmpReceipt, ($receipt | ConvertTo-Json -Depth 10 -Compress), [Text.UTF8Encoding]::new($false))
-            if (-not $IsWindows) { & chmod 600 -- $tmpReceipt 2>$null }
+            if (-not $isWindowsHost) { & chmod 600 -- $tmpReceipt 2>$null }
             [IO.File]::Move($tmpReceipt, $receiptPath, $true)
         } finally {
             if (Test-Path -LiteralPath $tmpReceipt) { [IO.File]::Delete($tmpReceipt) }
@@ -1364,7 +1431,7 @@ if ($ValidateRunAction) {
         category = $planEntry.category
         reasonCode = if ($passed) { 'validated' } else { $failReason }
         mode = $candidate.mode
-        framework = $Framework
+        framework = $candidate.framework
         converted = $candidate.converted
         sourceSha256 = $target.sourceSha256
         candidateSourceSha256 = $candidate.candidateSourceSha256
@@ -1569,6 +1636,10 @@ if ($Verify -ne 'None' -and -not $resolvedVerificationEngine) {
         $r = Find-MatchingRecipe $ex
         if ($r -and ($r.intrinsicLimitation -or $r.PSObject.Properties['repository'] -or $r.mode -eq 'host' -or $r.PSObject.Properties['hostHarness'])) { continue }
         if (-not $r -and $ex.sourceSha256 -ceq '47B0C1FBA94E7B43C8753D0A8242801B328E6B463B6EEDAEB640D4F8A262633E') { continue }
+        $preflightFramework = if ($r -and $r.manifest -and $r.manifest.PSObject.Properties['framework'] -and $r.manifest.framework) { [string]$r.manifest.framework } else { $Framework }
+        if (Test-NetFrameworkTfm $preflightFramework) {
+            if ($Verify -eq 'Docker' -or -not $isWindowsHost) { continue }
+        }
         if ($r -and $r.manifest) { $needsStandaloneEnginePreflight = $true; break }
         if (-not $r -and -not $ex.raw.source -and $ex.eligible -and $ex.standalone -ne $ex.isTest -and $ex.source -notmatch '(?m)^#:') { $needsStandaloneEnginePreflight = $true; break }
     }
@@ -1655,6 +1726,16 @@ foreach ($exObj in $normalizedExamples) {
             continue
         }
         if ($recipe -and -not $recipe.manifest -and $strategy -notin @('repository', 'host')) { throw 'A recipe must supply a standalone manifest, hostHarness, or pinned repository test.' }
+        $effectiveFramework = if ($strategy -eq 'repository') {
+            if ($recipe -and $recipe.PSObject.Properties['framework'] -and $recipe.framework) { [string]$recipe.framework } else { $Framework }
+        } elseif ($strategy -eq 'host') {
+            if ($recipe -and $recipe.PSObject.Properties['hostHarness'] -and $recipe.hostHarness -and $recipe.hostHarness.PSObject.Properties['framework'] -and $recipe.hostHarness.framework) { [string]$recipe.hostHarness.framework }
+            elseif ($recipe -and $recipe.manifest -and $recipe.manifest.PSObject.Properties['framework'] -and $recipe.manifest.framework) { [string]$recipe.manifest.framework }
+            else { $Framework }
+        } else {
+            if ($recipe -and $recipe.manifest -and $recipe.manifest.PSObject.Properties['framework'] -and $recipe.manifest.framework) { [string]$recipe.manifest.framework } else { $Framework }
+        }
+        $isNetFrameworkTarget = Test-NetFrameworkTfm $effectiveFramework
         $transports = @('native','docker')
         foreach ($transport in @('native','docker')) {
             if ($recipe -and $recipe.unsupportedTransports.$transport) {
@@ -1662,6 +1743,11 @@ foreach ($exObj in $normalizedExamples) {
                 $result["${transport}Reason"] = $recipe.unsupportedTransports.$transport
                 $transports = @($transports | Where-Object { $_ -ne $transport })
             }
+        }
+        if ($isNetFrameworkTarget -and 'docker' -in $transports) {
+            $result['docker'] = 'Unsupported'
+            $result['dockerReason'] = $NetFrameworkDockerUnsupportedReason
+            $transports = @($transports | Where-Object { $_ -ne 'docker' })
         }
         if (-not $transports.Count) {
             $result.status = 'unsupported'; $result.coverage = 'Intrinsically non-executable'
@@ -1803,6 +1889,15 @@ foreach ($exObj in $normalizedExamples) {
             }
 
             $shouldRunVerify = $inVerifyScope -and ($Verify -eq 'Both' -or $Verify -eq $transport)
+            if ($shouldRunVerify -and $transport -eq 'native' -and $isNetFrameworkTarget -and -not $isWindowsHost) {
+                $shouldRunVerify = $false
+                $result['native'] = 'Unverified'
+                $result['nativeReason'] = "Framework '$effectiveFramework' targets .NET Framework and requires Windows for Native verification."
+                if (-not $Quiet) {
+                    [Console]::Error.WriteLine("[skip] $($exObj.exampleId) (Native) -> Unverified ($effectiveFramework requires Windows)")
+                }
+                continue
+            }
             $engineMatchesEvidence = ($strategy -ne 'standalone') -or (
                 $resolvedVerificationEngine -and
                 $resolvedVerificationEngine.Sha256 -and

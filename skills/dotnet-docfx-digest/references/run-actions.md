@@ -16,6 +16,29 @@ pwsh -NoProfile -File <docfx-dir>/BuildRunActions.ps1
 
 Programs that resolve against the platform and simple xUnit examples can generate immediately through `New-CsrunExecutionPair` and manifest v1. Defaults are `net10.0` and `codebeltnet/csrun:10`. A recipe can set `csrunImage` for a different reviewed tag. Both wrappers download and verify the publisher's latest stable csrun release at execution time. Docker uses the selected image for its SDK and PowerShell.
 
+### Legacy `.NET Framework` (`net48`) Native-only recipes for conditional `netstandard2.0` APIs
+
+In multi-targeted libraries (for example `net11.0;net10.0;netstandard2.0`), some public types or members are compiled only when `NETSTANDARD2_0` is defined or `NETCOREAPP3_0_OR_GREATER` is absent (such as polyfills like `System.Runtime.CompilerServices.CallerArgumentExpressionAttribute`). Do **not** fall back to `net10.0` for these examples — `net10.0` selects `lib/net10.0`, omits the library's conditional type, and resolves the .NET BCL type instead — and do **not** mark them `intrinsicLimitation` when a legacy `.NET Framework` Native run action can execute them.
+
+Instead, set `manifest.framework` (or `hostHarness.framework`) to a `csrun`-supported `.NET Framework` TFM (`net471`, `net472`, `net48`, or `net481`, typically `net48`), which consumes the package's `lib/netstandard2.0` asset natively on Windows (`csrun` v0.3.0+ falls back to an isolated temporary SDK-style `.csproj` with `LangVersion=latest` and `Microsoft.NETFramework.ReferenceAssemblies`, without changing manifest `schemaVersion` 1):
+
+```json
+{
+  "uid": "System.Runtime.CompilerServices.CallerArgumentExpressionAttribute",
+  "exampleId": "System.Runtime.CompilerServices.CallerArgumentExpressionAttribute#1",
+  "fenceOrdinal": 1,
+  "sourceSha256": "<exact displayed source hash>",
+  "manifest": {
+    "schemaVersion": 1,
+    "mode": "console",
+    "framework": "net48",
+    "dependsOn": ["Cuemon.Kernel@11.0.0"]
+  }
+}
+```
+
+When `manifest.framework` or `hostHarness.framework` matches `^net4\d+$`, `generate-run-actions.ps1` and `BuildRunActions.ps1` automatically treat `docker` as `Unsupported` (`.NET Framework targets require Windows and cannot execute in the Linux csrun container.`) unless `unsupportedTransports.docker` already supplies a more specific reason. `run-actions.manifest.json` records `transports: ["native"]`, `BuildRunActions.ps1` materializes only `native.ps1` (no `docker.ps1`), the Markdown association renders only the Native link, and `--summary-json` reports `docker: "Unsupported"` with exit code `0`. On Windows, `--validate-run-action` and `--verify Native` compile and execute the `.NET Framework` binary natively; on non-Windows hosts, `--verify Native` skips `.NET Framework` recipes cleanly (recording `native: "Unverified"` with the Windows platform prerequisite instead of failing or corrupting the manifest), and `--validate-run-action` fails fast with `windows-required-for-netframework`.
+
 ## Deterministic planning, recipe health, dependency resolution, and candidate validation
 
 `generate-run-actions.ps1` accepts both PowerShell-style (`-RunActionPlan`, `-Json`, `-Verify Native`, `-EnginePath <path>`) and CLI-style (`--run-action-plan`, `--json`, `--verify Native`, `--engine-path <path>`) flags:
