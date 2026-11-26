@@ -1352,6 +1352,23 @@
         "Uses a `mode: host` / `hostHarness` recipe with timeout and clean shutdown for blocking ASP.NET Core host examples, reserving `intrinsicLimitation` strictly for code with no observable behavior",
         "Uses `--engine-path`, `--summary-json`, `--verify-changed`, and `--verify --id <uid>` with atomic manifest writes that preserve the previous manifest and emit `failureReason` (e.g. `github-403-no-cached-engine`) if verification fails"
       ]
+    },
+    {
+      "id": 126,
+      "prompt": "Review the six runnable API drafts in the packet for publication. Use the pinned source or tests where needed. Identify what each example establishes and give concrete repairs, including corrected TokenBuilder code and expected observations.",
+      "files": [
+        "evals/files/pr181-review.md"
+      ],
+      "expected_output": "Repairs misleading claims and preserves the documented operations. Distinguishes the recorded TokenBuilder output from proposed checks.",
+      "expectations": [
+        "Rejects treating sibling text elements as columns of one record. For example, uses two record elements with id and name attributes and checks two rows with the expected id/name pairs.",
+        "Accounts for True and the truncated suffix. For example, appends Alice,30, followed by New York,Engineer and checks false then true and the full Alice,30,New York,Engineer buffer. Equivalent source-backed repairs pass.",
+        "Aligns the FNV-128 factory and checksum label or deliberately selects and verifies SHA-256.",
+        "Exercises a supported redaction path and checks the masked body or limits the claim to capture.",
+        "Sends a request through middleware and checks the response header.",
+        "Exercises the registered authentication handler and checks the authentication result.",
+        "Separates recorded observations from expected results and transport status."
+      ]
     }
   ]
 }

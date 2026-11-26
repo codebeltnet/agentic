@@ -15,6 +15,14 @@ Use the sequence **Discover API → Understand consumer task → Determine execu
 
 During that same discovery, consider optional [contextual source references](contextual-source-references.md) for useful integration or lifecycle depth. Explain the additional knowledge each link offers after the self-sufficient example, outcome and execution guidance. This applies to successfully runnable examples as well as partial illustrations; source browsing never replaces the primary learning experience.
 
+## Review the behavior before publishing
+
+For each new or materially revised example, identify the consumer's question and the result that would answer it. Derive the expected result for the **specific inputs and overload** from the implementation, public contract or relevant test for the documented version. For variable output, choose a stable relationship to check.
+
+Trace the displayed code from input through the documented operation to the value the consumer observes. Ask whether the check would still pass if that operation were omitted. Printing configured header values, for example, survives removal of the middleware. Send a request through the configured pipeline and check the header on its response. To demonstrate authentication, exercise the registered handler and inspect the resulting authentication outcome. Options inspection supports a claim about configuration alone.
+
+Compare the expected observation with the returned value, emitted output or assertion from the same source using the [existing execution path](csrun-composition.md). Reconcile the lead, comments, output labels and any transcript with that comparison. A mismatch calls for repairing the code or correcting an inaccurate claim. Preserve the intended API operation through standalone conversion. If it needs the real pipeline or project, retain that topology. When execution is unavailable, identify the source-backed expectation and the observation still unverified.
+
 ## Choose the execution model
 
 | Classification | Presentation and verification |

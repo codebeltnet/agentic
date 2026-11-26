@@ -284,6 +284,8 @@ These are search directions, not templates to emit verbatim. Confirm every patte
 - **Delegate / factory pipelines** — register the factory, then invoke it to produce a configured instance.
 - **Discoverable acquisition paths** — when public signatures, tests, docs, or samples show that another public API returns or acquires the target type, build the example around that path and then inspect or use the returned instance. Do not manually construct the target unless the public evidence shows direct construction is the intended entry point.
 
+Before publishing a new or materially revised fence, apply the [behavior review](example-architecture.md#review-the-behavior-before-publishing) to the final code and surrounding text, including edits made during run-action conversion. Scope the review to affected examples.
+
 Each chosen scenario must still produce, configure, transform, register, send, store, or validate something a real caller observes.
 
 
