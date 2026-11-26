@@ -1280,7 +1280,7 @@ Add-ValidationResult -Results $results -Name 'App templates import required boot
     Assert-Contains -Name 'web/Startup.cs' -Content $webStartup -Needle 'using Codebelt.Bootstrapper.Web;'
 }
 
-Add-ValidationResult -Results $results -Name 'App shared assets keep MinVer versioning wired end-to-end' -Action {
+Add-ValidationResult -Results $results -Name 'App shared assets keep MinVer versioning without package release notes' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/SKILL.md' -GitRef $Ref
     $buildProps = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/assets/app/Directory.Build.props' -GitRef $Ref
     $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/assets/shared/AGENTS.md' -GitRef $Ref
@@ -1290,6 +1290,7 @@ Add-ValidationResult -Results $results -Name 'App shared assets keep MinVer vers
     Assert-Contains -Name 'app shared AGENTS.md' -Content $agents -Needle 'MinVer for semantic versioning from Git tags'
     Assert-Contains -Name 'app shared Directory.Build.targets' -Content $targets -Needle 'AfterTargets="MinVer"'
     Assert-Contains -Name 'app shared Directory.Build.targets' -Content $targets -Needle '$(MinVerMajor).$(MinVerMinor).$(MinVerPatch)'
+    Assert-NotContains -Name 'app shared Directory.Build.targets' -Content $targets -Needle 'PackageReleaseNotes'
 }
 
 Add-ValidationResult -Results $results -Name 'Web variant package references stay scoped to the correct variant' -Action {
