@@ -98,7 +98,7 @@ exit 3
         $armRoot = Join-Path $root "arm-$arm"
         $homeDir = Join-Path $armRoot 'home'
         New-Item -ItemType Directory -Path $armRoot -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $armRoot 'fixture.csproj') -Value "<Project Sdk='Microsoft.NET.Sdk'><PropertyGroup><TargetFramework>net$targetMajor.0</TargetFramework><NuGetAudit>false</NuGetAudit></PropertyGroup></Project>"
+        Set-Content -LiteralPath (Join-Path $armRoot 'fixture.csproj') -Value "<Project Sdk='Microsoft.NET.Sdk'><PropertyGroup><TargetFramework>net$targetMajor.0</TargetFramework><Deterministic>true</Deterministic><ContinuousIntegrationBuild>true</ContinuousIntegrationBuild><PublishRepositoryUrl>true</PublishRepositoryUrl><EmbedUntrackedSources>true</EmbedUntrackedSources><RepositoryUrl>https://example.invalid/ownership-fixture</RepositoryUrl><RepositoryType>git</RepositoryType><NuGetAudit>false</NuGetAudit></PropertyGroup><ItemGroup Condition=`"'`$(NuGetPackageRoot)' != ''`"><SourceRoot Include='`$(NuGetPackageRoot)' RepositoryUrl='https://example.invalid/ownership-fixture'/></ItemGroup></Project>"
         Set-Content -LiteralPath (Join-Path $armRoot 'Fixture.cs') -Value 'public sealed class Fixture {}'
         Set-Content -LiteralPath (Join-Path $armRoot 'NuGet.Config') -Value '<configuration><packageSources><clear /></packageSources></configuration>'
         $command = @'
@@ -106,7 +106,7 @@ param($Common, $ArmRoot)
 . $Common
 $isolated = New-RunnerShellEnvironment -Run @{ HomeDirectoryPath = (Join-Path $ArmRoot 'home') }
 foreach ($name in $isolated.Keys) { [Environment]::SetEnvironmentVariable($name, $isolated[$name]) }
-if ($env:MSBUILDDISABLENODEREUSE -ne '1' -or $env:DOTNET_CLI_USE_MSBUILD_SERVER -ne '0' -or $env:UseSharedCompilation -ne 'false') { exit 9 }
+if ($env:MSBUILDDISABLENODEREUSE -ne '1' -or $env:DOTNET_CLI_USE_MSBUILD_SERVER -ne '0' -or $env:UseSharedCompilation -ne 'false' -or -not [IO.Path]::EndsInDirectorySeparator($env:NUGET_PACKAGES)) { exit 9 }
 $peer = if ($ArmRoot.EndsWith('arm-1')) { 'arm-2' } else { 'arm-1' }
 Set-Content -LiteralPath (Join-Path $ArmRoot 'building') -Value 'true'
 $clock = [Diagnostics.Stopwatch]::StartNew()

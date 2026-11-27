@@ -35,6 +35,8 @@ try {
     $parent = New-RunnerEnvironment -Run $run -AuthenticationVariables @('OPENAI_API_KEY')
     Assert-ReadyTest ($parent.OPENAI_API_KEY -eq 'readiness-test-sentinel' -and -not $environment.Contains('OPENAI_API_KEY')) 'Credentials belong to the transport parent only.'
     Assert-ReadyTest (-not $environment.Contains('NODE_PATH')) 'Ambient Node configuration entered the shell environment.'
+    Assert-ReadyTest ([IO.Path]::EndsInDirectorySeparator([string]$environment['NUGET_PACKAGES'])) 'Isolated NUGET_PACKAGES must end with a directory separator for MSBuild SourceRoot compatibility.'
+    Assert-ReadyTest (Test-PathInside -BasePath $homePath -CandidatePath ([string]$environment['NUGET_PACKAGES'])) 'Isolated NUGET_PACKAGES must stay inside the isolated run home.'
     $shell = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
     foreach ($probe in Get-EvalReadinessProbes -Run $run) {
         $process = Invoke-RunnerProcess -FileName $shell -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $probe.script) -WorkingDirectory $repo -Environment $environment -TimeoutSeconds 15
@@ -47,6 +49,67 @@ try {
     $unavailable = New-EvalReadinessObservation -Probe $probe -Response @{ error = @{ code = -32601 } }
     Assert-ReadyTest ($failed.status -eq 'infrastructure_blocked' -and $failed.exit_code -eq 127 -and $failed.command[0] -eq 'pwsh' -and $failed.diagnostic -eq 'Missing tool') 'Readiness failure lost its diagnostic or executed command.'
     Assert-ReadyTest ($mismatch.status -eq 'infrastructure_blocked' -and $unavailable.status -eq 'infrastructure_blocked') 'Version mismatches and unsupported transports must block readiness.'
+
+    # Deterministic build readiness: a restore prerequisite must stage a representative
+    # SourceRoot + deterministic-build probe and exercise `dotnet build`, not only restore.
+    $dotnetCommand = Get-Command dotnet -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -ne $dotnetCommand) {
+        . (Join-Path $PSScriptRoot '../../prepare-eval-prerequisites.ps1')
+        function Write-Utf8File {
+            param([string]$Path, [string]$Content)
+            $dir = Split-Path -Parent $Path
+            if ($dir) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
+        }
+        $targetMajor = ((& $dotnetCommand.Source --version) -split '\.')[0]
+        $buildRoot = Join-Path $root 'build-readiness'
+        $buildRepo = Join-Path $buildRoot 'repo'
+        $buildHome = Join-Path $buildRoot 'home'
+        New-Item -ItemType Directory -Path $buildRepo, $buildHome -Force | Out-Null
+        $staged = Initialize-EvalPrerequisites -Requirements ([pscustomobject]@{
+            executables = @('dotnet')
+            restore = [pscustomobject]@{ framework = "net$targetMajor.0"; packages = @() }
+        }) -RunRoot $buildRoot -CandidateName 'readiness-test'
+        $probeIds = @($staged.probes | ForEach-Object { $_.id })
+        Assert-ReadyTest (($probeIds -contains 'nuget-restore') -and ($probeIds -contains 'dotnet-build')) 'Restore prerequisites must emit both nuget-restore and dotnet-build readiness probes.'
+        # Use an empty offline source list so deterministic validation never depends on network access.
+        Write-Utf8File -Path (Join-Path $buildHome 'restore-probe/NuGet.Config') -Content '<configuration><packageSources><clear/></packageSources></configuration>'
+        $buildRun = [pscustomobject]@{
+            RunRoot = $buildRoot
+            HomeDirectoryPath = $buildHome
+            WorkingDirectoryPath = $buildRepo
+            CandidateSkillName = 'readiness-test'
+            Interaction = $null
+            Contract = @{ candidateSkillName = 'readiness-test'; prerequisites = $staged }
+        }
+        $buildEnv = New-RunnerShellEnvironment -Run $buildRun
+        $buildProbes = @(Get-EvalReadinessProbes -Run $buildRun)
+        foreach ($item in $buildProbes) {
+            $proc = Invoke-RunnerProcess -FileName $shell -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $item.script) -WorkingDirectory $buildRepo -Environment $buildEnv -TimeoutSeconds 45
+            $obs = New-EvalReadinessObservation -Probe $item -Response @{ result = @{ exitCode = $proc.ExitCode; stdout = $proc.Stdout; stderr = $proc.Stderr } }
+            Assert-ReadyTest ($obs.status -eq 'ready') "Deterministic build readiness probe '$($obs.id)' failed: $($obs.diagnostic)"
+        }
+
+        # Negative regression: stripping the trailing separator from NUGET_PACKAGES must be
+        # caught by both isolated-shell-environment and dotnet-build even when restore succeeds.
+        foreach ($artifactDir in @('bin', 'obj')) {
+            $artifactPath = Join-Path $buildHome "restore-probe/$artifactDir"
+            if (Test-Path -LiteralPath $artifactPath) { Remove-Item -LiteralPath $artifactPath -Recurse -Force }
+        }
+        $brokenEnv = [ordered]@{}
+        foreach ($key in $buildEnv.Keys) { $brokenEnv[$key] = $buildEnv[$key] }
+        $brokenEnv['NUGET_PACKAGES'] = ([string]$brokenEnv['NUGET_PACKAGES']).TrimEnd('\', '/')
+        $envProbe = @($buildProbes | Where-Object { $_.id -eq 'isolated-shell-environment' })[0]
+        $restoreProbe = @($buildProbes | Where-Object { $_.id -eq 'nuget-restore' })[0]
+        $compileProbe = @($buildProbes | Where-Object { $_.id -eq 'dotnet-build' })[0]
+        $envProc = Invoke-RunnerProcess -FileName $shell -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $envProbe.script) -WorkingDirectory $buildRepo -Environment $brokenEnv -TimeoutSeconds 15
+        Assert-ReadyTest ((New-EvalReadinessObservation -Probe $envProbe -Response @{ result = @{ exitCode = $envProc.ExitCode; stdout = $envProc.Stdout; stderr = $envProc.Stderr } }).status -eq 'infrastructure_blocked') 'Environment readiness probe must fail when NUGET_PACKAGES loses its trailing separator.'
+        $restoreProc = Invoke-RunnerProcess -FileName $shell -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $restoreProbe.script) -WorkingDirectory $buildRepo -Environment $brokenEnv -TimeoutSeconds 45
+        Assert-ReadyTest ((New-EvalReadinessObservation -Probe $restoreProbe -Response @{ result = @{ exitCode = $restoreProc.ExitCode; stdout = $restoreProc.Stdout; stderr = $restoreProc.Stderr } }).status -eq 'ready') 'Restore alone succeeds without catching the SourceRoot trailing-separator defect.'
+        $compileProc = Invoke-RunnerProcess -FileName $shell -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $compileProbe.script) -WorkingDirectory $buildRepo -Environment $brokenEnv -TimeoutSeconds 45
+        $compileObs = New-EvalReadinessObservation -Probe $compileProbe -Response @{ result = @{ exitCode = $compileProc.ExitCode; stdout = $compileProc.Stdout; stderr = $compileProc.Stderr } }
+        Assert-ReadyTest ($compileObs.status -eq 'infrastructure_blocked' -and $compileObs.diagnostic -match 'SourceRoot paths are required to end with a slash or backslash') "dotnet-build readiness probe did not surface the SourceRoot defect: $($compileObs.diagnostic)"
+    }
 
     $dependency = Join-Path $root 'dependencies/helper'
     New-Item -ItemType Directory -Path (Join-Path $dependency 'references') -Force | Out-Null

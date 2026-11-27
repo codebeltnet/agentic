@@ -37,7 +37,17 @@ foreach ($script in @('scripts/validate-skill-templates.ps1', 'scripts/eval-runn
     $actual = @($entries | Where-Object Script -eq $script | ForEach-Object Suite)
     if (@(Compare-Object ($expected | Sort-Object) ($actual | Sort-Object)).Count) { throw "CI does not schedule every suite exactly once for '$script'." }
 }
-if ($workflow -notmatch '(?m)^  validate-skill-templates:' -or $workflow -notmatch 'needs: validate' -or $workflow -notmatch "VALIDATION_RESULT -ne 'success'") { throw 'The required aggregate check must reject failed, skipped, or cancelled suites.' }
+if ($workflow -notmatch '(?m)^  validate-windows:' -or
+    $workflow -notmatch '(?m)^\s+runs-on:\s+windows-latest\s*$' -or
+    $workflow -notmatch 'scripts/eval-runners/tests/test-windows-process-ownership\.ps1') {
+    throw 'CI must register scripts/eval-runners/tests/test-windows-process-ownership.ps1 in a dedicated Windows validation job.'
+}
+if ($workflow -notmatch '(?m)^  validate-skill-templates:' -or
+    $workflow -notmatch '(?m)^\s+needs:\s+\[validate,\s*validate-windows\]\s*$' -or
+    $workflow -notmatch "VALIDATION_RESULT -ne 'success'" -or
+    $workflow -notmatch "WINDOWS_VALIDATION_RESULT -ne 'success'") {
+    throw 'The required aggregate check must reject failed, skipped, or cancelled Linux or Windows suites.'
+}
 Write-Output 'CI suite coverage: PASS'
 
 # Exercise the production validation block against both supported content layouts.
