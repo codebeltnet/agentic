@@ -282,6 +282,26 @@ function Add-CodexSessionConfigArguments {
     }
 }
 
+function Add-CodexShellEnvironmentArguments {
+    param(
+        [System.Collections.Generic.List[string]]$Arguments,
+        [object]$Run,
+        [string]$SwitchName = '-c',
+        [bool]$LinuxSandbox = $false
+    )
+
+    $environment = New-RunnerShellEnvironment -Run $Run
+    $Arguments.Add($SwitchName)
+    $Arguments.Add('allow_login_shell=false')
+    $entries = foreach ($name in $environment.Keys) {
+        $value = [string]$environment[$name]
+        if ($LinuxSandbox) { $value = $value.Replace($Run.RunRoot, '/run') }
+        '{0}={1}' -f (ConvertTo-CodexConfigStringLiteral $name), (ConvertTo-CodexConfigStringLiteral $value)
+    }
+    $Arguments.Add($SwitchName)
+    $Arguments.Add('shell_environment_policy.set={' + ($entries -join ',') + '}')
+}
+
 function ConvertTo-CodexComparablePath {
     param([AllowNull()][string]$Path)
 
@@ -987,12 +1007,18 @@ function New-CodexExecutionProjection {
     $physicalHome = Join-Path $physicalRunRoot 'home'
     Copy-CodexProjectionDirectory -Source $Inputs.Run.WorkingDirectoryPath -Destination $physicalRepo
     Copy-CodexProjectionDirectory -Source $Inputs.Run.HomeDirectoryPath -Destination $physicalHome
+    $sharedDependencies = Join-Path $Inputs.Run.RunRoot 'dependencies'
+    if (Test-Path -LiteralPath $sharedDependencies -PathType Container) {
+        Copy-CodexProjectionDirectory -Source $sharedDependencies -Destination (Join-Path $physicalRunRoot 'dependencies')
+    }
 
     $physicalSkill = $null
     if ($Inputs.Run.CandidateSkillExposed) {
         $skillRelative = [System.IO.Path]::GetRelativePath($Inputs.Run.RunRoot, $Inputs.Run.SkillDirectoryPath)
         $physicalSkill = Join-Path $physicalRunRoot ($skillRelative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
-        Copy-CodexProjectionDirectory -Source $Inputs.Run.SkillDirectoryPath -Destination $physicalSkill
+        if (-not (Test-Path -LiteralPath $physicalSkill -PathType Container)) {
+            Copy-CodexProjectionDirectory -Source $Inputs.Run.SkillDirectoryPath -Destination $physicalSkill
+        }
     }
 
     $physicalInteraction = $null
@@ -1083,12 +1109,13 @@ function Invoke-CodexAppServer {
         [Parameter(Mandatory = $true)][object]$CommandInfo,
         [Parameter(Mandatory = $true)][object]$Inputs,
         [Parameter(Mandatory = $true)][object]$Auth,
-        [Parameter(Mandatory = $true)][object]$NativeSkillDiscovery,
+        [object]$NativeSkillDiscovery,
         [object]$AuthHome = $null,
         [System.Collections.IDictionary]$ParentEnvironment = $null,
         [bool]$SupportsProviderModelFallback = $false,
         [int]$TimeoutSeconds = 900,
-        [hashtable]$ProgressContext = $null
+        [hashtable]$ProgressContext = $null,
+        [switch]$ReadinessOnly
     )
 
     if ($Auth.Kind -ne 'subscription_file') {
@@ -1114,6 +1141,7 @@ function Invoke-CodexAppServer {
     $appServerArguments = [System.Collections.Generic.List[string]]::new()
     foreach ($argument in @($CommandInfo.Prefix) + @('app-server', '--strict-config', '--stdio')) { $appServerArguments.Add([string]$argument) }
     Add-CodexSessionConfigArguments -Arguments $appServerArguments -CandidateSkillName $Inputs.Run.CandidateSkillName -AmbientSkillEntries $ambientSkillEntries -IncludeShellEnvironmentPolicy
+    Add-CodexShellEnvironmentArguments -Arguments $appServerArguments -Run $Inputs.Run
     foreach ($argument in @($appServerArguments)) { [void]$psi.ArgumentList.Add([string]$argument) }
 
     # Shared progress context for the app-server protocol exchange. When the
@@ -1232,10 +1260,17 @@ function Invoke-CodexAppServer {
     $instructionSources = @()
     $instructionSourcesObserved = $false
     $modelReroutes = [System.Collections.Generic.List[object]]::new()
+    $readiness = @()
 
     try {
         if ($null -eq $AuthHome) {
-            $authHome = New-CodexAuthOnlyHome -Auth $Auth
+            if ($ReadinessOnly) {
+                $probeHome = Join-Path $Inputs.Run.HomeDirectoryPath 'readiness-server'
+                New-Item -ItemType Directory -Path $probeHome -Force | Out-Null
+                $authHome = [pscustomobject]@{ Path = $probeHome; AuthOnly = $false }
+            } else {
+                $authHome = New-CodexAuthOnlyHome -Auth $Auth
+            }
             $ownsAuthHome = $true
         } else {
             $authHome = $AuthHome
@@ -1295,7 +1330,7 @@ function Invoke-CodexAppServer {
             $normalized.Add(([ordered]@{ type = 'model.rerouted'; from_model = Get-JsonProperty -Object $reroute -Name 'fromModel' -Default $null; to_model = Get-JsonProperty -Object $reroute -Name 'toModel' -Default $null; reason = Get-JsonProperty -Object $reroute -Name 'reason' -Default $null } | ConvertTo-Json -Compress))
         }
         $waitForResponse = {
-            param([Parameter(Mandatory = $true)][int]$ExpectedId, [Parameter(Mandatory = $true)][string]$Operation)
+            param([Parameter(Mandatory = $true)][int]$ExpectedId, [Parameter(Mandatory = $true)][string]$Operation, [switch]$AllowError)
             while ($true) {
                 $message = & $readMessage
                 $messageId = Get-JsonProperty -Object $message -Name 'id' -Default $null
@@ -1309,7 +1344,7 @@ function Invoke-CodexAppServer {
                 }
                 if ($null -eq $messageId -or [int]$messageId -ne $ExpectedId) { continue }
                 $error = Get-JsonProperty -Object $message -Name 'error' -Default $null
-                if ($null -ne $error) {
+                if ($null -ne $error -and -not $AllowError) {
                     $errorMessage = [string](Get-JsonProperty -Object $error -Name 'message' -Default ($error | ConvertTo-Json -Depth 20 -Compress))
                     throw "Codex app-server $Operation failed: $errorMessage"
                 }
@@ -1329,6 +1364,34 @@ function Invoke-CodexAppServer {
         })
         $null = & $waitForResponse $initializeRequest 'initialize'
         & $writeMessage ([ordered]@{ jsonrpc = '2.0'; method = 'initialized' })
+
+        if ($ReadinessOnly -or (Test-JsonProperty -Object $Inputs.Run.Contract -Name 'prerequisites')) {
+            $shell = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
+            $readiness = @(foreach ($probe in Get-EvalReadinessProbes -Run $Inputs.Run) {
+                $request = [ordered]@{
+                    id = 900
+                    method = 'command/exec'
+                    params = [ordered]@{
+                        command = @($shell, '-NoProfile', '-NonInteractive', '-Command', $probe.script)
+                        cwd = $Inputs.Run.WorkingDirectoryPath
+                        sandboxPolicy = @{ type = 'dangerFullAccess' }
+                        timeoutMs = $probe.timeoutMs
+                    }
+                }
+                & $writeMessage $request
+                try {
+                    $reply = & $waitForResponse 900 "readiness probe $($probe.id)" -AllowError
+                    $observation = New-EvalReadinessObservation -Probe $probe -Response $reply
+                } catch {
+                    $observation = [ordered]@{ id = $probe.id; command = @($probe.command); exit_code = $null; status = 'infrastructure_blocked'; diagnostic = $_.Exception.Message }
+                }
+                $observation
+                if ($observation.status -ne 'ready') { break }
+            })
+            if ($ReadinessOnly -or @($readiness | Where-Object status -ne 'ready').Count -gt 0) {
+                return [pscustomobject]@{ Readiness = $readiness }
+            }
+        }
 
         $skillsListRequestId = 2
         $skillsListRequest = [ordered]@{
@@ -1585,6 +1648,7 @@ function Invoke-CodexAppServer {
         ObservedModel = if ($null -ne $threadStartResponse) { [string](Get-JsonProperty -Object (Get-JsonProperty -Object $threadStartResponse -Name 'result' -Default $null) -Name 'model' -Default '') } else { '' }
         ObservedWorkingDirectory = if ($null -ne $threadStartResponse) { [string](Get-JsonProperty -Object (Get-JsonProperty -Object $threadStartResponse -Name 'result' -Default $null) -Name 'cwd' -Default '') } else { '' }
         ObservedEphemeral = if ($null -ne $threadStartResponse) { [bool](Get-JsonProperty -Object (Get-JsonProperty -Object (Get-JsonProperty -Object $threadStartResponse -Name 'result' -Default $null) -Name 'thread' -Default $null) -Name 'ephemeral' -Default $false) } else { $false }
+        Readiness = $readiness
         AuthOnlyHome = $null -ne $authHome -and [bool]$authHome.AuthOnly
         AuthOnlyHomeRemoved = $authOnlyHomeRemoved
         WorkerHome = if ($null -ne $parentEnvironment) { [string]$parentEnvironment.HOME } else { '' }
@@ -2089,6 +2153,7 @@ function New-CodexCliArguments {
         $arguments.Add([string]$argument)
     }
     Add-CodexSessionConfigArguments -Arguments $arguments -CandidateSkillName $Inputs.Run.CandidateSkillName -AmbientSkillEntries $AmbientSkillEntries -SwitchName '--config'
+    Add-CodexShellEnvironmentArguments -Arguments $arguments -Run $Inputs.Run -SwitchName '--config' -LinuxSandbox ($VisiblePlatform -eq 'linux')
     foreach ($argument in @('--output-last-message', $outputArgument)) {
         $arguments.Add([string]$argument)
     }
@@ -2224,6 +2289,7 @@ function Get-CodexPreflight {
     $nativeWorkerObservation = $null
     $nativeSkillConfigObservation = $null
     $auth = Get-CodexAuthSource
+    $readiness = @()
 
     if ($profile.Runner -ne 'codex') {
         $reasons.Add("execution-profile.json selects '$($profile.Runner)' rather than codex.")
@@ -2385,7 +2451,26 @@ function Get-CodexPreflight {
         foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral compatibility transport', '--strict-config', '--ignore-user-config', '--ignore-rules', '--sandbox danger-full-access', 'shell_environment_policy.inherit=none', 'session skills.include_instructions=false', 'session skills.bundled.enabled=false', 'session skills.config ambient path disables', 'pre-turn debug prompt-input native-skill suppression proof', 'pre-turn skills/list ambient-state verification', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     }
     if ($hardConfinement) { $mechanisms.Add("external $sandboxName filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
+    if ($reasons.Count -eq 0 -and (Test-JsonProperty -Object $run.Contract -Name 'prerequisites')) {
+        if ($auth.Kind -eq 'subscription_file') {
+            $projection = New-CodexExecutionProjection -Inputs $Inputs
+            try {
+                $projectedInputs = [pscustomobject]@{ Run = $projection.Run; Profile = $profile }
+                $probeRun = Invoke-CodexAppServer -CommandInfo $commandInfo -Inputs $projectedInputs -Auth $auth -ReadinessOnly -TimeoutSeconds 85
+                $readiness = @(Get-JsonProperty -Object $probeRun -Name 'Readiness' -Default @())
+            } finally {
+                Remove-CodexExecutionProjection -Projection $projection
+            }
+        }
+        if ($readiness.Count -eq 0) {
+            $readiness = @(@{ id = 'native-command-transport'; command = @('command/exec'); exit_code = $null; status = 'infrastructure_blocked'; diagnostic = 'Declare prerequisites with a supported Codex App Server transport. Runner availability does not prove shell readiness.' })
+        }
+        foreach ($observation in $readiness) {
+            if ($observation.status -ne 'ready') { $reasons.Add("Infrastructure blocked at '$($observation.id)': $($observation.diagnostic)") }
+        }
+    }
     $document = New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
+    if ($readiness.Count -gt 0) { $document.readiness = $readiness }
     if ($null -ne $nativeWorkerObservation -and $nativeWorkerObservation.Available) {
         $document.protocol_observations = [ordered]@{
             schema_directory = [string]$nativeWorkerObservation.SchemaDirectory
@@ -2679,6 +2764,11 @@ function Invoke-CodexExecute {
     $protocolObservations = Get-JsonProperty -Object $preflight -Name 'protocol_observations' -Default $null
     $supportsProviderModelFallback = [bool](Get-JsonProperty -Object $protocolObservations -Name 'allow_provider_model_fallback' -Default $false)
     $transport = Invoke-CodexProjectedTransport -CommandInfo $commandInfo -Inputs $Inputs -Auth $auth -Platform $platform -SandboxInfo $sandboxInfo -HardFilesystem $hardFilesystem -VisiblePlatform $visiblePlatform -LastResponseRelativePath $lastResponsePath -SupportsProviderModelFallback $supportsProviderModelFallback
+    $runtimeReadiness = @(Get-JsonProperty -Object $transport.Process -Name 'Readiness' -Default @())
+    if (@($runtimeReadiness | Where-Object status -ne 'ready').Count -gt 0) {
+        $timestamp = [DateTime]::UtcNow.ToString('o')
+        return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status incompatible -FinalResponseReason 'infrastructure_blocked' -StartedUtc $started.ToString('o') -FinishedUtc $timestamp -Failure (New-ExecutionFailure -Code 'infrastructure_blocked' -Message 'A declared prerequisite failed in the execution projection before the first model turn.') -SessionId $sessionId -IsolationCapabilities ([ordered]@{}) -IsolationMechanisms @('preflight-only') -Evidence ([ordered]@{ readiness = $runtimeReadiness; resume = $false }) -AttemptCount 1
+    }
     $process = $transport.Process
     $stdoutArtifact = Write-CodexCapture -RunData $Inputs -RelativePath 'evidence/codex-events.jsonl' -Text $process.Stdout
     $stderrArtifact = Write-CodexCapture -RunData $Inputs -RelativePath 'evidence/codex-stderr.txt' -Text $process.Stderr
@@ -2729,6 +2819,7 @@ function Invoke-CodexExecute {
                                 command = Get-JsonProperty -Object $item -Name 'command'
                                 status = Get-JsonProperty -Object $item -Name 'status' -Default $null
                                 exit_code = Get-JsonProperty -Object $item -Name 'exit_code'
+                                output_bytes = [Text.Encoding]::UTF8.GetByteCount([string](Get-JsonProperty -Object $item -Name 'aggregated_output' -Default ''))
                             })
                     } else {
                         $files.Add([ordered]@{ type = $itemType; status = Get-JsonProperty -Object $item -Name 'status' -Default $null; item = $item })
@@ -2898,7 +2989,7 @@ function Invoke-CodexExecute {
         source = $auth.Kind
         provider_environment_variable = $auth.Name
         unrelated_environment_excluded = $true
-        child_tool_visibility = 'codex_shell_environment_policy_inherit_none'
+        child_tool_visibility = 'codex_shell_environment_policy_inherit_none_explicit_allowlist'
         value_observed = $false
         auth_only_home = if ($auth.Kind -eq 'subscription_file') { [bool]$process.AuthOnlyHome } else { $false }
         auth_only_home_removed = if ($auth.Kind -eq 'subscription_file') { [bool]$process.AuthOnlyHomeRemoved } else { $true }
@@ -2912,6 +3003,9 @@ function Invoke-CodexExecute {
         execution_paths = $transport.ExecutionPaths
         event_counts = $eventCounts
         commands = @($commands)
+        readiness = $runtimeReadiness
+        skill_exposure = [string](Get-JsonProperty -Object $Inputs.Run.Contract -Name 'skillExposure' -Default 'legacy')
+        observed_shell_reference_reads = @(Get-ObservedSkillReferenceReads -Commands @($commands) -SkillRoot $Inputs.Run.SkillDirectoryPath)
         files = @($files)
         prompt_first_input = if ($auth.Kind -eq 'subscription_file') { $promptFidelity } else { $true }
         resume = $false

@@ -103,6 +103,7 @@ function Get-ManifestRunRecords {
             throw "$evalName manifest entry must declare runs."
         }
 
+        $prerequisiteFingerprint = $null
         foreach ($configuration in $configurations) {
             $runEntry = Get-JsonProperty -Object $runContainer -Name $configuration -Default $null
             if ($null -eq $runEntry) {
@@ -128,6 +129,11 @@ function Get-ManifestRunRecords {
                 -Kind File `
                 -RequireExists
             $runManifest = Read-RunnerJson -Path $runManifestPath
+            $armPrerequisites = Get-JsonFingerprint -Object @{ prerequisites = Get-JsonProperty -Object $runManifest -Name 'prerequisites' }
+            if ($null -ne $prerequisiteFingerprint -and $armPrerequisites -ne $prerequisiteFingerprint) {
+                throw "$evalName has different declared prerequisites between benchmark arms."
+            }
+            $prerequisiteFingerprint = $armPrerequisites
             $runEvalId = [int](Get-JsonProperty -Object $runManifest -Name 'evalId' -Default 0)
             $runEvalName = [string](Get-JsonProperty -Object $runManifest -Name 'evalName' -Default '')
             $runMode = [string](Get-JsonProperty -Object $runManifest -Name 'mode' -Default '')

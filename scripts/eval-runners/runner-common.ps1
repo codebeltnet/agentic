@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 if (-not (Get-Command Write-RunnerProgress -ErrorAction SilentlyContinue)) {
     . (Join-Path $PSScriptRoot 'runner-progress.ps1')
 }
+. (Join-Path $PSScriptRoot 'eval-readiness.ps1')
 
 function Format-UtcTimestamp {
     param([Parameter(Mandatory = $true)][DateTime]$Value)
@@ -1097,6 +1098,7 @@ function Resolve-RunContract {
     }
 
     $promptBytes = [System.IO.File]::ReadAllBytes($promptPath)
+    Assert-EvalStagedDependencies -RunRoot $runRoot -Contract $run
     $fixtureHash = [string](Get-JsonProperty -Object $run -Name 'fixtureHash' -Default '')
     if (-not (Test-Sha256 -Value $fixtureHash)) {
         throw 'run.json fixtureHash must be a SHA-256 value.'
@@ -1798,7 +1800,7 @@ function Assert-ExecutionResult {
     return $true
 }
 
-function New-RunnerEnvironment {
+function New-RunnerShellEnvironment {
     <#
       Builds the MODEL-BACKED eval isolation environment. This is deliberately
       NOT the model-free probe environment (New-RunnerProbeEnvironment): here
@@ -1811,13 +1813,11 @@ function New-RunnerEnvironment {
       never the host profile.
     #>
     param(
-        [Parameter(Mandatory = $true)][object]$Run,
-        [string[]]$AuthenticationVariables = @(),
-        [hashtable]$Additional = @{}
+        [Parameter(Mandatory = $true)][object]$Run
     )
 
     $environment = [ordered]@{}
-    foreach ($name in @('PATH', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT', 'LANG', 'LC_ALL', 'TZ', 'SSL_CERT_FILE', 'NODE_PATH')) {
+    foreach ($name in @('LANG', 'LC_ALL', 'TZ')) {
         $value = [Environment]::GetEnvironmentVariable($name)
         if (-not [string]::IsNullOrWhiteSpace($value)) {
             $environment[$name] = $value
@@ -1825,7 +1825,45 @@ function New-RunnerEnvironment {
     }
 
     $tempPath = Join-Path $Run.HomeDirectoryPath 'tmp'
-    foreach ($directory in @($Run.HomeDirectoryPath, $tempPath, (Join-Path $Run.HomeDirectoryPath '.config'), (Join-Path $Run.HomeDirectoryPath '.local/share'), (Join-Path $Run.HomeDirectoryPath '.cache'))) {
+    $toolPath = Join-Path $Run.HomeDirectoryPath 'tools'
+    $pathDirectories = @($toolPath)
+    $requirements = Get-JsonProperty -Object (Get-JsonProperty -Object $Run -Name 'Contract') -Name 'prerequisites'
+    $commands = @('pwsh', 'git', 'rg', 'dotnet', 'node') + @(Get-JsonProperty -Object $requirements -Name 'executables' -Default @() | ForEach-Object { [string]$_ })
+    foreach ($command in ($commands | Select-Object -Unique)) {
+        if ($command -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]*$') { throw "Invalid evaluation executable name '$command'." }
+        $application = Get-Command -Name $command -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $application) {
+            $pathDirectories += Split-Path -Parent $application.Source
+            if ($command -eq 'dotnet') {
+                $dotnet = [IO.FileInfo]::new($application.Source)
+                $target = $dotnet.ResolveLinkTarget($true)
+                $environment['DOTNET_ROOT'] = if ($null -ne $target) { $target.DirectoryName } else { $dotnet.DirectoryName }
+            }
+        }
+    }
+    if ($IsWindows) {
+        $windows = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+        $system = [Environment]::SystemDirectory
+        $environment['SystemRoot'] = $windows
+        $environment['WINDIR'] = $windows
+        $environment['ComSpec'] = Join-Path $system 'cmd.exe'
+        $environment['PATHEXT'] = '.COM;.EXE;.BAT;.CMD'
+        foreach ($name in @('ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'ProgramData', 'CommonProgramFiles', 'CommonProgramFiles(x86)', 'CommonProgramW6432', 'SystemDrive', 'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS')) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if (-not [string]::IsNullOrWhiteSpace($value)) { $environment[$name] = $value }
+        }
+        $environment['APPDATA'] = Join-Path $Run.HomeDirectoryPath 'AppData/Roaming'
+        $environment['LOCALAPPDATA'] = Join-Path $Run.HomeDirectoryPath 'AppData/Local'
+        $drive = [IO.Path]::GetPathRoot($Run.HomeDirectoryPath)
+        $environment['HOMEDRIVE'] = $drive.TrimEnd('\')
+        $environment['HOMEPATH'] = '\' + $Run.HomeDirectoryPath.Substring($drive.Length)
+        $pathDirectories += @($system, $windows, (Join-Path $system 'Wbem'))
+    } else {
+        $pathDirectories += @('/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin')
+    }
+    $environment['PATH'] = ($pathDirectories | Where-Object { [IO.Path]::IsPathFullyQualified($_) } | Select-Object -Unique) -join [IO.Path]::PathSeparator
+    foreach ($directory in @($Run.HomeDirectoryPath, $tempPath, $toolPath, (Join-Path $Run.HomeDirectoryPath '.config'), (Join-Path $Run.HomeDirectoryPath '.local/share'), (Join-Path $Run.HomeDirectoryPath '.cache')) + @($environment['APPDATA'], $environment['LOCALAPPDATA'])) {
+        if ([string]::IsNullOrWhiteSpace($directory)) { continue }
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
 
@@ -1836,9 +1874,28 @@ function New-RunnerEnvironment {
     $environment['XDG_CACHE_HOME'] = Join-Path $Run.HomeDirectoryPath '.cache'
     $environment['TEMP'] = $tempPath
     $environment['TMP'] = $tempPath
+    $environment['TMPDIR'] = $tempPath
+    $environment['DOTNET_CLI_HOME'] = $Run.HomeDirectoryPath
+    $environment['NUGET_PACKAGES'] = Join-Path $Run.HomeDirectoryPath '.nuget/packages'
+    $environment['NUGET_HTTP_CACHE_PATH'] = Join-Path $Run.HomeDirectoryPath '.cache/nuget-http'
+    $environment['DOTNET_CLI_TELEMETRY_OPTOUT'] = '1'
+    $environment['GIT_CONFIG_NOSYSTEM'] = '1'
+    $environment['GIT_CONFIG_GLOBAL'] = Join-Path $Run.HomeDirectoryPath '.gitconfig'
+    $environment['GIT_TERMINAL_PROMPT'] = '0'
     $environment['CI'] = '1'
     $environment['NO_COLOR'] = '1'
 
+    return $environment
+}
+
+function New-RunnerEnvironment {
+    param(
+        [Parameter(Mandatory = $true)][object]$Run,
+        [string[]]$AuthenticationVariables = @(),
+        [hashtable]$Additional = @{}
+    )
+
+    $environment = New-RunnerShellEnvironment -Run $Run
     foreach ($name in $AuthenticationVariables | Sort-Object -Unique) {
         $value = [Environment]::GetEnvironmentVariable($name)
         if (-not [string]::IsNullOrWhiteSpace($value)) {
