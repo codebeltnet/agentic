@@ -74,6 +74,7 @@ foreach ($path in ($env:PATH -split [IO.Path]::PathSeparator)) {
 }
 if ($IsWindows -and @('.EXE', '.CMD' | Where-Object { $_ -notin ($env:PATHEXT -split ';') }).Count -gt 0) { throw 'PATHEXT cannot discover Windows executables.' }
 if ([IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetTempPath()) -ne $env:TEMP) { throw 'OS temporary directory differs from the isolated TEMP path.' }
+if (-not [IO.Path]::EndsInDirectorySeparator($env:NUGET_PACKAGES)) { throw 'NUGET_PACKAGES must end with a directory separator for MSBuild SourceRoot compatibility.' }
 '@
     # PowerShell uses the Unix temp API, which reads TMPDIR, and the Windows
     # temp API, which reads TMP/TEMP. All three point to the same directory.

@@ -1886,7 +1886,10 @@ function New-RunnerShellEnvironment {
     $environment['MSBUILDDISABLENODEREUSE'] = '1'
     $environment['DOTNET_CLI_USE_MSBUILD_SERVER'] = '0'
     $environment['UseSharedCompilation'] = 'false'
-    $environment['NUGET_PACKAGES'] = Join-Path $Run.HomeDirectoryPath '.nuget/packages'
+    # NuGet writes NUGET_PACKAGES verbatim into obj/*.nuget.g.props as NuGetPackageRoot.
+    # Preserve a trailing directory separator so consumer <SourceRoot Include="$(NuGetPackageRoot)" />
+    # and deterministic SourceLink builds satisfy Roslyn's MapSourceRoots invariant.
+    $environment['NUGET_PACKAGES'] = ([IO.Path]::Combine($Run.HomeDirectoryPath, '.nuget', 'packages')).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
     $environment['NUGET_HTTP_CACHE_PATH'] = Join-Path $Run.HomeDirectoryPath '.cache/nuget-http'
     $environment['DOTNET_CLI_TELEMETRY_OPTOUT'] = '1'
     $environment['GIT_CONFIG_NOSYSTEM'] = '1'

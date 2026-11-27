@@ -94,11 +94,18 @@ function Initialize-EvalPrerequisites {
         }
         $restoreRoot = Join-Path $run.HomeDirectoryPath 'restore-probe'
         New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
-        Write-Utf8File -Path (Join-Path $restoreRoot 'Probe.csproj') -Content "<Project Sdk='Microsoft.NET.Sdk'><PropertyGroup><TargetFramework>$($restore.framework)</TargetFramework></PropertyGroup><ItemGroup>$($references -join '')</ItemGroup></Project>"
+        $probeProject = "<Project Sdk='Microsoft.NET.Sdk'><PropertyGroup><TargetFramework>$($restore.framework)</TargetFramework><Deterministic>true</Deterministic><ContinuousIntegrationBuild>true</ContinuousIntegrationBuild><PublishRepositoryUrl>true</PublishRepositoryUrl><EmbedUntrackedSources>true</EmbedUntrackedSources><RepositoryUrl>https://example.invalid/readiness-probe</RepositoryUrl><RepositoryType>git</RepositoryType><NuGetAudit>false</NuGetAudit></PropertyGroup><ItemGroup Condition=`"'`$(NuGetPackageRoot)' != ''`"><SourceRoot Include='`$(NuGetPackageRoot)' RepositoryUrl='https://example.invalid/readiness-probe'/></ItemGroup><ItemGroup>$($references -join '')</ItemGroup></Project>"
+        Write-Utf8File -Path (Join-Path $restoreRoot 'Probe.csproj') -Content $probeProject
+        Write-Utf8File -Path (Join-Path $restoreRoot 'Probe.cs') -Content 'public static class ReadinessProbe {}'
         Write-Utf8File -Path (Join-Path $restoreRoot 'NuGet.Config') -Content "<configuration><packageSources><clear/><add key='nuget.org' value='https://api.nuget.org/v3/index.json'/></packageSources></configuration>"
         $staged.probes += [ordered]@{
             id = 'nuget-restore'
             command = @('dotnet', 'restore', '{run}/home/restore-probe/Probe.csproj', '--configfile', '{run}/home/restore-probe/NuGet.Config')
+            timeoutMs = 45000
+        }
+        $staged.probes += [ordered]@{
+            id = 'dotnet-build'
+            command = @('dotnet', 'build', '{run}/home/restore-probe/Probe.csproj', '--no-restore', '--nologo')
             timeoutMs = 45000
         }
     }
