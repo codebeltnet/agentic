@@ -3692,49 +3692,24 @@ internal static class DocfxValidator
             }
             catch (Exception ex) when (ex is IOException or JsonException)
             {
-                // Fall back to output directories and project XML below.
+                // Fall back to declared project metadata and build folders below.
             }
         }
 
-        // 2. Built output directories under bin/<config>/<tfm> and obj/<config>/<tfm> that contain the assembly.
-        var dllName = project.AssemblyName + ".dll";
-        foreach (var root in new[] { Path.Combine(projectDir, "bin", configuration), Path.Combine(projectDir, "obj", configuration) })
+        // Evaluated framework data in project.assets.json is authoritative; never re-add stale
+        // bin/obj folders from removed target frameworks when evaluated data is present.
+        if (tfms.Count > 0)
         {
-            if (!Directory.Exists(root))
-            {
-                continue;
-            }
-
-            try
-            {
-                foreach (var subDir in Directory.GetDirectories(root))
-                {
-                    var candidateTfm = Path.GetFileName(subDir);
-                    if (!LooksLikeTargetFrameworkMoniker(candidateTfm))
-                    {
-                        continue;
-                    }
-
-                    if (File.Exists(Path.Combine(subDir, dllName)) ||
-                        File.Exists(Path.Combine(subDir, "ref", dllName)))
-                    {
-                        AddTfm(candidateTfm);
-                    }
-                }
-            }
-            catch
-            {
-                // Best effort.
-            }
+            return tfms;
         }
 
-        // 3. Declared TargetFramework/TargetFrameworks in the .csproj itself.
+        // 2. Declared TargetFramework/TargetFrameworks in the .csproj itself.
         foreach (var declared in project.TargetFrameworks)
         {
             AddTfm(declared);
         }
 
-        // 4. Inherited TargetFramework/TargetFrameworks from Directory.Build.props when nothing else was found.
+        // 3. Inherited TargetFramework/TargetFrameworks from Directory.Build.props when nothing else was found.
         if (tfms.Count == 0)
         {
             for (var dir = projectDir; dir is not null && (PathsEqual(dir, repoRoot) || IsPathUnderDirectory(dir, repoRoot));
@@ -3772,6 +3747,42 @@ internal static class DocfxValidator
                 if (tfms.Count > 0)
                 {
                     break;
+                }
+            }
+        }
+
+        // 4. Built output directories under bin/<config>/<tfm> and obj/<config>/<tfm> only when
+        //    neither evaluated nor declared framework data is available.
+        if (tfms.Count == 0)
+        {
+            var dllName = project.AssemblyName + ".dll";
+            foreach (var root in new[] { Path.Combine(projectDir, "bin", configuration), Path.Combine(projectDir, "obj", configuration) })
+            {
+                if (!Directory.Exists(root))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    foreach (var subDir in Directory.GetDirectories(root))
+                    {
+                        var candidateTfm = Path.GetFileName(subDir);
+                        if (!LooksLikeTargetFrameworkMoniker(candidateTfm))
+                        {
+                            continue;
+                        }
+
+                        if (File.Exists(Path.Combine(subDir, dllName)) ||
+                            File.Exists(Path.Combine(subDir, "ref", dllName)))
+                        {
+                            AddTfm(candidateTfm);
+                        }
+                    }
+                }
+                catch
+                {
+                    // Best effort.
                 }
             }
         }
@@ -10099,6 +10110,92 @@ internal static class DocfxValidator
                 return hash;
             }
 
+            var projectClosureHashCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string HashProjectClosure(string projectPath, HashSet<string>? visiting = null)
+            {
+                var fullProject = Path.GetFullPath(projectPath);
+                if (projectClosureHashCache.TryGetValue(fullProject, out var cachedClosure))
+                {
+                    return cachedClosure;
+                }
+
+                visiting ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (!visiting.Add(fullProject))
+                {
+                    return "CYCLE";
+                }
+
+                try
+                {
+                    var closureBuilder = new StringBuilder();
+                    closureBuilder.Append("csproj:").Append(NormalizeDocfxPath(Rel(repoRoot, fullProject)))
+                        .Append('=').Append(HashFileIfExists(fullProject)).Append('\n');
+
+                    foreach (var inputRel in RunActionProjectInputs(repoRoot, fullProject).OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+                    {
+                        var inputFull = Path.GetFullPath(inputRel, repoRoot);
+                        closureBuilder.Append("input:").Append(NormalizeDocfxPath(inputRel))
+                            .Append('=').Append(HashFileIfExists(inputFull)).Append('\n');
+                    }
+
+                    var projDir = Path.GetDirectoryName(fullProject);
+                    if (!string.IsNullOrEmpty(projDir) && Directory.Exists(projDir))
+                    {
+                        foreach (var csFile in EnumerateFiles(projDir, "*.cs")
+                                     .OrderBy(p => NormalizeDocfxPath(Rel(repoRoot, p)), StringComparer.OrdinalIgnoreCase))
+                        {
+                            closureBuilder.Append("src:").Append(NormalizeDocfxPath(Rel(repoRoot, csFile)))
+                                .Append('=').Append(HashFileIfExists(csFile)).Append('\n');
+                        }
+                    }
+
+                    if (File.Exists(fullProject) && !string.IsNullOrEmpty(projDir))
+                    {
+                        var referencedProjects = new List<string>();
+                        try
+                        {
+                            var projXml = XDocument.Load(fullProject);
+                            foreach (var el in projXml.Descendants())
+                            {
+                                if (el.Name.LocalName != "ProjectReference")
+                                {
+                                    continue;
+                                }
+
+                                var include = el.Attribute("Include")?.Value?.Trim();
+                                if (string.IsNullOrWhiteSpace(include))
+                                {
+                                    continue;
+                                }
+
+                                var refFull = Path.GetFullPath(include.Replace('\\', Path.DirectorySeparatorChar), projDir);
+                                referencedProjects.Add(refFull);
+                            }
+                        }
+                        catch
+                        {
+                            // Ignore malformed project XML; the .csproj hash above still tracks changes.
+                        }
+
+                        foreach (var refProj in referencedProjects
+                                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                                     .OrderBy(p => NormalizeDocfxPath(Rel(repoRoot, p)), StringComparer.OrdinalIgnoreCase))
+                        {
+                            closureBuilder.Append("pref:").Append(NormalizeDocfxPath(Rel(repoRoot, refProj)))
+                                .Append('=').Append(HashProjectClosure(refProj, visiting)).Append('\n');
+                        }
+                    }
+
+                    var closureHash = ComputeSha256Hex(closureBuilder.ToString());
+                    projectClosureHashCache[fullProject] = closureHash;
+                    return closureHash;
+                }
+                finally
+                {
+                    visiting.Remove(fullProject);
+                }
+            }
+
             var items = new List<BehavioralInventoryItem>();
             var orderedFiles = workspace.MarkdownFiles
                 .OrderBy(f => Rel(repoRoot, f), StringComparer.OrdinalIgnoreCase)
@@ -10186,20 +10283,14 @@ internal static class DocfxValidator
                     var depBuilder = new StringBuilder();
                     foreach (var proj in ownerProjects.OrderBy(p => Rel(repoRoot, p.Path), StringComparer.OrdinalIgnoreCase))
                     {
-                        depBuilder.Append("proj:").Append(NormalizeDocfxPath(Rel(repoRoot, proj.Path)))
-                            .Append('=').Append(HashFileIfExists(proj.Path)).Append('\n');
-                        foreach (var inputRel in RunActionProjectInputs(repoRoot, proj.Path).OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
-                        {
-                            var inputFull = Path.GetFullPath(inputRel, repoRoot);
-                            depBuilder.Append("input:").Append(NormalizeDocfxPath(inputRel))
-                                .Append('=').Append(HashFileIfExists(inputFull)).Append('\n');
-                        }
+                        depBuilder.Append("proj-closure:").Append(NormalizeDocfxPath(Rel(repoRoot, proj.Path)))
+                            .Append('=').Append(HashProjectClosure(proj.Path)).Append('\n');
                     }
 
                     if (context is not null)
                     {
-                        depBuilder.Append("ctx-proj:").Append(NormalizeDocfxPath(Rel(repoRoot, context.Project)))
-                            .Append('=').Append(HashFileIfExists(context.Project)).Append('\n');
+                        depBuilder.Append("ctx-proj-closure:").Append(NormalizeDocfxPath(Rel(repoRoot, context.Project)))
+                            .Append('=').Append(HashProjectClosure(context.Project)).Append('\n');
                         depBuilder.Append("ctx-src:").Append(NormalizeDocfxPath(Rel(repoRoot, context.Source)))
                             .Append('=').Append(HashFileIfExists(context.Source)).Append('\n');
                     }
@@ -10280,16 +10371,69 @@ internal static class DocfxValidator
             @"<!--\s*docfx-run-actions:start\s*-->.*?<!--\s*docfx-run-actions:end\s*-->",
             string.Empty,
             RegexOptions.Singleline | RegexOptions.CultureInvariant);
-        // Strip fenced code blocks so claimSha256 tracks documentation narrative/expected claims
-        // independently of sourceSha256 (which tracks the displayed code itself).
-        normalized = Regex.Replace(
-            normalized,
-            @"(?ms)^[ \t]*`{3,}[^\n]*\n.*?^[ \t]*`{3,}[ \t]*$",
-            string.Empty,
-            RegexOptions.CultureInvariant);
+        // Strip only C# code fences (tracked separately by sourceSha256); preserve prose and
+        // non-C# fenced blocks (such as expected console/text/JSON/XML output blocks) so edits
+        // to documented expected results invalidate claimSha256.
+        normalized = StripCSharpFences(normalized);
         var lines = normalized.Split('\n').Select(l => l.TrimEnd(' ', '\t'));
         var canonical = string.Join("\n", lines).Trim();
         return ComputeSha256Hex(canonical);
+    }
+
+    private static string StripCSharpFences(string normalizedMarkdown)
+    {
+        var lines = normalizedMarkdown.Split('\n');
+        var kept = new List<string>(lines.Length);
+        var inFence = false;
+        var stripCurrentFence = false;
+        var fenceChar = '\0';
+        var fenceLength = 0;
+
+        foreach (var line in lines)
+        {
+            if (!inFence)
+            {
+                var openMatch = Regex.Match(line, @"^[ \t]*(`{3,}|~{3,})[ \t]*([^\n]*)$", RegexOptions.CultureInvariant);
+                if (openMatch.Success)
+                {
+                    var marker = openMatch.Groups[1].Value;
+                    var info = openMatch.Groups[2].Value.Trim();
+                    var langToken = info.Length == 0
+                        ? string.Empty
+                        : info.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries)[0];
+                    inFence = true;
+                    fenceChar = marker[0];
+                    fenceLength = marker.Length;
+                    stripCurrentFence = string.Equals(langToken, "csharp", StringComparison.OrdinalIgnoreCase) ||
+                                        string.Equals(langToken, "cs", StringComparison.OrdinalIgnoreCase);
+                    if (!stripCurrentFence)
+                    {
+                        kept.Add(line);
+                    }
+
+                    continue;
+                }
+
+                kept.Add(line);
+            }
+            else
+            {
+                var trimmed = line.Trim();
+                var isClose = trimmed.Length >= fenceLength && trimmed.All(c => c == fenceChar);
+                if (!stripCurrentFence)
+                {
+                    kept.Add(line);
+                }
+
+                if (isClose)
+                {
+                    inFence = false;
+                    stripCurrentFence = false;
+                }
+            }
+        }
+
+        return string.Join("\n", kept);
     }
 
     private static string ComputeSha256Hex(string text)
@@ -10574,6 +10718,17 @@ internal static class DocfxValidator
                         transportStatus[transport] = "Unverified";
                     }
 
+                    // Preserve recorded review findings when an existing entry becomes stale so
+                    // re-initializing after a repair never silently drops unresolved review IDs
+                    // or repair notes, while still clearing stale execution evidence and forcing review.
+                    object preservedFindings = Array.Empty<object>();
+                    if (existingById.TryGetValue(item.ExampleId, out var stalePrev) &&
+                        stalePrev.TryGetProperty("findings", out var prevFindings) &&
+                        prevFindings.ValueKind == JsonValueKind.Array)
+                    {
+                        preservedFindings = prevFindings.Clone();
+                    }
+
                     serializedExamples.Add(new
                     {
                         exampleId = item.ExampleId,
@@ -10598,7 +10753,7 @@ internal static class DocfxValidator
                         executionCommand = string.Empty,
                         disposition = "unreviewed",
                         transportStatus,
-                        findings = Array.Empty<object>()
+                        findings = preservedFindings
                     });
                 }
             }
