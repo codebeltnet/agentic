@@ -509,6 +509,7 @@ function Get-ReportSkillStats {
         file_count = $files.Count
         total_bytes = $totalBytes
         inlined_bytes = $inlinedBytes
+        exposure_mode = Get-Property -Object $Manifest.skill_instructions -Name 'exposure_mode' -Default 'legacy'
         token_count = Get-Property -Object $Manifest -Name 'skill_token_count' -Default $null
         hash = [string](Get-Property -Object $Manifest -Name 'skill_hash' -Default '')
     }
@@ -794,6 +795,8 @@ $benchmark.metadata.runs_per_configuration = 1
 $benchmark.metadata.executor_model = if ($models.Count -eq 0) { 'model not recorded' } else { $models -join ', ' }
 $benchmark.metadata.analyzer_model = 'external skill-creator evaluator'
 $benchmark.metadata.evals_run = @($workspaceEntries | ForEach-Object { $_.EvalId })
+$skillInstructions = Get-Property -Object $manifest -Name 'skill_instructions' -Default $null
+$benchmark.metadata | Add-Member -NotePropertyName skill_exposure -NotePropertyValue (Get-Property -Object $skillInstructions -Name 'exposure_mode' -Default 'legacy') -Force
 foreach ($run in @($benchmark.runs)) {
     $match = @($workspaceEntries | Where-Object { $_.EvalId -eq [int]$run.eval_id }) | Select-Object -First 1
     if ($null -ne $match) {
