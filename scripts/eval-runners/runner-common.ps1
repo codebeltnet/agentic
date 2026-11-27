@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'process-ownership.ps1')
 $ErrorActionPreference = 'Stop'
 
 if (-not (Get-Command Write-RunnerProgress -ErrorAction SilentlyContinue)) {
@@ -32,6 +33,12 @@ function Get-RunnerPreflightTimeoutSeconds {
     # Preflight is a model-free capability probe. Keep its watchdog independent
     # of the model execution allowance in execution-profile.json.
     return 120
+}
+
+function Get-CodexExecutionStartupAllowanceSeconds {
+    # Execute rechecks compatibility, then performs discovery and startup in
+    # the behavioral projection before the first turn has a model deadline.
+    return (Get-RunnerPreflightTimeoutSeconds) + 30 + 85
 }
 
 function Get-PackageRunnerDescriptor {
@@ -1876,6 +1883,9 @@ function New-RunnerShellEnvironment {
     $environment['TMP'] = $tempPath
     $environment['TMPDIR'] = $tempPath
     $environment['DOTNET_CLI_HOME'] = $Run.HomeDirectoryPath
+    $environment['MSBUILDDISABLENODEREUSE'] = '1'
+    $environment['DOTNET_CLI_USE_MSBUILD_SERVER'] = '0'
+    $environment['UseSharedCompilation'] = 'false'
     $environment['NUGET_PACKAGES'] = Join-Path $Run.HomeDirectoryPath '.nuget/packages'
     $environment['NUGET_HTTP_CACHE_PATH'] = Join-Path $Run.HomeDirectoryPath '.cache/nuget-http'
     $environment['DOTNET_CLI_TELEMETRY_OPTOUT'] = '1'
@@ -2039,7 +2049,8 @@ function Invoke-RunnerProcess {
         [System.Collections.IDictionary]$Environment = @{},
         [AllowEmptyCollection()][byte[]]$InputBytes = @(),
         [int]$TimeoutSeconds = 900,
-        [hashtable]$ProgressContext = $null
+        [hashtable]$ProgressContext = $null,
+        [switch]$OwnWindowsProcessTree
     )
 
     $start = [DateTime]::UtcNow
@@ -2059,7 +2070,7 @@ function Invoke-RunnerProcess {
         $startInfo.Environment[$key] = [string]$Environment[$key]
     }
 
-    $process = [System.Diagnostics.Process]::new()
+    $process = if ($OwnWindowsProcessTree) { New-EvalOwnedProcess } else { [System.Diagnostics.Process]::new() }
     $process.StartInfo = $startInfo
     $processStarted = $false
     $stdoutTask = $null
@@ -2215,6 +2226,11 @@ function Invoke-RunnerProcess {
         if ($timedOut) {
             & $emitProgress 'terminating' 'model process watchdog deadline reached'
             $killAttempted = $true
+        }
+        if ($OwnWindowsProcessTree -and $IsWindows) {
+            Stop-EvalOwnedProcess -Process $process
+            $terminationObserved = $true
+        } elseif ($timedOut) {
             try { $process.Kill($true) } catch { }
             # A forced termination is allowed a small, finite grace period.
             # Never call the parameterless WaitForExit on this path: a child
@@ -2274,8 +2290,9 @@ function Invoke-RunnerProcess {
         }
     } catch {
         if ($processStarted) {
-            try { $process.Kill($true) } catch { }
-            try { if (-not $process.HasExited) { [void]$process.WaitForExit(5000) } } catch { }
+            try { Stop-EvalOwnedProcess -Process $process } catch {
+                [Console]::Error.WriteLine("Process cleanup failed: $($_.Exception.Message)")
+            }
         }
         throw
     } finally {

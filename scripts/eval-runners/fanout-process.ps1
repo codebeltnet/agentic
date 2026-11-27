@@ -21,6 +21,7 @@ $ErrorActionPreference = 'Stop'
 if (-not (Get-Command Write-RunnerProgress -ErrorAction SilentlyContinue)) {
     . (Join-Path $PSScriptRoot 'runner-progress.ps1')
 }
+. (Join-Path $PSScriptRoot 'process-ownership.ps1')
 
 function New-RunnerChildProcessStartInfo {
     <#
@@ -76,15 +77,22 @@ function Start-RunnerChildProcess {
     New-Item -ItemType Directory -Path (Split-Path -Parent $StdoutPath) -Force | Out-Null
     New-Item -ItemType Directory -Path (Split-Path -Parent $StderrPath) -Force | Out-Null
     $startInfo = New-RunnerChildProcessStartInfo -FilePath $FilePath -ArgumentList $ArgumentList -WorkingDirectory $WorkingDirectory
-    $process = [System.Diagnostics.Process]::new()
+    $authScope = $null
+    if ($Runner -eq 'codex') {
+        $authScope = Join-Path ([IO.Path]::GetTempPath()) ('agentic-codex-auth-scope-' + [guid]::NewGuid().ToString('N'))
+        $startInfo.Environment['AGENTIC_CODEX_AUTH_SCOPE'] = $authScope
+    }
+    $process = New-EvalOwnedProcess
     $process.StartInfo = $startInfo
-    $stdoutStream = [System.IO.File]::Open($StdoutPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
-    $stderrStream = [System.IO.File]::Open($StderrPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $stdoutStream = $null
+    $stderrStream = $null
     try {
+        $stdoutStream = [System.IO.File]::Open($StdoutPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+        $stderrStream = [System.IO.File]::Open($StderrPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
         if (-not $process.Start()) { throw "Failed to start runner child process '$FilePath'." }
     } catch {
-        $stdoutStream.Dispose()
-        $stderrStream.Dispose()
+        if ($null -ne $stdoutStream) { $stdoutStream.Dispose() }
+        if ($null -ne $stderrStream) { $stderrStream.Dispose() }
         $process.Dispose()
         throw
     }
@@ -116,6 +124,10 @@ function Start-RunnerChildProcess {
         DeadlineUtc = $startedUtc.AddSeconds([Math]::Max(1, $TimeoutSeconds))
         WatchdogExpired = $false
         TimedOut = $false
+        TerminationReason = ''
+        CleanupFailures = @()
+        AuthScope = $authScope
+        ExitCode = $null
         TerminationObserved = $false
         OutputDrainCompleted = $false
         FinishedUtc = $null
@@ -336,11 +348,13 @@ function Write-RunnerChildDiagnostic {
     if (-not (Test-RunnerChildProgressEnabled -Child $Child)) { return }
     $fields = Get-RunnerChildProgressFields -Child $Child -State $State
     if ($null -ne $ExitCode) { $fields['exitCode'] = [int]$ExitCode }
-    if ($null -ne $Child.PSObject.Properties['TimedOut']) { $fields['terminationRequested'] = [bool]$Child.TimedOut }
+    $fields['terminationRequested'] = -not [string]::IsNullOrEmpty($Child.TerminationReason)
+    if ($Child.TerminationReason) { $fields['terminationReason'] = $Child.TerminationReason }
     if ($null -ne $Child.PSObject.Properties['TerminationObserved']) { $fields['terminationObserved'] = [bool]$Child.TerminationObserved }
     if ($null -ne $Child.PSObject.Properties['OutputDrainCompleted']) { $fields['outputDrainCompleted'] = [bool]$Child.OutputDrainCompleted }
     switch ($State) {
-        'timed-out' { $fields['detail'] = 'watchdog timeout expired' }
+        'timed-out' { $fields['detail'] = $Child.TerminationReason }
+        'cancelled' { $fields['detail'] = $Child.TerminationReason }
         'failed' { $fields['detail'] = 'process exited with non-zero status' }
     }
     Write-RunnerProgress -Fields $fields -LogPath ([string]$Child.ProgressLogPath) -Channel Operator
@@ -366,15 +380,15 @@ function Complete-RunnerChildProcess {
     #>
     param(
         [Parameter(Mandatory = $true)][object]$Child,
-        [int]$TimeoutSeconds = 0
+        [string]$CancellationReason = ''
     )
 
-    # An explicit timeout is a cleanup override (used by the fan-out error
-    # path); otherwise honor the absolute deadline captured at start.
-    $deadline = if ($TimeoutSeconds -gt 0) { [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSeconds)) } elseif ($null -ne $Child.DeadlineUtc) { [DateTime]$Child.DeadlineUtc } else { [DateTime]::UtcNow.AddSeconds(1) }
-    $timedOut = [bool]$Child.WatchdogExpired
+    if ($null -ne $Child.FinishedUtc) { return $Child.ExitCode }
+    $deadline = [DateTime]$Child.DeadlineUtc
+    $timedOut = [bool]$Child.WatchdogExpired -and -not $CancellationReason
+    $failures = [System.Collections.Generic.List[string]]::new()
     try {
-        if (-not $Child.Process.HasExited -and -not $timedOut) {
+        if (-not $Child.Process.HasExited -and -not $timedOut -and -not $CancellationReason) {
             # Poll in slices no longer than the heartbeat interval so the tick
             # fires on schedule even when the child is slow. The 5 s cap
             # from before would have silenced a 30 s quiet preflight.
@@ -392,15 +406,39 @@ function Complete-RunnerChildProcess {
                 try { Invoke-RunnerChildHeartbeatTick -Child $Child } catch { }
             }
         }
-    } catch { $timedOut = $true }
-
-    if ($timedOut) {
-        $Child.TimedOut = $true
-        Write-RunnerChildProgress -Child $Child -State 'terminating' -Detail 'watchdog deadline reached'
-        try { $Child.Process.Kill($true) } catch { }
-        try { if (-not $Child.Process.HasExited) { [void]$Child.Process.WaitForExit(5000) } } catch { }
+    } catch {
+        $failures.Add("Process wait failed: $($_.Exception.Message)")
+        $CancellationReason = 'process wait failed'
     }
-    try { $Child.TerminationObserved = [bool]$Child.Process.HasExited } catch { $Child.TerminationObserved = $false }
+
+    $Child.TimedOut = $timedOut
+    if ($timedOut) {
+        $Child.TerminationReason = "$($Child.Phase) watchdog deadline reached at $($deadline.ToString('o'))"
+    } elseif ($CancellationReason) {
+        try {
+            if (-not $Child.Process.HasExited) { $Child.TerminationReason = $CancellationReason }
+        } catch {
+            $Child.TerminationReason = $CancellationReason
+            $failures.Add("Process exit inspection failed: $($_.Exception.Message)")
+        }
+    }
+    if ($Child.TerminationReason) {
+        try { Write-RunnerChildProgress -Child $Child -State 'terminating' -Detail $Child.TerminationReason } catch {
+            $failures.Add("Termination diagnostic failed: $($_.Exception.Message)")
+        }
+    }
+    try {
+        Stop-EvalOwnedProcess -Process $Child.Process
+        $Child.TerminationObserved = [bool]$Child.Process.HasExited
+    } catch { $failures.Add($_.Exception.Message) }
+    if ($Child.AuthScope -and (Test-Path -LiteralPath $Child.AuthScope)) {
+        try {
+            if (-not $Child.TerminationObserved) { throw 'Owned process exit could not be confirmed.' }
+            $authScopeItem = Get-Item -LiteralPath $Child.AuthScope -Force
+            if ($authScopeItem.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { throw 'The auth scope became a reparse point.' }
+            Remove-Item -LiteralPath $Child.AuthScope -Recurse -Force -ErrorAction Stop
+        } catch { $failures.Add("Codex credential scratch at '$($Child.AuthScope)' requires cleanup. $($_.Exception.Message)") }
+    }
 
     # Use one finite drain deadline. A descendant holding an inherited pipe
     # open must not make the fan-out process wait forever.
@@ -413,32 +451,37 @@ function Complete-RunnerChildProcess {
         )) {
         try {
             $remaining = [int][Math]::Max(1, [Math]::Min(5000, ($drainDeadline - [DateTime]::UtcNow).TotalMilliseconds))
-            $done = Wait-RunnerChildTaskBounded -Task $entry.Task -TimeoutMilliseconds $remaining
+            $done = (Wait-RunnerChildTaskBounded -Task $entry.Task -TimeoutMilliseconds $remaining) -and $entry.Task.IsCompletedSuccessfully
             if ($entry.Name -eq 'stdout') { $stdoutDone = $done } else { $stderrDone = $done }
         } catch { }
     }
     $Child.OutputDrainCompleted = $stdoutDone -and $stderrDone
+    if (-not $Child.OutputDrainCompleted) { $failures.Add('Runner child output drain failed or exceeded its 5-second grace period.') }
     # Account for any trailing partial line before reading final activity counts.
     foreach ($activity in @($Child.PSObject.Properties['StdoutActivity'], $Child.PSObject.Properties['StderrActivity'])) {
         if ($null -ne $activity -and $null -ne $activity.Value) { try { $activity.Value.FinalizeActivity() } catch { } }
     }
     # Surface any structured child progress that arrived just before exit.
-    [void](Send-RunnerChildRelay -Child $Child)
+    try { [void](Send-RunnerChildRelay -Child $Child) } catch { $failures.Add("Output relay failed: $($_.Exception.Message)") }
     foreach ($stream in @($Child.StdoutStream, $Child.StderrStream)) {
-        try { $stream.Flush() } catch { }
-        try { $stream.Dispose() } catch { }
+        try { $stream.Flush() } catch { $failures.Add($_.Exception.Message) }
+        try { $stream.Dispose() } catch { $failures.Add($_.Exception.Message) }
     }
     $exitCode = $null
-    if (-not $timedOut -and $Child.TerminationObserved) {
+    if (-not $Child.TerminationReason -and $Child.TerminationObserved) {
         try { $exitCode = [int]$Child.Process.ExitCode } catch { $exitCode = $null }
     }
-    try { $Child.Process.Dispose() } catch { }
+    try { $Child.Process.Dispose() } catch { $failures.Add($_.Exception.Message) }
+    $Child.CleanupFailures = @($failures.ToArray())
+    $Child.ExitCode = $exitCode
     $Child.FinishedUtc = [DateTime]::UtcNow
     # Final lifecycle: a timeout or non-zero exit yields a diagnostic snapshot so
     # the operator learns the last-known state before control returns to the
     # caller (which may then throw). A clean exit reports completion.
     if ($timedOut) {
         Write-RunnerChildDiagnostic -Child $Child -State 'timed-out' -ExitCode $exitCode
+    } elseif ($Child.TerminationReason) {
+        Write-RunnerChildDiagnostic -Child $Child -State 'cancelled'
     } elseif ($null -ne $exitCode -and $exitCode -ne 0) {
         Write-RunnerChildDiagnostic -Child $Child -State 'failed' -ExitCode $exitCode
     } else {

@@ -1849,7 +1849,9 @@ function New-RunnerPrompt {
     $executionBatches = [Math]::Max(1, [int][Math]::Ceiling($armCount / [double]$effectiveConcurrency))
     $preflightTimeoutSeconds = Get-RunnerPreflightTimeoutSeconds
     $serialPreflightAllowanceSeconds = $armCount * $preflightTimeoutSeconds
-    $longestChildAllowanceSeconds = ([Math]::Max(1, $maxScriptedUserTurns) * [Math]::Max(1, $PerArmTimeoutSeconds)) + [Math]::Max(0, $RunnerGraceSeconds)
+    $startupAllowance = if ($ExecutionSelection.Runner -eq 'codex') { Get-CodexExecutionStartupAllowanceSeconds } else { 0 }
+    $startupDetail = if ($startupAllowance -gt 0) { " + $startupAllowance seconds Codex preflight/discovery/startup" } else { '' }
+    $longestChildAllowanceSeconds = ([Math]::Max(1, $maxScriptedUserTurns) * [Math]::Max(1, $PerArmTimeoutSeconds)) + $startupAllowance + [Math]::Max(0, $RunnerGraceSeconds)
     $executionAllowanceSeconds = $executionBatches * $longestChildAllowanceSeconds
     $orchestrationGraceSeconds = [Math]::Max(1, $RunnerGraceSeconds)
     $phaseOneAllowanceSeconds = $serialPreflightAllowanceSeconds + $executionAllowanceSeconds + $orchestrationGraceSeconds
@@ -1864,7 +1866,7 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Phase 1 — blind execution')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine(("Phase 1 is one long-running foreground command. Set the caller shell/tool timeout to at least the package-computed Phase 1 allowance of {0} seconds ({1} arm(s) × {2}-second fixed model-free runner preflight timeout = {3}-second serial preflight allowance + {4}-second execution allowance across {5} batch(es) at concurrency {6}; each child allows {7} scripted user turn(s) × profile.timeout_seconds {8} + {9} seconds runner grace; + {10} seconds orchestration grace), not a default short timeout. For OpenCode, pass this allowance to the shell tool's explicit timeout setting before invoking the command." -f $phaseOneAllowanceSeconds, $armCount, $preflightTimeoutSeconds, $serialPreflightAllowanceSeconds, $executionAllowanceSeconds, $executionBatches, $effectiveConcurrency, $maxScriptedUserTurns, $PerArmTimeoutSeconds, [Math]::Max(0, $RunnerGraceSeconds), $orchestrationGraceSeconds))
+    [void]$builder.AppendLine(("Phase 1 is one long-running foreground command. Set the caller shell/tool timeout to at least the package-computed Phase 1 allowance of {0} seconds ({1} arm(s) × {2}-second fixed model-free runner preflight timeout = {3}-second serial preflight allowance + {4}-second execution allowance across {5} batch(es) at concurrency {6}; each child allows {7} scripted user turn(s) × profile.timeout_seconds {8}{11} + {9} seconds runner grace; + {10} seconds orchestration grace), not a default short timeout. For OpenCode, pass this allowance to the shell tool's explicit timeout setting before invoking the command." -f $phaseOneAllowanceSeconds, $armCount, $preflightTimeoutSeconds, $serialPreflightAllowanceSeconds, $executionAllowanceSeconds, $executionBatches, $effectiveConcurrency, $maxScriptedUserTurns, $PerArmTimeoutSeconds, [Math]::Max(0, $RunnerGraceSeconds), $orchestrationGraceSeconds, $startupDetail))
     [void]$builder.AppendLine('A caller-side shell timeout is not permission to invoke Phase 1 again. `invoke-runner-owned-arms.ps1` must be started exactly once for this iteration. If execution is interrupted and no valid `execution-freeze.json` exists, the package is incomplete and requires a fresh iteration.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Read the selected runner descriptor and its `delegation.dispatch_owner`. For runner-owned behavioral transport, invoke:')
