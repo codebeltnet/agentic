@@ -1,0 +1,28 @@
+[
+  {
+    "Page": "Cuemon.Data.TokenBuilder",
+    "Expected": [
+      "Is valid: True",
+      "Current:  'Alice,30,New York'",
+      "Is valid: True",
+      "Complete: 'Alice,30,New YorkE'",
+      "CSV line: 'Product ADescription with ; semicolon$'",
+      "Tokens:   3"
+    ]
+  },
+  {
+    "Page": "ProductRecord",
+    "Expected": [
+      "True",
+      "Product A;\"Description with ; semicolon\";$49.99"
+    ]
+  },
+  {
+    "Page": "RecordReader",
+    "Expected": [
+      "False",
+      "Alice,30,New York,Engineer",
+      "Product A;\"Description with ; semicolon\";$49.99"
+    ]
+  }
+]

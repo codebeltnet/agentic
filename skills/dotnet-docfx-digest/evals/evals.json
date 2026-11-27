@@ -1369,6 +1369,108 @@
         "Exercises the registered authentication handler and checks the authentication result.",
         "Separates recorded observations from expected results and transport status."
       ]
+    },
+    {
+      "id": 127,
+      "prompt": "dotnet-docfx-digest repair",
+      "expected_output": "Repairs both existing scenarios on disk without being told which example is defective.",
+      "expectations": [
+        "Running the repaired visible source against the provided implementation produces false before the last field, true after it and the full Alice,30,New York,Engineer record.",
+        "The quoted product description retains its embedded semicolon, delimiters and complete $49.99 field in observed output.",
+        "The workspace diff repairs the example, preserves the public implementation and ties observed output to the actual TokenBuilder."
+      ],
+      "files": [
+        "evals/files/token-reader/.docfx/api/namespaces/Cuemon.Data.md",
+        "evals/files/token-reader/.docfx/docfx.json",
+        "evals/files/token-reader/LICENSE.md",
+        "evals/files/token-reader/src/Cuemon.Data/Cuemon.Data.csproj",
+        "evals/files/token-reader/src/Cuemon.Data/TokenBuilder.cs",
+        "evals/files/token-reader/.docfx/api/types/Cuemon.Data.TokenBuilder.md"
+      ]
+    },
+    {
+      "id": 128,
+      "prompt": "In a disposable checkout inside your workspace, obtain codebeltnet/cuemon at 544d368fb1d29effa30295fdfbe09dac26b9d0ec. Run dotnet-docfx-digest repair on the pages in pr181-findings.md. Apply the corrections and account for each finding. Keep all edits local.",
+      "expected_output": "Produces source-backed edits in the disposable checkout and evidence for all 31 finding identities.",
+      "expectations": [
+        "Accounts for all 31 distinct IDs including multiple findings on one page, with path, concrete disposition and evidence.",
+        "Trace or execute XML row cardinality, cursor lifetime, both TokenBuilder inputs, DateSpan and checksum labels.",
+        "Execute all documented entry points and check loop boundaries, partition counts, status codes and response bodies.",
+        "Preserve MVC, authentication and middleware behavior. Read observed headers from their destination and exercise the documented pipeline or attribute.",
+        "Repair disposal and all reviewed indentation defects. Inspect displayed source against affected execution assets and distinguish pending synchronization or unavailable evidence from verified delivery.",
+        "Actual file changes, build or runtime evidence, and unresolved checks are inspectable; a list of suggested patches alone fails."
+      ],
+      "files": [
+        "evals/files/pr181-findings.md"
+      ]
+    },
+    {
+      "id": 129,
+      "prompt": "dotnet-docfx-digest csrun for Cuemon.Data.TokenBuilder. Verify the converted example.",
+      "expected_output": "Delivers a converted standalone whose entry point exercises both original readers.",
+      "expectations": [
+        "Both ReadPerson and ReadProduct scenarios execute; the first prints False then the complete record and the second preserves the quoted delimiter and price.",
+        "Exact visible C#, manifest and generated assets agree and use the documented package version. Both transport outcomes are independently evidenced."
+      ],
+      "files": [
+        "evals/files/token-reader/BUILDING.md",
+        "evals/files/token-reader/.docfx/api/namespaces/Cuemon.Data.md",
+        "evals/files/token-reader/.docfx/docfx.json",
+        "evals/files/token-reader/LICENSE.md",
+        "evals/files/token-reader/src/Cuemon.Data/Cuemon.Data.csproj",
+        "evals/files/token-reader/src/Cuemon.Data/TokenBuilder.cs",
+        "evals/files/token-reader/.docfx/api/types/RecordReader.md"
+      ]
+    },
+    {
+      "id": 130,
+      "prompt": "dotnet-docfx-digest repair csrun",
+      "expected_output": "Discovers both behavioral defects before regenerating the stale recipe and delivery assets.",
+      "expectations": [
+        "Running the repaired visible source against the provided implementation produces false before the last field, true after it and the full Alice,30,New York,Engineer record.",
+        "The quoted product description retains its embedded semicolon, delimiters and complete $49.99 field in observed output.",
+        "The workspace diff repairs the example, preserves the public implementation and ties observed output to the actual TokenBuilder.",
+        "Generated recipe and manifest match corrected source; materialized Native and Docker assets have separate observed verification outcomes or precise environmental blockers.",
+        "Finishes applicable DocFX gates or identifies the exact unresolved command and result without claiming completion."
+      ],
+      "files": [
+        "evals/files/token-reader/BUILDING.md",
+        "evals/files/token-reader/.docfx/api/namespaces/Cuemon.Data.md",
+        "evals/files/token-reader/.docfx/docfx.json",
+        "evals/files/token-reader/LICENSE.md",
+        "evals/files/token-reader/src/Cuemon.Data/Cuemon.Data.csproj",
+        "evals/files/token-reader/src/Cuemon.Data/TokenBuilder.cs",
+        "evals/files/token-reader/.docfx/api/types/Cuemon.Data.TokenBuilder.md",
+        "evals/files/token-reader/.docfx/run-actions.manifest.json",
+        "evals/files/token-reader/.docfx/run-actions.settings.json"
+      ]
+    },
+    {
+      "id": 131,
+      "prompt": "dotnet-docfx-digest repair for Cuemon.Data.TokenBuilder",
+      "expected_output": "Verifies existing correct code and leaves the authored pages byte-identical.",
+      "expectations": [
+        "Execution shows True and the complete quoted product record.",
+        "No changes to the authored page, API source or project and no generated run-action files.",
+        "Names the comparison with source or execution evidence."
+      ],
+      "files": [
+        "evals/files/token-reader/.docfx/api/namespaces/Cuemon.Data.md",
+        "evals/files/token-reader/.docfx/docfx.json",
+        "evals/files/token-reader/LICENSE.md",
+        "evals/files/token-reader/src/Cuemon.Data/Cuemon.Data.csproj",
+        "evals/files/token-reader/src/Cuemon.Data/TokenBuilder.cs",
+        "evals/files/token-reader/.docfx/api/types/ProductRecord.md"
+      ]
+    },
+    {
+      "id": 132,
+      "prompt": "What does docfx.cs exit code 2 mean? Only answer the CLI question.",
+      "expected_output": "Resolves the CLI question from the script documentation.",
+      "expectations": [
+        "Answer agrees with the docfx.cs exit-code table. No changes, builds or execution.",
+        "When reference reads are observable, reads only scripts.md; absent traces are unmeasured."
+      ]
     }
   ]
 }

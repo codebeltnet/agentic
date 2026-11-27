@@ -1,0 +1,18 @@
+{
+  "examples": [
+    {
+      "uid": "Cuemon.Data.TokenBuilder",
+      "sourceSha256": "85CEC0F2CBE487441FEE558E7153CAB34EC1BCBF317752C3A14F8DF1568A6E13",
+      "manifest": {
+        "schemaVersion": 1,
+        "mode": "console",
+        "framework": "net10.0",
+        "dependsOn": [
+          "Cuemon.Core@11.0.0",
+          "Cuemon.Data@11.0.0"
+        ],
+        "source": "// Program.cs\nusing System;\nusing Cuemon.Data;\n\n// Build a token string with 4 fields, comma-delimited, double-quote qualified\nvar builder = new TokenBuilder(',', '\"', 4);\n\nbuilder.Append(\"Alice\");\nbuilder.Append(\",30,\");\nbuilder.Append(\"New York\");\n\nConsole.WriteLine($\"Is valid: {builder.IsValid}\");  // false - only 3 of 4 tokens\nConsole.WriteLine($\"Current:  '{builder}'\");\n\n// Append the last field to complete the token row\nbuilder.Append(\"Engineer\");\nConsole.WriteLine($\"Is valid: {builder.IsValid}\");  // true\nConsole.WriteLine($\"Complete: '{builder}'\");\n\n// TokenBuilder is used internally by DsvDataReader for multi-line quoted fields\n// It accumulates input until the expected number of tokens is reached\nvar csvBuilder = new TokenBuilder(';', '\\\"', 3);\ncsvBuilder.Append(\"Product A\");\ncsvBuilder.Append(\"Description with ; semicolon\");\ncsvBuilder.Append(\"$49.99\");\n\nConsole.WriteLine($\"CSV line: '{csvBuilder}'\");\nConsole.WriteLine($\"Tokens:   {csvBuilder.Tokens}\");"
+      }
+    }
+  ]
+}

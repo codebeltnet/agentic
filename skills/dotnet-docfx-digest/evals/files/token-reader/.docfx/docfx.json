@@ -1,0 +1,40 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "src": "../",
+          "files": [
+            "src/Cuemon.Data/Cuemon.Data.csproj"
+          ]
+        }
+      ],
+      "dest": "api",
+      "properties": {
+        "TargetFramework": "net10.0"
+      }
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": [
+          "api/**.yml"
+        ],
+        "exclude": [
+          "api/namespaces/**",
+          "api/types/**"
+        ]
+      }
+    ],
+    "overwrite": [
+      {
+        "files": [
+          "api/namespaces/**/*.md",
+          "api/types/**/*.md"
+        ]
+      }
+    ],
+    "dest": "_site"
+  }
+}
