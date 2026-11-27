@@ -1564,7 +1564,22 @@ internal static class DocfxValidator
         report.DocfxPath = docfxPath;
         var docfxWorkspace = Path.GetDirectoryName(docfxPath)!;
         phaseTimer.Restart();
-        options.Framework ??= ResolveDefaultFramework(docfxPath, report);
+        if (options.Framework is null)
+        {
+            var defaultFramework = ResolveDefaultFramework(docfxPath, report);
+            if (defaultFramework is not null)
+            {
+                options.Framework = defaultFramework;
+                options.FrameworkFromDocfxDefault = true;
+            }
+        }
+
+        report.Summary.FrameworkScope = options.FrameworkExplicitlySpecified
+            ? "explicit-framework"
+            : options.FrameworkFromDocfxDefault
+                ? "docfx-default-framework"
+                : "all-target-frameworks";
+        report.Summary.RequestedFramework = options.Framework;
         WritePhase(options, report, "docfx config", phaseTimer.Elapsed);
 
         // No-build layout validation: confirm the overwrite directory split without compiling.
@@ -1668,9 +1683,10 @@ internal static class DocfxValidator
                 return Emit(options, report, ExitCode.BuildFailed, "Build failed.");
             }
 
+            List<string> discoveredFrameworks;
             try
             {
-                api = DiscoverApi(libraryProjects, options.Configuration, options.Framework, report);
+                api = DiscoverApi(libraryProjects, repoRoot, options.Configuration, options.Framework, report, out discoveredFrameworks);
             }
             catch (Exception ex)
             {
@@ -1678,6 +1694,21 @@ internal static class DocfxValidator
                 report.Errors.Add(new Diagnostic("PUBLIC_API_DISCOVERY_FAILED", null, null,
                     $"Public API discovery failed: {ex.Message}"));
                 return Emit(options, report, ExitCode.PublicApiDiscoveryFailed, "Public API discovery failed.");
+            }
+
+            report.Summary.DiscoveredFrameworks = discoveredFrameworks.Count > 0 ? discoveredFrameworks : null;
+            var allEvaluatedFrameworks = CollectEvaluatedFrameworks(libraryProjects, repoRoot, options.Configuration);
+            if (options.Framework is not null)
+            {
+                var omitted = allEvaluatedFrameworks
+                    .Where(tfm => !string.Equals(tfm, options.Framework, StringComparison.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(tfm => tfm, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (omitted.Count > 0)
+                {
+                    report.Summary.OmittedFrameworks = omitted;
+                }
             }
 
             report.Summary.ApiModelSource = "build-backed";
@@ -1697,6 +1728,23 @@ internal static class DocfxValidator
             api = BuildNoBuildApiModel(workspace, report, out var apiSource);
             apiModelSource = apiSource;
             report.Summary.ApiModelSource = apiSource == ApiModelSource.DocfxYaml ? "docfx-yaml" : "source-scan";
+            var noBuildEvaluatedFrameworks = CollectEvaluatedFrameworks(libraryProjects, repoRoot, options.Configuration);
+            if (options.Framework is not null)
+            {
+                var omitted = noBuildEvaluatedFrameworks
+                    .Where(tfm => !string.Equals(tfm, options.Framework, StringComparison.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(tfm => tfm, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (omitted.Count > 0)
+                {
+                    report.Summary.OmittedFrameworks = omitted;
+                }
+            }
+            else if (noBuildEvaluatedFrameworks.Count > 0)
+            {
+                report.Summary.DiscoveredFrameworks = noBuildEvaluatedFrameworks;
+            }
             WritePhase(options, report, "api model", phaseTimer.Elapsed, report.Summary.ApiModelSource);
 
             if (api.Namespaces.Count == 0)
@@ -1863,6 +1911,30 @@ internal static class DocfxValidator
         if (options.ResumeProjectManifestPath is not null)
         {
             ValidateChangedPageReview(options.ReviewReportPath, repoRoot, packets, gitState, report);
+        }
+
+        if (options.RequiresBehavioralReview)
+        {
+            phaseTimer.Restart();
+            var behavioralInventory = BuildBehavioralExampleInventory(
+                workspace, docfxWorkspace, repoRoot, scope, packets, gitState,
+                options.ChangedOnly ? changedFiles : null);
+            if (!string.IsNullOrWhiteSpace(options.InitBehavioralLedgerPath))
+            {
+                InitializeBehavioralLedger(
+                    options.InitBehavioralLedgerPath!, options, repoRoot, docfxPath, scope, behavioralInventory, report);
+            }
+
+            var ledgerPath = options.BehavioralLedgerPath ?? options.InitBehavioralLedgerPath;
+            ReconcileBehavioralLedger(
+                ledgerPath, options, repoRoot, docfxPath, scope, behavioralInventory, report);
+            WritePhase(options, report, "behavioral review accounting", phaseTimer.Elapsed,
+                $"{behavioralInventory.Count} example(s) in scope");
+        }
+        else
+        {
+            report.Summary.Operation = options.Operation;
+            report.Summary.BehaviorReviewRequired = false;
         }
 
         report.Scope = BuildScopeReport(scope, packets, metadataGroups, gitState, families, repoRoot, report);
@@ -3358,113 +3430,145 @@ internal static class DocfxValidator
         return new ProjectInfo(projectPath, assemblyName, tfms, isTest, packageId);
     }
 
-    private static ApiModel DiscoverApi(List<ProjectInfo> libraryProjects, string configuration, string? framework, Report report)
-    {
-        var assemblyPaths = new List<string>();
-        foreach (var proj in libraryProjects)
-        {
-            var dll = FindAssembly(proj, configuration, framework);
-            if (dll is not null)
-            {
-                assemblyPaths.Add(dll);
-            }
-        }
+    private sealed record DiscoveryAssembly(ProjectInfo Project, string AssemblyPath, string? TargetFramework);
 
-        if (assemblyPaths.Count == 0)
+    private static ApiModel DiscoverApi(List<ProjectInfo> libraryProjects, string repoRoot, string configuration, string? framework,
+        Report report, out List<string> discoveredFrameworks)
+    {
+        discoveredFrameworks = new List<string>();
+        var discoveryAssemblies = FindAssembliesForDiscovery(libraryProjects, repoRoot, configuration, framework);
+        if (discoveryAssemblies.Count == 0)
         {
             return new ApiModel(new List<NamespaceInfo>(), new List<ApiTargetInfo>());
         }
 
-        // Resolve dependencies from the runtime directory and the assemblies' own output folders.
-        var resolverPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
-        foreach (var dll in Directory.GetFiles(runtimeDir, "*.dll"))
-        {
-            resolverPaths.Add(dll);
-        }
-
-        AddDotNetPackResolverPaths(runtimeDir, framework, resolverPaths);
-
-        foreach (var dll in assemblyPaths)
-        {
-            var dir = Path.GetDirectoryName(dll)!;
-            foreach (var sibling in Directory.GetFiles(dir, "*.dll"))
-            {
-                resolverPaths.Add(sibling);
-            }
-        }
-
-        foreach (var proj in libraryProjects)
-        {
-            AddProjectOutputResolverPaths(proj, configuration, framework, resolverPaths);
-
-            var dll = assemblyPaths.FirstOrDefault(p =>
-                string.Equals(Path.GetFileNameWithoutExtension(p), proj.AssemblyName, StringComparison.OrdinalIgnoreCase));
-            if (dll is not null)
-            {
-                AddProjectDependencyResolverPaths(proj, dll, configuration, framework, resolverPaths);
-            }
-        }
-
-        var resolver = new PathAssemblyResolver(DistinctResolverPaths(resolverPaths));
-        using var mlc = new MetadataLoadContext(resolver, "System.Private.CoreLib");
-
         var namespaces = new Dictionary<string, NamespaceInfo>(StringComparer.Ordinal);
-        foreach (var dll in assemblyPaths)
+        var discoveredTfmSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Isolate MetadataLoadContext per target framework so incompatible reference-pack versions
+        // (e.g. net11.0 vs net10.0 vs netstandard2.0) are never mixed into a single resolver, while
+        // consolidating all discovered public API surfaces across the requested framework scope.
+        var buckets = discoveryAssemblies
+            .GroupBy(item => item.TargetFramework ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var bucket in buckets)
         {
-            Assembly asm;
-            try
+            var bucketFramework = string.IsNullOrWhiteSpace(bucket.Key) ? null : bucket.Key;
+            var bucketItems = bucket.ToList();
+            if (bucketFramework is not null)
             {
-                asm = mlc.LoadFromAssemblyPath(dll);
-            }
-            catch
-            {
-                continue;
+                discoveredTfmSet.Add(bucketFramework);
             }
 
-            Type[] types;
-            try
+            var resolverPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var orderedResolverPaths = new List<string>();
+
+            void AddResolverPath(string path)
             {
-                types = asm.GetTypes();
-            }
-            catch (ReflectionTypeLoadException rtle)
-            {
-                types = rtle.Types.Where(t => t is not null).Cast<Type>().ToArray();
-            }
-            catch
-            {
-                continue;
+                if (resolverPaths.Add(path))
+                {
+                    orderedResolverPaths.Add(path);
+                }
             }
 
-            foreach (var type in types)
+            // 1. Add target-framework runtime and reference packs before falling back to host runtime.
+            AddDotNetRuntimeAndPackResolverPaths(runtimeDir, bucketFramework, AddResolverPath);
+
+            // 2. Add target assemblies and sibling DLLs from each assembly's own output directory.
+            foreach (var item in bucketItems)
             {
-                if (type is null || !IsExternallyVisible(type))
+                AddResolverPath(item.AssemblyPath);
+                var dir = Path.GetDirectoryName(item.AssemblyPath)!;
+                foreach (var sibling in Directory.GetFiles(dir, "*.dll"))
+                {
+                    AddResolverPath(sibling);
+                }
+            }
+
+            // 3. Add output-folder DLLs for all library projects matching this bucket framework
+            //    (plus project-specific dependency assets from project.assets.json and deps.json).
+            var bucketDependencyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var proj in libraryProjects)
+            {
+                AddProjectOutputResolverPaths(proj, configuration, bucketFramework, bucketDependencyPaths);
+            }
+
+            foreach (var item in bucketItems)
+            {
+                var effectiveFramework = bucketFramework ?? DetectFrameworkFromAssemblyPath(item.Project, repoRoot, item.AssemblyPath);
+                AddProjectDependencyResolverPaths(item.Project, item.AssemblyPath, configuration, effectiveFramework, bucketDependencyPaths);
+            }
+
+            foreach (var depPath in bucketDependencyPaths)
+            {
+                AddResolverPath(depPath);
+            }
+
+            var resolver = new PathAssemblyResolver(DistinctResolverPaths(orderedResolverPaths));
+            using var mlc = new MetadataLoadContext(resolver, "System.Private.CoreLib");
+
+            foreach (var item in bucketItems)
+            {
+                Assembly asm;
+                try
+                {
+                    asm = mlc.LoadFromAssemblyPath(item.AssemblyPath);
+                }
+                catch
                 {
                     continue;
                 }
 
-                var nsName = type.Namespace;
-                if (string.IsNullOrEmpty(nsName))
+                Type[] types;
+                try
+                {
+                    types = asm.GetTypes();
+                }
+                catch (ReflectionTypeLoadException rtle)
+                {
+                    types = rtle.Types.Where(t => t is not null).Cast<Type>().ToArray();
+                }
+                catch
                 {
                     continue;
                 }
 
-                if (!namespaces.TryGetValue(nsName, out var info))
+                foreach (var type in types)
                 {
-                    info = new NamespaceInfo(nsName);
-                    namespaces[nsName] = info;
-                }
+                    if (type is null || !IsExternallyVisible(type))
+                    {
+                        continue;
+                    }
 
-                // Track synthetic C# 14 extension-block containers so we can warn about DocFX #11010.
-                if (IsSyntheticExtensionBlockContainer(type))
-                {
-                    info.HasCSharp14ExtensionBlocks = true;
-                }
+                    var nsName = type.Namespace;
+                    if (string.IsNullOrEmpty(nsName))
+                    {
+                        continue;
+                    }
 
-                CollectApiTargets(type, info);
-                CollectExtensionMethods(type, info);
+                    if (!namespaces.TryGetValue(nsName, out var info))
+                    {
+                        info = new NamespaceInfo(nsName);
+                        namespaces[nsName] = info;
+                    }
+
+                    // Track synthetic C# 14 extension-block containers so we can warn about DocFX #11010.
+                    if (IsSyntheticExtensionBlockContainer(type))
+                    {
+                        info.HasCSharp14ExtensionBlocks = true;
+                    }
+
+                    CollectApiTargets(type, info);
+                    CollectExtensionMethods(type, info);
+                }
             }
         }
+
+        discoveredFrameworks = discoveredTfmSet
+            .OrderBy(tfm => tfm, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         AddExtensionBlockWarnings(namespaces.Values, report);
 
@@ -3474,6 +3578,250 @@ internal static class DocfxValidator
             .ToList();
 
         return new ApiModel(namespaces.Values.ToList(), requiredExampleTargets);
+    }
+
+    private static List<DiscoveryAssembly> FindAssembliesForDiscovery(
+        List<ProjectInfo> libraryProjects, string repoRoot, string configuration, string? framework)
+    {
+        var results = new List<DiscoveryAssembly>();
+        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var proj in libraryProjects)
+        {
+            if (!string.IsNullOrWhiteSpace(framework))
+            {
+                var dll = FindAssembly(proj, configuration, framework);
+                if (dll is not null && seenPaths.Add(Path.GetFullPath(dll)))
+                {
+                    results.Add(new DiscoveryAssembly(proj, dll, framework.Trim()));
+                }
+
+                continue;
+            }
+
+            var evaluatedTfms = ResolveProjectTargetFrameworks(proj, repoRoot, configuration);
+            var addedForProject = false;
+            foreach (var tfm in evaluatedTfms)
+            {
+                var dll = FindAssembly(proj, configuration, tfm);
+                if (dll is not null && seenPaths.Add(Path.GetFullPath(dll)))
+                {
+                    results.Add(new DiscoveryAssembly(proj, dll, tfm));
+                    addedForProject = true;
+                }
+            }
+
+            if (!addedForProject)
+            {
+                var fallbackDll = FindAssembly(proj, configuration, null);
+                if (fallbackDll is not null && seenPaths.Add(Path.GetFullPath(fallbackDll)))
+                {
+                    var inferred = DetectFrameworkFromAssemblyPath(proj, repoRoot, fallbackDll);
+                    results.Add(new DiscoveryAssembly(proj, fallbackDll, inferred));
+                }
+            }
+        }
+
+        return results;
+    }
+
+    private static List<string> CollectEvaluatedFrameworks(
+        List<ProjectInfo> libraryProjects, string repoRoot, string configuration)
+    {
+        var all = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var proj in libraryProjects)
+        {
+            foreach (var tfm in ResolveProjectTargetFrameworks(proj, repoRoot, configuration))
+            {
+                all.Add(tfm);
+            }
+        }
+
+        return all.OrderBy(tfm => tfm, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static List<string> ResolveProjectTargetFrameworks(ProjectInfo project, string repoRoot, string configuration)
+    {
+        var tfms = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void AddTfm(string? value)
+        {
+            var trimmed = value?.Trim();
+            if (!string.IsNullOrWhiteSpace(trimmed) && !trimmed.Contains('$', StringComparison.Ordinal) && seen.Add(trimmed))
+            {
+                tfms.Add(trimmed);
+            }
+        }
+
+        var projectDir = Path.GetDirectoryName(project.Path)!;
+
+        // 1. Authoritative MSBuild/NuGet evaluated target frameworks from obj/project.assets.json.
+        var assetsPath = Path.Combine(projectDir, "obj", "project.assets.json");
+        if (File.Exists(assetsPath))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(assetsPath), new JsonDocumentOptions
+                {
+                    AllowTrailingCommas = true,
+                    CommentHandling = JsonCommentHandling.Skip
+                });
+
+                if (doc.RootElement.TryGetProperty("project", out var projectEl) &&
+                    projectEl.ValueKind == JsonValueKind.Object &&
+                    projectEl.TryGetProperty("frameworks", out var frameworksEl) &&
+                    frameworksEl.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var fw in frameworksEl.EnumerateObject())
+                    {
+                        AddTfm(fw.Name);
+                    }
+                }
+
+                if (tfms.Count == 0 &&
+                    doc.RootElement.TryGetProperty("targets", out var targetsEl) &&
+                    targetsEl.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var target in targetsEl.EnumerateObject())
+                    {
+                        var slash = target.Name.IndexOf('/');
+                        var targetName = slash > 0 ? target.Name[..slash] : target.Name;
+                        AddTfm(NormalizeNuGetFrameworkNameToTfm(targetName));
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or JsonException)
+            {
+                // Fall back to output directories and project XML below.
+            }
+        }
+
+        // 2. Built output directories under bin/<config>/<tfm> and obj/<config>/<tfm> that contain the assembly.
+        var dllName = project.AssemblyName + ".dll";
+        foreach (var root in new[] { Path.Combine(projectDir, "bin", configuration), Path.Combine(projectDir, "obj", configuration) })
+        {
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+
+            try
+            {
+                foreach (var subDir in Directory.GetDirectories(root))
+                {
+                    var candidateTfm = Path.GetFileName(subDir);
+                    if (!LooksLikeTargetFrameworkMoniker(candidateTfm))
+                    {
+                        continue;
+                    }
+
+                    if (File.Exists(Path.Combine(subDir, dllName)) ||
+                        File.Exists(Path.Combine(subDir, "ref", dllName)))
+                    {
+                        AddTfm(candidateTfm);
+                    }
+                }
+            }
+            catch
+            {
+                // Best effort.
+            }
+        }
+
+        // 3. Declared TargetFramework/TargetFrameworks in the .csproj itself.
+        foreach (var declared in project.TargetFrameworks)
+        {
+            AddTfm(declared);
+        }
+
+        // 4. Inherited TargetFramework/TargetFrameworks from Directory.Build.props when nothing else was found.
+        if (tfms.Count == 0)
+        {
+            for (var dir = projectDir; dir is not null && (PathsEqual(dir, repoRoot) || IsPathUnderDirectory(dir, repoRoot));
+                dir = Path.GetDirectoryName(dir))
+            {
+                var propsPath = Path.Combine(dir, "Directory.Build.props");
+                if (!File.Exists(propsPath))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var doc = XDocument.Load(propsPath);
+                    foreach (var el in doc.Descendants())
+                    {
+                        if (el.Name.LocalName == "TargetFramework")
+                        {
+                            AddTfm(el.Value);
+                        }
+                        else if (el.Name.LocalName == "TargetFrameworks")
+                        {
+                            foreach (var part in el.Value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                            {
+                                AddTfm(part);
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore unreadable Directory.Build.props.
+                }
+
+                if (tfms.Count > 0)
+                {
+                    break;
+                }
+            }
+        }
+
+        return tfms;
+    }
+
+    private static bool LooksLikeTargetFrameworkMoniker(string? segment)
+    {
+        if (string.IsNullOrWhiteSpace(segment))
+        {
+            return false;
+        }
+
+        return Regex.IsMatch(segment, @"^(?:net\d+(?:\.\d+)?(?:-[a-z0-9.]+)?|netstandard\d+\.\d+|netcoreapp\d+\.\d+|net\d{2,3})$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static string? NormalizeNuGetFrameworkNameToTfm(string targetName)
+    {
+        if (string.IsNullOrWhiteSpace(targetName))
+        {
+            return null;
+        }
+
+        if (LooksLikeTargetFrameworkMoniker(targetName))
+        {
+            return targetName.Trim();
+        }
+
+        var nsMatch = Regex.Match(targetName, @"^\.NETStandard,Version=v(\d+\.\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (nsMatch.Success)
+        {
+            return "netstandard" + nsMatch.Groups[1].Value;
+        }
+
+        var coreMatch = Regex.Match(targetName, @"^\.NETCoreApp,Version=v(\d+\.\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (coreMatch.Success)
+        {
+            var ver = coreMatch.Groups[1].Value;
+            return Version.TryParse(ver, out var parsed) && parsed.Major >= 5 ? "net" + ver : "netcoreapp" + ver;
+        }
+
+        var fxMatch = Regex.Match(targetName, @"^\.NETFramework,Version=v(\d+)\.(\d+)(?:\.(\d+))?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (fxMatch.Success)
+        {
+            return "net" + fxMatch.Groups[1].Value + fxMatch.Groups[2].Value + fxMatch.Groups[3].Value;
+        }
+
+        return null;
     }
 
     // ----------------------------------------------------------------------
@@ -4566,6 +4914,43 @@ internal static class DocfxValidator
         return byIdentity.Values.Concat(fallback).ToList();
     }
 
+    private static void AddDotNetRuntimeAndPackResolverPaths(string runtimeDir, string? framework, Action<string> addPath)
+    {
+        var dotnetRoot = Directory.GetParent(runtimeDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))?
+            .Parent?
+            .Parent?
+            .FullName;
+
+        // When targeting a specific modern .NET TFM (e.g. net11.0 while host is net10.0), prefer
+        // that TFM's installed Microsoft.NETCore.App shared runtime first so System.Private.CoreLib
+        // and core BCL identities match the assembly's target framework.
+        if (dotnetRoot is not null && TryParseDotNetMajorMinor(framework, out var targetMajor, out var targetMinor))
+        {
+            var sharedNetCoreDir = FindBestSharedFrameworkDir(dotnetRoot, "Microsoft.NETCore.App", targetMajor, targetMinor);
+            if (sharedNetCoreDir is not null)
+            {
+                foreach (var dll in Directory.GetFiles(sharedNetCoreDir, "*.dll"))
+                {
+                    addPath(dll);
+                }
+            }
+        }
+
+        // Always keep host runtimeDir as core fallback (ensures System.Private.CoreLib is always
+        // present for netstandard2.0/net48 or TFMs whose shared runtime is not installed).
+        foreach (var dll in Directory.GetFiles(runtimeDir, "*.dll"))
+        {
+            addPath(dll);
+        }
+
+        var packPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddDotNetPackResolverPaths(runtimeDir, framework, packPaths);
+        foreach (var dll in packPaths)
+        {
+            addPath(dll);
+        }
+    }
+
     private static void AddDotNetPackResolverPaths(string runtimeDir, string? framework, HashSet<string> resolverPaths)
     {
         if (string.IsNullOrWhiteSpace(framework))
@@ -4582,41 +4967,124 @@ internal static class DocfxValidator
             return;
         }
 
+        var candidateFrameworks = new List<string> { framework.Trim() };
+        var dash = framework.IndexOf('-');
+        if (dash > 0)
+        {
+            var baseTfm = framework[..dash].Trim();
+            if (!string.IsNullOrWhiteSpace(baseTfm))
+            {
+                candidateFrameworks.Add(baseTfm);
+            }
+        }
+
         var packsRoot = Path.Combine(dotnetRoot, "packs");
-        if (!Directory.Exists(packsRoot))
+        if (Directory.Exists(packsRoot))
         {
-            return;
+            foreach (var pack in Directory.GetDirectories(packsRoot))
+            {
+                var packName = Path.GetFileName(pack);
+                string? refDir = null;
+                foreach (var candidateTfm in candidateFrameworks)
+                {
+                    refDir = Directory.GetDirectories(pack)
+                        .Select(versionDir => (VersionDir: versionDir, VersionName: Path.GetFileName(versionDir), RefPath: Path.Combine(versionDir, "ref", candidateTfm)))
+                        .Where(x => Directory.Exists(x.RefPath))
+                        .OrderByDescending(x => ParsePackVersionKey(x.VersionName))
+                        .Select(x => x.RefPath)
+                        .FirstOrDefault();
+                    if (refDir is not null)
+                    {
+                        break;
+                    }
+                }
+
+                if (refDir is null)
+                {
+                    continue;
+                }
+
+                foreach (var dll in Directory.GetFiles(refDir, "*.dll"))
+                {
+                    // Never let a reference-only System.Private.CoreLib shadow the real runtime CoreLib.
+                    if (string.Equals(packName, "Microsoft.NETCore.App.Ref", StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(Path.GetFileName(dll), "System.Private.CoreLib.dll", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    resolverPaths.Add(dll);
+                }
+            }
         }
 
-        foreach (var pack in Directory.GetDirectories(packsRoot))
+        // Supplement with matching-major shared Microsoft.AspNetCore.App runtime assemblies when
+        // available (covers environments where shared runtime is installed without the .Ref pack).
+        if (TryParseDotNetMajorMinor(framework, out var major, out var minor))
         {
-            if (string.Equals(Path.GetFileName(pack), "Microsoft.NETCore.App.Ref", StringComparison.OrdinalIgnoreCase))
+            var sharedAspNetDir = FindBestSharedFrameworkDir(dotnetRoot, "Microsoft.AspNetCore.App", major, minor);
+            if (sharedAspNetDir is not null)
             {
-                continue;
-            }
-
-            var refDir = Directory.GetDirectories(pack)
-                .Select(version => Path.Combine(version, "ref", framework))
-                .Where(Directory.Exists)
-                .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault();
-
-            if (refDir is null)
-            {
-                continue;
-            }
-
-            foreach (var dll in Directory.GetFiles(refDir, "*.dll"))
-            {
-                resolverPaths.Add(dll);
+                foreach (var dll in Directory.GetFiles(sharedAspNetDir, "*.dll"))
+                {
+                    resolverPaths.Add(dll);
+                }
             }
         }
+    }
+
+    private static bool TryParseDotNetMajorMinor(string? framework, out int major, out int minor)
+    {
+        major = 0;
+        minor = 0;
+        if (string.IsNullOrWhiteSpace(framework))
+        {
+            return false;
+        }
+
+        var match = Regex.Match(framework.Trim(), @"^(?:net|netcoreapp)(\d+)\.(\d+)(?:-|$)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        return int.TryParse(match.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out major) &&
+               int.TryParse(match.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out minor);
+    }
+
+    private static string? FindBestSharedFrameworkDir(string dotnetRoot, string sharedName, int major, int minor)
+    {
+        var sharedRoot = Path.Combine(dotnetRoot, "shared", sharedName);
+        if (!Directory.Exists(sharedRoot))
+        {
+            return null;
+        }
+
+        return Directory.GetDirectories(sharedRoot)
+            .Select(dir => (Dir: dir, Key: ParsePackVersionKey(Path.GetFileName(dir))))
+            .Where(x => x.Key.Major == major && x.Key.Minor == minor)
+            .OrderByDescending(x => x.Key)
+            .Select(x => x.Dir)
+            .FirstOrDefault();
+    }
+
+    private static (int Major, int Minor, int Patch, int IsStable, string PreRelease) ParsePackVersionKey(string versionName)
+    {
+        var dash = versionName.IndexOf('-');
+        var core = dash >= 0 ? versionName[..dash] : versionName;
+        var pre = dash >= 0 ? versionName[(dash + 1)..] : string.Empty;
+        var parts = core.Split('.');
+        var major = parts.Length > 0 && int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var ma) ? ma : 0;
+        var minor = parts.Length > 1 && int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var mi) ? mi : 0;
+        var patch = parts.Length > 2 && int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var pa) ? pa : 0;
+        return (major, minor, patch, string.IsNullOrEmpty(pre) ? 1 : 0, pre);
     }
 
     private static void AddProjectDependencyResolverPaths(ProjectInfo project, string assemblyPath, string configuration,
         string? framework, HashSet<string> resolverPaths)
     {
-        var projectFramework = framework ?? DetectFrameworkFromAssemblyPath(project, assemblyPath);
+        var projectFramework = framework ?? DetectFrameworkFromAssemblyPath(project, Path.GetDirectoryName(project.Path)!, assemblyPath);
         AddProjectAssetsResolverPaths(project, projectFramework, resolverPaths);
         AddDepsJsonResolverPaths(project, assemblyPath, configuration, projectFramework, resolverPaths);
     }
@@ -4640,18 +5108,31 @@ internal static class DocfxValidator
         }
     }
 
-    private static string? DetectFrameworkFromAssemblyPath(ProjectInfo project, string assemblyPath)
+    private static string? DetectFrameworkFromAssemblyPath(ProjectInfo project, string repoRoot, string assemblyPath)
     {
-        if (project.TargetFrameworks.Count == 0)
-        {
-            return null;
-        }
-
         var segments = Path.GetFullPath(assemblyPath)
             .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
-        return project.TargetFrameworks.FirstOrDefault(tfm =>
-            segments.Any(s => string.Equals(s, tfm, StringComparison.OrdinalIgnoreCase)));
+        if (project.TargetFrameworks.Count > 0)
+        {
+            var matchedDeclared = project.TargetFrameworks.FirstOrDefault(tfm =>
+                segments.Any(s => string.Equals(s, tfm, StringComparison.OrdinalIgnoreCase)));
+            if (matchedDeclared is not null)
+            {
+                return matchedDeclared;
+            }
+        }
+
+        // Recognize TFM path segment even when TargetFrameworks was inherited from Directory.Build.props.
+        for (var i = segments.Length - 2; i >= 0; i--)
+        {
+            if (LooksLikeTargetFrameworkMoniker(segments[i]))
+            {
+                return segments[i];
+            }
+        }
+
+        return null;
     }
 
     private static void AddProjectAssetsResolverPaths(ProjectInfo project, string? framework, HashSet<string> resolverPaths)
@@ -4725,8 +5206,15 @@ internal static class DocfxValidator
             return true;
         }
 
-        return string.Equals(targetName, framework, StringComparison.OrdinalIgnoreCase) ||
-               targetName.StartsWith(framework + "/", StringComparison.OrdinalIgnoreCase);
+        var slash = targetName.IndexOf('/');
+        var baseTarget = slash > 0 ? targetName[..slash] : targetName;
+        if (string.Equals(baseTarget, framework, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var normalized = NormalizeNuGetFrameworkNameToTfm(baseTarget);
+        return normalized is not null && string.Equals(normalized, framework, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void AddAssetGroupResolverPaths(JsonProperty dependency, string groupName, List<string> packageFolders,
@@ -9454,6 +9942,1186 @@ internal static class DocfxValidator
         }
     }
 
+    // ----------------------------------------------------------------------
+    // Operation-aware behavioral review accounting and evidence ledger
+    // ----------------------------------------------------------------------
+
+    private sealed record BehavioralInventoryItem(
+        string ExampleId,
+        string Uid,
+        string File,
+        int FenceOrdinal,
+        int StartLine,
+        bool ChangedPriority,
+        string SourceSha256,
+        string ClaimSha256,
+        string DependencySha256,
+        string RecipeSha256,
+        string ExecutionTopology,
+        bool ExecutionApplicable,
+        List<string> ApplicableTransports);
+
+    private static List<BehavioralInventoryItem> BuildBehavioralExampleInventory(
+        ValidationWorkspace workspace,
+        string docfxWorkspace,
+        string repoRoot,
+        ScopePlan scope,
+        List<ProjectPacket> packets,
+        GitState gitState,
+        HashSet<string>? changedFiles)
+    {
+        var settingsByExampleId = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        var settingsByUidAndHash = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        var settingsBySoleUid = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        var settingsDocs = new List<JsonDocument>();
+
+        var manifestByExampleId = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        JsonDocument? manifestDoc = null;
+
+        try
+        {
+            var settingsPath = Path.Combine(docfxWorkspace, "run-actions.settings.json");
+            if (File.Exists(settingsPath))
+            {
+                try
+                {
+                    var doc = JsonDocument.Parse(File.ReadAllText(settingsPath), new JsonDocumentOptions
+                    {
+                        AllowTrailingCommas = true,
+                        CommentHandling = JsonCommentHandling.Skip
+                    });
+                    settingsDocs.Add(doc);
+                    if (doc.RootElement.TryGetProperty("examples", out var examplesEl) && examplesEl.ValueKind == JsonValueKind.Array)
+                    {
+                        var byUidList = new Dictionary<string, List<JsonElement>>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var item in examplesEl.EnumerateArray())
+                        {
+                            var exId = ReadJsonString(item, "exampleId");
+                            if (!string.IsNullOrWhiteSpace(exId))
+                            {
+                                settingsByExampleId.TryAdd(exId.Trim(), item);
+                            }
+
+                            var uid = ReadJsonString(item, "uid");
+                            var sha = ReadJsonString(item, "sourceSha256");
+                            if (!string.IsNullOrWhiteSpace(uid) && !string.IsNullOrWhiteSpace(sha))
+                            {
+                                settingsByUidAndHash.TryAdd($"{uid.Trim()}|{sha.Trim().ToUpperInvariant()}", item);
+                            }
+
+                            if (!string.IsNullOrWhiteSpace(uid))
+                            {
+                                if (!byUidList.TryGetValue(uid.Trim(), out var list))
+                                {
+                                    list = new List<JsonElement>();
+                                    byUidList[uid.Trim()] = list;
+                                }
+
+                                list.Add(item);
+                            }
+                        }
+
+                        foreach (var kv in byUidList)
+                        {
+                            if (kv.Value.Count == 1)
+                            {
+                                settingsBySoleUid[kv.Key] = kv.Value[0];
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Invalid settings file is handled by run-actions tooling; fall back to no recipes.
+                }
+            }
+
+            var manifestPath = Path.Combine(docfxWorkspace, "run-actions.manifest.json");
+            if (File.Exists(manifestPath))
+            {
+                try
+                {
+                    manifestDoc = JsonDocument.Parse(File.ReadAllText(manifestPath), new JsonDocumentOptions
+                    {
+                        AllowTrailingCommas = true,
+                        CommentHandling = JsonCommentHandling.Skip
+                    });
+                    if (manifestDoc.RootElement.TryGetProperty("examples", out var examplesEl) && examplesEl.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var item in examplesEl.EnumerateArray())
+                        {
+                            var exId = ReadJsonString(item, "exampleId");
+                            if (!string.IsNullOrWhiteSpace(exId))
+                            {
+                                manifestByExampleId.TryAdd(exId.Trim(), item);
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore unreadable manifest.
+                }
+            }
+
+            var selectedOverwritePaths = new HashSet<string>(
+                packets.Where(p => p.Selected).SelectMany(p => p.OverwritePaths).Select(NormalizeDocfxPath),
+                StringComparer.OrdinalIgnoreCase);
+
+            var fileContentHashCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string HashFileIfExists(string path)
+            {
+                var full = Path.GetFullPath(path);
+                if (fileContentHashCache.TryGetValue(full, out var cached))
+                {
+                    return cached;
+                }
+
+                string hash;
+                if (!File.Exists(full))
+                {
+                    hash = "MISSING";
+                }
+                else
+                {
+                    try
+                    {
+                        var text = File.ReadAllText(full).Replace("\r\n", "\n").Replace("\r", "\n");
+                        hash = ComputeSha256Hex(text);
+                    }
+                    catch
+                    {
+                        hash = "UNREADABLE";
+                    }
+                }
+
+                fileContentHashCache[full] = hash;
+                return hash;
+            }
+
+            var items = new List<BehavioralInventoryItem>();
+            var orderedFiles = workspace.MarkdownFiles
+                .OrderBy(f => Rel(repoRoot, f), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            foreach (var file in orderedFiles)
+            {
+                if (changedFiles is not null && !ShouldValidateSamplePage(workspace, file, changedFiles))
+                {
+                    continue;
+                }
+
+                var relFile = NormalizeDocfxPath(Rel(repoRoot, file));
+                var text = workspace.ReadMarkdown(file);
+                var sections = ExtractOverwriteSections(file, text);
+                var fences = ExtractFences(file, text);
+                if (fences.Count == 0)
+                {
+                    continue;
+                }
+
+                var seenByUid = new Dictionary<string, int>(StringComparer.Ordinal);
+                var isDirtyFile = gitState.AllDirty.Contains(Path.GetFullPath(file));
+
+                foreach (var sample in fences)
+                {
+                    var owner = ResolveSampleOwner(sections, sample);
+                    var uidKey = owner.Uid ?? relFile;
+                    seenByUid.TryGetValue(uidKey, out var ordinal);
+                    ordinal++;
+                    seenByUid[uidKey] = ordinal;
+                    var exampleId = $"{uidKey}#{ordinal}";
+
+                    var ns = LongestNamespacePrefix(owner.Uid ?? Path.GetFileNameWithoutExtension(file), workspace);
+                    var ownerProjects = ns is not null && workspace.NamespaceProjects.TryGetValue(ns, out var nsProjs)
+                        ? nsProjs
+                        : workspace.LibraryProjects;
+
+                    if (scope.ScopeRestricted)
+                    {
+                        var inSelectedNs = ns is not null && scope.IncludesNamespace(ns);
+                        var inSelectedOverwrite = selectedOverwritePaths.Contains(relFile);
+                        var inSelectedProject = ownerProjects.Any(p => scope.SelectedProjectPaths.Contains(Path.GetFullPath(p.Path)));
+                        if (!inSelectedNs && !inSelectedOverwrite && !inSelectedProject)
+                        {
+                            continue;
+                        }
+                    }
+
+                    _ = ResolveSampleContext(sample, repoRoot, out var context);
+                    var code = context is null ? sample.Code : string.Join("\n", sample.Code.Split('\n').Skip(2));
+                    var normalizedCode = code.Replace("\r\n", "\n").TrimEnd('\r', '\n');
+                    var sourceSha256 = ComputeSha256Hex(normalizedCode);
+
+                    var sectionBody = ResolveSectionBodyForFence(sections, sample, text);
+                    var claimSha256 = ComputeClaimSha256(sectionBody);
+
+                    JsonElement? settingsEntry = null;
+                    if (settingsByExampleId.TryGetValue(exampleId, out var byExId))
+                    {
+                        settingsEntry = byExId;
+                    }
+                    else if (settingsByUidAndHash.TryGetValue($"{uidKey}|{sourceSha256}", out var byUidHash))
+                    {
+                        settingsEntry = byUidHash;
+                    }
+                    else if (ordinal == 1 && settingsBySoleUid.TryGetValue(uidKey, out var bySole))
+                    {
+                        settingsEntry = bySole;
+                    }
+
+                    JsonElement? manifestEntry = manifestByExampleId.TryGetValue(exampleId, out var mEntry) ? mEntry : null;
+
+                    var tree = CSharpSyntaxTree.ParseText(code);
+                    var syntax = tree.GetCompilationUnitRoot();
+                    var isStandaloneSyntax = !tree.GetDiagnostics().Any(d => d.Severity == DiagnosticSeverity.Error) &&
+                        (syntax.Members.OfType<GlobalStatementSyntax>().Any() ||
+                         syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Any(m => m.Identifier.ValueText == "Main"));
+                    var isTestSyntax = syntax.DescendantNodes().OfType<AttributeSyntax>().Any(a =>
+                        a.Name.GetLastToken().ValueText is "Fact" or "Theory" or "FactAttribute" or "TheoryAttribute");
+
+                    var (topology, executionApplicable, applicableTransports) = ClassifyBehavioralTopology(
+                        settingsEntry, manifestEntry, context, isStandaloneSyntax, isTestSyntax);
+
+                    var depBuilder = new StringBuilder();
+                    foreach (var proj in ownerProjects.OrderBy(p => Rel(repoRoot, p.Path), StringComparer.OrdinalIgnoreCase))
+                    {
+                        depBuilder.Append("proj:").Append(NormalizeDocfxPath(Rel(repoRoot, proj.Path)))
+                            .Append('=').Append(HashFileIfExists(proj.Path)).Append('\n');
+                        foreach (var inputRel in RunActionProjectInputs(repoRoot, proj.Path).OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+                        {
+                            var inputFull = Path.GetFullPath(inputRel, repoRoot);
+                            depBuilder.Append("input:").Append(NormalizeDocfxPath(inputRel))
+                                .Append('=').Append(HashFileIfExists(inputFull)).Append('\n');
+                        }
+                    }
+
+                    if (context is not null)
+                    {
+                        depBuilder.Append("ctx-proj:").Append(NormalizeDocfxPath(Rel(repoRoot, context.Project)))
+                            .Append('=').Append(HashFileIfExists(context.Project)).Append('\n');
+                        depBuilder.Append("ctx-src:").Append(NormalizeDocfxPath(Rel(repoRoot, context.Source)))
+                            .Append('=').Append(HashFileIfExists(context.Source)).Append('\n');
+                    }
+
+                    AppendRecipeDependencyFingerprint(depBuilder, settingsEntry, manifestEntry);
+                    var dependencySha256 = ComputeSha256Hex(depBuilder.ToString());
+
+                    var recipeBuilder = new StringBuilder();
+                    recipeBuilder.Append("topology:").Append(topology).Append('\n');
+                    recipeBuilder.Append("transports:").Append(string.Join(",", applicableTransports)).Append('\n');
+                    if (settingsEntry is { } se)
+                    {
+                        recipeBuilder.Append("settings:").Append(CanonicalizeJsonElement(se)).Append('\n');
+                    }
+
+                    if (manifestEntry is { } me)
+                    {
+                        recipeBuilder.Append("manifest:").Append(CanonicalizeJsonElement(me)).Append('\n');
+                    }
+
+                    var recipeSha256 = ComputeSha256Hex(recipeBuilder.ToString());
+
+                    items.Add(new BehavioralInventoryItem(
+                        ExampleId: exampleId,
+                        Uid: uidKey,
+                        File: relFile,
+                        FenceOrdinal: ordinal,
+                        StartLine: sample.StartLine,
+                        ChangedPriority: isDirtyFile,
+                        SourceSha256: sourceSha256,
+                        ClaimSha256: claimSha256,
+                        DependencySha256: dependencySha256,
+                        RecipeSha256: recipeSha256,
+                        ExecutionTopology: topology,
+                        ExecutionApplicable: executionApplicable,
+                        ApplicableTransports: applicableTransports));
+                }
+            }
+
+            return items
+                .OrderBy(i => i.ChangedPriority ? 0 : 1)
+                .ThenBy(i => i.File, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(i => i.StartLine)
+                .ThenBy(i => i.ExampleId, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        finally
+        {
+            foreach (var doc in settingsDocs)
+            {
+                doc.Dispose();
+            }
+
+            manifestDoc?.Dispose();
+        }
+    }
+
+    private static string ResolveSectionBodyForFence(List<OverwriteSection> sections, SampleFence sample, string fullMarkdownText)
+    {
+        var matching = sections.FirstOrDefault(s =>
+            sample.StartLine >= s.BodyStartLine &&
+            (s.BodyEndLine == 0 || sample.StartLine <= s.BodyEndLine));
+        if (matching is not null)
+        {
+            return matching.Body;
+        }
+
+        return fullMarkdownText;
+    }
+
+    private static string ComputeClaimSha256(string sectionBody)
+    {
+        var normalized = sectionBody.Replace("\r\n", "\n").Replace("\r", "\n");
+        // Strip generated run-action HTML association blocks so run-action asset refreshes
+        // do not falsely invalidate documentation claims.
+        normalized = Regex.Replace(
+            normalized,
+            @"<!--\s*docfx-run-actions:start\s*-->.*?<!--\s*docfx-run-actions:end\s*-->",
+            string.Empty,
+            RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        // Strip fenced code blocks so claimSha256 tracks documentation narrative/expected claims
+        // independently of sourceSha256 (which tracks the displayed code itself).
+        normalized = Regex.Replace(
+            normalized,
+            @"(?ms)^[ \t]*`{3,}[^\n]*\n.*?^[ \t]*`{3,}[ \t]*$",
+            string.Empty,
+            RegexOptions.CultureInvariant);
+        var lines = normalized.Split('\n').Select(l => l.TrimEnd(' ', '\t'));
+        var canonical = string.Join("\n", lines).Trim();
+        return ComputeSha256Hex(canonical);
+    }
+
+    private static string ComputeSha256Hex(string text)
+        => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+
+    private static (string Topology, bool ExecutionApplicable, List<string> ApplicableTransports) ClassifyBehavioralTopology(
+        JsonElement? settingsEntry,
+        JsonElement? manifestEntry,
+        SampleContext? context,
+        bool isStandaloneSyntax,
+        bool isTestSyntax)
+    {
+        var unsupported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (settingsEntry is { } seUnsupported &&
+            seUnsupported.TryGetProperty("unsupportedTransports", out var utEl) &&
+            utEl.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in utEl.EnumerateObject())
+            {
+                if (!string.IsNullOrWhiteSpace(prop.Value.GetString()))
+                {
+                    unsupported.Add(prop.Name);
+                }
+            }
+        }
+
+        string? framework = null;
+        if (settingsEntry is { } seFw)
+        {
+            framework = ReadJsonString(seFw, "framework");
+            if (framework is null && seFw.TryGetProperty("manifest", out var mEl) && mEl.ValueKind == JsonValueKind.Object)
+            {
+                framework = ReadJsonString(mEl, "framework");
+            }
+            if (framework is null && seFw.TryGetProperty("hostHarness", out var hEl) && hEl.ValueKind == JsonValueKind.Object)
+            {
+                framework = ReadJsonString(hEl, "framework");
+            }
+        }
+
+        if (framework is null && manifestEntry is { } meFw)
+        {
+            framework = ReadJsonString(meFw, "framework");
+            if (framework is null && meFw.TryGetProperty("manifest", out var mEl) && mEl.ValueKind == JsonValueKind.Object)
+            {
+                framework = ReadJsonString(mEl, "framework");
+            }
+        }
+
+        if (framework is not null && Regex.IsMatch(framework, @"^net4\d+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            unsupported.Add("docker");
+        }
+
+        List<string> BuildTransports()
+        {
+            if (manifestEntry is { } meTr &&
+                meTr.TryGetProperty("transports", out var trEl) &&
+                trEl.ValueKind == JsonValueKind.Array)
+            {
+                var explicitTransports = trEl.EnumerateArray()
+                    .Where(e => e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString()))
+                    .Select(e => e.GetString()!.Trim().ToLowerInvariant())
+                    .Where(t => !unsupported.Contains(t))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (explicitTransports.Count > 0)
+                {
+                    return explicitTransports;
+                }
+            }
+
+            var list = new List<string>();
+            if (!unsupported.Contains("native")) { list.Add("native"); }
+            if (!unsupported.Contains("docker")) { list.Add("docker"); }
+            return list;
+        }
+
+        if (settingsEntry is { } se)
+        {
+            if (!string.IsNullOrWhiteSpace(ReadJsonString(se, "intrinsicLimitation")))
+            {
+                return ("intrinsic", false, new List<string>());
+            }
+
+            if (!string.IsNullOrWhiteSpace(ReadJsonString(se, "repository")))
+            {
+                return ("repository", true, BuildTransports());
+            }
+
+            if (string.Equals(ReadJsonString(se, "mode"), "host", StringComparison.OrdinalIgnoreCase) ||
+                (se.TryGetProperty("hostHarness", out var hh) && hh.ValueKind == JsonValueKind.Object))
+            {
+                return ("host", true, BuildTransports());
+            }
+
+            if (se.TryGetProperty("manifest", out var mObj) && mObj.ValueKind == JsonValueKind.Object)
+            {
+                var mode = ReadJsonString(mObj, "mode");
+                var topo = string.Equals(mode, "test", StringComparison.OrdinalIgnoreCase) ? "standalone-test" : "standalone-console";
+                return (topo, true, BuildTransports());
+            }
+        }
+
+        if (manifestEntry is { } me)
+        {
+            var strategy = ReadJsonString(me, "strategy");
+            if (string.Equals(strategy, "repository", StringComparison.OrdinalIgnoreCase))
+            {
+                return ("repository", true, BuildTransports());
+            }
+
+            if (string.Equals(strategy, "host", StringComparison.OrdinalIgnoreCase))
+            {
+                return ("host", true, BuildTransports());
+            }
+
+            if (string.Equals(strategy, "standalone", StringComparison.OrdinalIgnoreCase))
+            {
+                var mode = me.TryGetProperty("manifest", out var mObj) && mObj.ValueKind == JsonValueKind.Object
+                    ? ReadJsonString(mObj, "mode")
+                    : null;
+                var topo = string.Equals(mode, "test", StringComparison.OrdinalIgnoreCase) ? "standalone-test" : "standalone-console";
+                return (topo, true, BuildTransports());
+            }
+        }
+
+        if (context is not null)
+        {
+            return ("project-bound", false, new List<string>());
+        }
+
+        if (isTestSyntax)
+        {
+            return ("standalone-test", true, BuildTransports());
+        }
+
+        if (isStandaloneSyntax)
+        {
+            return ("standalone-console", true, BuildTransports());
+        }
+
+        return ("library-snippet", false, new List<string>());
+    }
+
+    private static void AppendRecipeDependencyFingerprint(StringBuilder sb, JsonElement? settingsEntry, JsonElement? manifestEntry)
+    {
+        void AppendObj(string label, JsonElement? entry)
+        {
+            if (entry is not { } el || el.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            foreach (var key in new[] { "repository", "commit", "project", "test", "framework", "image", "csrunImage" })
+            {
+                var val = ReadJsonString(el, key);
+                if (!string.IsNullOrWhiteSpace(val))
+                {
+                    sb.Append(label).Append('.').Append(key).Append('=').Append(val).Append('\n');
+                }
+            }
+
+            foreach (var nestedName in new[] { "manifest", "hostHarness" })
+            {
+                if (el.TryGetProperty(nestedName, out var nested) && nested.ValueKind == JsonValueKind.Object)
+                {
+                    var fw = ReadJsonString(nested, "framework");
+                    if (!string.IsNullOrWhiteSpace(fw))
+                    {
+                        sb.Append(label).Append('.').Append(nestedName).Append(".framework=").Append(fw).Append('\n');
+                    }
+
+                    var sdk = ReadJsonString(nested, "sdk");
+                    if (!string.IsNullOrWhiteSpace(sdk))
+                    {
+                        sb.Append(label).Append('.').Append(nestedName).Append(".sdk=").Append(sdk).Append('\n');
+                    }
+
+                    if (nested.TryGetProperty("dependsOn", out var deps) && deps.ValueKind == JsonValueKind.Array)
+                    {
+                        var depList = deps.EnumerateArray()
+                            .Where(d => d.ValueKind == JsonValueKind.String)
+                            .Select(d => d.GetString() ?? string.Empty)
+                            .OrderBy(d => d, StringComparer.OrdinalIgnoreCase);
+                        sb.Append(label).Append('.').Append(nestedName).Append(".dependsOn=")
+                            .Append(string.Join(";", depList)).Append('\n');
+                    }
+                }
+            }
+        }
+
+        AppendObj("settings", settingsEntry);
+        AppendObj("manifest", manifestEntry);
+    }
+
+    private static string CanonicalizeJsonElement(JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                var props = element.EnumerateObject()
+                    .OrderBy(p => p.Name, StringComparer.Ordinal)
+                    .Select(p => $"{JsonSerializer.Serialize(p.Name)}:{CanonicalizeJsonElement(p.Value)}");
+                return "{" + string.Join(",", props) + "}";
+            case JsonValueKind.Array:
+                var items = element.EnumerateArray().Select(CanonicalizeJsonElement);
+                return "[" + string.Join(",", items) + "]";
+            default:
+                return element.GetRawText();
+        }
+    }
+
+    private static void InitializeBehavioralLedger(
+        string ledgerPath,
+        Options options,
+        string repoRoot,
+        string docfxPath,
+        ScopePlan scope,
+        List<BehavioralInventoryItem> inventory,
+        Report report)
+    {
+        var fullPath = Path.GetFullPath(ledgerPath, repoRoot);
+        var existingById = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        JsonDocument? existingDoc = null;
+        try
+        {
+            if (File.Exists(fullPath))
+            {
+                try
+                {
+                    existingDoc = JsonDocument.Parse(File.ReadAllText(fullPath), new JsonDocumentOptions
+                    {
+                        AllowTrailingCommas = true,
+                        CommentHandling = JsonCommentHandling.Skip
+                    });
+                    if (existingDoc.RootElement.TryGetProperty("schemaVersion", out var sv) &&
+                        sv.ValueKind == JsonValueKind.Number && sv.GetInt32() == 1 &&
+                        existingDoc.RootElement.TryGetProperty("examples", out var exArr) &&
+                        exArr.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var el in exArr.EnumerateArray())
+                        {
+                            var id = ReadJsonString(el, "exampleId");
+                            if (!string.IsNullOrWhiteSpace(id))
+                            {
+                                existingById.TryAdd(id.Trim(), el);
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Existing file unreadable/invalid; regenerate clean template.
+                }
+            }
+
+            var serializedExamples = new List<object>();
+            foreach (var item in inventory)
+            {
+                if (existingById.TryGetValue(item.ExampleId, out var prev) &&
+                    string.Equals(ReadJsonString(prev, "sourceSha256"), item.SourceSha256, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(ReadJsonString(prev, "claimSha256"), item.ClaimSha256, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(ReadJsonString(prev, "dependencySha256"), item.DependencySha256, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(ReadJsonString(prev, "recipeSha256"), item.RecipeSha256, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(ReadJsonString(prev, "executionTopology"), item.ExecutionTopology, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(NormalizeDocfxPath(ReadJsonString(prev, "file") ?? string.Empty), item.File, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Preserve still-current reviewed record while updating location/priority metadata.
+                    var preserved = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(prev.GetRawText())
+                        ?? new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+                    preserved["changedPriority"] = JsonSerializer.SerializeToElement(item.ChangedPriority);
+                    preserved["startLine"] = JsonSerializer.SerializeToElement(item.StartLine);
+                    preserved["applicableTransports"] = JsonSerializer.SerializeToElement(item.ApplicableTransports);
+                    serializedExamples.Add(preserved);
+                }
+                else
+                {
+                    var transportStatus = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var transport in item.ApplicableTransports)
+                    {
+                        transportStatus[transport] = "Unverified";
+                    }
+
+                    serializedExamples.Add(new
+                    {
+                        exampleId = item.ExampleId,
+                        uid = item.Uid,
+                        file = item.File,
+                        fenceOrdinal = item.FenceOrdinal,
+                        startLine = item.StartLine,
+                        changedPriority = item.ChangedPriority,
+                        sourceSha256 = item.SourceSha256,
+                        claimSha256 = item.ClaimSha256,
+                        dependencySha256 = item.DependencySha256,
+                        recipeSha256 = item.RecipeSha256,
+                        executionTopology = item.ExecutionTopology,
+                        executionApplicable = item.ExecutionApplicable,
+                        applicableTransports = item.ApplicableTransports,
+                        documentedOperation = string.Empty,
+                        consumerScenario = string.Empty,
+                        authoritativeEvidence = string.Empty,
+                        expectedObservation = string.Empty,
+                        actualObservation = string.Empty,
+                        observationEvidencePath = string.Empty,
+                        executionCommand = string.Empty,
+                        disposition = "unreviewed",
+                        transportStatus,
+                        findings = Array.Empty<object>()
+                    });
+                }
+            }
+
+            var ledger = new
+            {
+                schemaVersion = 1,
+                operation = options.Operation,
+                repoRoot = ".",
+                docfxPath = NormalizeDocfxPath(Rel(repoRoot, docfxPath)),
+                scopeMode = scope.Mode,
+                selectedProjects = scope.SelectedProjectPaths
+                    .Select(p => NormalizeDocfxPath(Rel(repoRoot, p)))
+                    .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+                changedOnly = options.ChangedOnly,
+                examples = serializedExamples
+            };
+
+            var dir = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            var tempPath = fullPath + ".tmp-" + Guid.NewGuid().ToString("N");
+            File.WriteAllText(tempPath, JsonSerializer.Serialize(ledger, JsonOptions), new UTF8Encoding(false));
+            File.Move(tempPath, fullPath, overwrite: true);
+            report.BehavioralLedgerPath = IsInsideDirectory(fullPath, repoRoot) ? Rel(repoRoot, fullPath) : fullPath;
+        }
+        finally
+        {
+            existingDoc?.Dispose();
+        }
+    }
+
+    private static void ReconcileBehavioralLedger(
+        string? ledgerPath,
+        Options options,
+        string repoRoot,
+        string docfxPath,
+        ScopePlan scope,
+        List<BehavioralInventoryItem> inventory,
+        Report report)
+    {
+        report.Summary.Operation = options.Operation;
+        report.Summary.BehaviorReviewRequired = true;
+        report.Summary.ExamplesInScope = inventory.Count;
+
+        var examplesReviewed = 0;
+        var examplesBehaviorVerified = 0;
+        var examplesSourceReviewedOnly = 0;
+        var examplesUnreviewed = 0;
+        var behavioralFindingsRemaining = 0;
+        var behavioralEvidenceMissing = 0;
+        var behavioralEvidenceStale = 0;
+
+        void CommitSummary()
+        {
+            report.Summary.ExamplesReviewed = examplesReviewed;
+            report.Summary.ExamplesBehaviorVerified = examplesBehaviorVerified;
+            report.Summary.ExamplesSourceReviewedOnly = examplesSourceReviewedOnly;
+            report.Summary.ExamplesUnreviewed = examplesUnreviewed;
+            report.Summary.BehavioralFindingsRemaining = behavioralFindingsRemaining;
+            report.Summary.BehavioralEvidenceMissing = behavioralEvidenceMissing;
+            report.Summary.BehavioralEvidenceStale = behavioralEvidenceStale;
+        }
+
+        if (string.IsNullOrWhiteSpace(ledgerPath))
+        {
+            if (inventory.Count > 0)
+            {
+                examplesUnreviewed = inventory.Count;
+                behavioralEvidenceMissing = inventory.Count;
+                report.Errors.Add(new Diagnostic("BEHAVIORAL_LEDGER_MISSING", null, null,
+                    $"Operation '{options.Operation}' requires a behavioral review ledger covering all {inventory.Count} in-scope example(s). Materialize one with --init-behavioral-ledger <temp-path> and pass --behavioral-ledger <temp-path> on final validation."));
+            }
+
+            CommitSummary();
+            return;
+        }
+
+        var fullPath = Path.GetFullPath(ledgerPath, repoRoot);
+        var displayLedgerPath = IsInsideDirectory(fullPath, repoRoot) ? Rel(repoRoot, fullPath) : fullPath;
+        report.BehavioralLedgerPath = displayLedgerPath;
+
+        if (!File.Exists(fullPath))
+        {
+            examplesUnreviewed = inventory.Count;
+            behavioralEvidenceMissing = inventory.Count;
+            report.Errors.Add(new Diagnostic("BEHAVIORAL_LEDGER_MISSING", displayLedgerPath, null,
+                $"The behavioral review ledger does not exist at '{displayLedgerPath}'."));
+            CommitSummary();
+            return;
+        }
+
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(File.ReadAllText(fullPath), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            examplesUnreviewed = inventory.Count;
+            behavioralEvidenceMissing = inventory.Count;
+            report.Errors.Add(new Diagnostic("BEHAVIORAL_LEDGER_INVALID", displayLedgerPath, null,
+                $"Unable to parse behavioral review ledger: {ex.Message}"));
+            CommitSummary();
+            return;
+        }
+
+        using (doc)
+        {
+            var rootEl = doc.RootElement;
+            if (rootEl.ValueKind != JsonValueKind.Object ||
+                !rootEl.TryGetProperty("schemaVersion", out var schemaEl) ||
+                schemaEl.ValueKind != JsonValueKind.Number ||
+                schemaEl.GetInt32() != 1 ||
+                !rootEl.TryGetProperty("examples", out var examplesEl) ||
+                examplesEl.ValueKind != JsonValueKind.Array)
+            {
+                examplesUnreviewed = inventory.Count;
+                behavioralEvidenceMissing = inventory.Count;
+                report.Errors.Add(new Diagnostic("BEHAVIORAL_LEDGER_INVALID", displayLedgerPath, null,
+                    "The behavioral review ledger must be a JSON object with schemaVersion 1 and an 'examples' array."));
+                CommitSummary();
+                return;
+            }
+
+            var ledgerDocfx = ReadJsonString(rootEl, "docfxPath");
+            var expectedDocfx = NormalizeDocfxPath(Rel(repoRoot, docfxPath));
+            if (!string.IsNullOrWhiteSpace(ledgerDocfx) &&
+                !string.Equals(NormalizeDocfxPath(ledgerDocfx), expectedDocfx, StringComparison.OrdinalIgnoreCase))
+            {
+                report.Errors.Add(new Diagnostic("BEHAVIORAL_LEDGER_SCOPE_MISMATCH", displayLedgerPath, null,
+                    $"Behavioral ledger targets docfxPath '{ledgerDocfx}', which does not match active DocFX config '{expectedDocfx}'."));
+            }
+
+            var ledgerScopeMode = ReadJsonString(rootEl, "scopeMode");
+            var ledgerChangedOnly = rootEl.TryGetProperty("changedOnly", out var coEl) && coEl.ValueKind == JsonValueKind.True;
+            if (scope.Mode == "full" && !options.ChangedOnly)
+            {
+                if ((!string.IsNullOrWhiteSpace(ledgerScopeMode) && !string.Equals(ledgerScopeMode, "full", StringComparison.OrdinalIgnoreCase)) ||
+                    ledgerChangedOnly)
+                {
+                    report.Errors.Add(new Diagnostic("BEHAVIORAL_LEDGER_SCOPE_MISMATCH", displayLedgerPath, null,
+                        $"Behavioral ledger scope (scopeMode='{ledgerScopeMode ?? "unknown"}', changedOnly={ledgerChangedOnly.ToString().ToLowerInvariant()}) is narrower than the requested repository-wide repair scope."));
+                }
+            }
+
+            var entriesById = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            var duplicateIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var ledgerIndex = 0;
+
+            foreach (var entry in examplesEl.EnumerateArray())
+            {
+                ledgerIndex++;
+                if (entry.ValueKind != JsonValueKind.Object)
+                {
+                    report.Errors.Add(new Diagnostic("BEHAVIORAL_LEDGER_INVALID", displayLedgerPath, null,
+                        $"Behavioral ledger entry #{ledgerIndex} must be a JSON object."));
+                    continue;
+                }
+
+                var entryId = ReadJsonString(entry, "exampleId")?.Trim();
+                if (string.IsNullOrWhiteSpace(entryId))
+                {
+                    report.Errors.Add(new Diagnostic("BEHAVIORAL_LEDGER_INVALID", displayLedgerPath, null,
+                        $"Behavioral ledger entry #{ledgerIndex} is missing a required 'exampleId'."));
+                    continue;
+                }
+
+                if (!entriesById.TryAdd(entryId, entry))
+                {
+                    if (duplicateIds.Add(entryId))
+                    {
+                        report.Errors.Add(new Diagnostic("BEHAVIORAL_LEDGER_DUPLICATE", displayLedgerPath, null,
+                            $"Duplicate behavioral ledger entries found for example '{entryId}'. Deduplicate the ledger; duplicate records cannot inflate review coverage.",
+                            uid: ReadJsonString(entry, "uid")));
+                    }
+                }
+            }
+
+            var inventoryIds = new HashSet<string>(inventory.Select(i => i.ExampleId), StringComparer.OrdinalIgnoreCase);
+            foreach (var ledgerId in entriesById.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase))
+            {
+                if (!inventoryIds.Contains(ledgerId))
+                {
+                    report.Errors.Add(new Diagnostic("BEHAVIORAL_LEDGER_ORPHANED", displayLedgerPath, null,
+                        $"Behavioral ledger contains example '{ledgerId}' which is not present in the authoritative in-scope inventory."));
+                }
+            }
+
+            var ledgerDirectory = Path.GetDirectoryName(fullPath) ?? repoRoot;
+
+            foreach (var inv in inventory)
+            {
+                if (duplicateIds.Contains(inv.ExampleId))
+                {
+                    examplesUnreviewed++;
+                    behavioralEvidenceMissing++;
+                    continue;
+                }
+
+                if (!entriesById.TryGetValue(inv.ExampleId, out var entry))
+                {
+                    examplesUnreviewed++;
+                    behavioralEvidenceMissing++;
+                    report.Errors.Add(new Diagnostic("BEHAVIORAL_REVIEW_INCOMPLETE", inv.File, NamespaceFromUid(inv.Uid),
+                        $"In-scope example '{inv.ExampleId}' is missing from the behavioral review ledger.",
+                        uid: inv.Uid));
+                    continue;
+                }
+
+                var openFindings = CountOpenBehavioralFindings(entry);
+                if (openFindings > 0)
+                {
+                    behavioralFindingsRemaining += openFindings;
+                    report.Errors.Add(new Diagnostic("BEHAVIORAL_FINDING_UNRESOLVED", inv.File, NamespaceFromUid(inv.Uid),
+                        $"Example '{inv.ExampleId}' has {openFindings} unresolved behavioral finding(s).",
+                        uid: inv.Uid));
+                }
+
+                var disposition = ReadJsonString(entry, "disposition")?.Trim().ToLowerInvariant();
+                if (string.IsNullOrWhiteSpace(disposition))
+                {
+                    examplesUnreviewed++;
+                    behavioralEvidenceMissing++;
+                    report.Errors.Add(new Diagnostic("BEHAVIORAL_LEDGER_INVALID", inv.File, NamespaceFromUid(inv.Uid),
+                        $"Example '{inv.ExampleId}' is missing a valid 'disposition'.",
+                        uid: inv.Uid));
+                    continue;
+                }
+
+                switch (disposition)
+                {
+                    case "unreviewed":
+                        examplesUnreviewed++;
+                        behavioralEvidenceMissing++;
+                        report.Errors.Add(new Diagnostic("BEHAVIORAL_REVIEW_INCOMPLETE", inv.File, NamespaceFromUid(inv.Uid),
+                            $"Example '{inv.ExampleId}' remains unreviewed in the behavioral ledger.",
+                            uid: inv.Uid));
+                        continue;
+
+                    case "unresolved-finding":
+                        examplesReviewed++;
+                        if (openFindings == 0)
+                        {
+                            behavioralFindingsRemaining++;
+                            report.Errors.Add(new Diagnostic("BEHAVIORAL_FINDING_UNRESOLVED", inv.File, NamespaceFromUid(inv.Uid),
+                                $"Example '{inv.ExampleId}' is marked 'unresolved-finding' and must be repaired before completion.",
+                                uid: inv.Uid));
+                        }
+
+                        continue;
+
+                    case "unavailable-execution":
+                        examplesReviewed++;
+                        behavioralEvidenceMissing++;
+                        var reason = ReadJsonString(entry, "unavailabilityReason") ?? ReadJsonString(entry, "actualObservation");
+                        var reasonDetail = string.IsNullOrWhiteSpace(reason)
+                            ? "No unavailability reason was recorded."
+                            : $"Reason: {reason.Trim()}";
+                        report.Errors.Add(new Diagnostic("BEHAVIORAL_EVIDENCE_UNAVAILABLE", inv.File, NamespaceFromUid(inv.Uid),
+                            $"Execution evidence for example '{inv.ExampleId}' is unavailable and cannot satisfy unconditional completion. {reasonDetail}",
+                            uid: inv.Uid));
+                        continue;
+
+                    case "verified-behavior":
+                    case "source-reviewed-only":
+                        break;
+
+                    default:
+                        examplesUnreviewed++;
+                        behavioralEvidenceMissing++;
+                        report.Errors.Add(new Diagnostic("BEHAVIORAL_LEDGER_INVALID", inv.File, NamespaceFromUid(inv.Uid),
+                            $"Example '{inv.ExampleId}' has unsupported disposition '{disposition}'. Expected verified-behavior, source-reviewed-only, unresolved-finding, unavailable-execution, or unreviewed.",
+                            uid: inv.Uid));
+                        continue;
+                }
+
+                // 1. Check staleness against the live authoritative inventory (source, claim, dependency, recipe, topology, file).
+                var staleReasons = new List<string>();
+                if (!string.Equals(ReadJsonString(entry, "sourceSha256"), inv.SourceSha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    staleReasons.Add("sourceSha256");
+                }
+
+                if (!string.Equals(ReadJsonString(entry, "claimSha256"), inv.ClaimSha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    staleReasons.Add("claimSha256");
+                }
+
+                if (!string.Equals(ReadJsonString(entry, "dependencySha256"), inv.DependencySha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    staleReasons.Add("dependencySha256");
+                }
+
+                if (!string.Equals(ReadJsonString(entry, "recipeSha256"), inv.RecipeSha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    staleReasons.Add("recipeSha256");
+                }
+
+                if (!string.Equals(ReadJsonString(entry, "executionTopology"), inv.ExecutionTopology, StringComparison.OrdinalIgnoreCase))
+                {
+                    staleReasons.Add("executionTopology");
+                }
+
+                var recordedFile = ReadJsonString(entry, "file");
+                if (!string.IsNullOrWhiteSpace(recordedFile) &&
+                    !string.Equals(NormalizeDocfxPath(recordedFile), inv.File, StringComparison.OrdinalIgnoreCase))
+                {
+                    staleReasons.Add("file");
+                }
+
+                if (staleReasons.Count > 0)
+                {
+                    behavioralEvidenceStale++;
+                    report.Errors.Add(new Diagnostic("BEHAVIORAL_EVIDENCE_STALE", inv.File, NamespaceFromUid(inv.Uid),
+                        $"Behavioral evidence for example '{inv.ExampleId}' is stale ({string.Join(", ", staleReasons)} changed since review). Re-inspect and update the ledger.",
+                        uid: inv.Uid));
+                    continue;
+                }
+
+                // 2. Validate required reasoning evidence fields.
+                var missingFields = new List<string>();
+                if (!IsSubstantiveBehavioralText(ReadJsonString(entry, "documentedOperation"), 4))
+                {
+                    missingFields.Add("documentedOperation");
+                }
+
+                if (!IsSubstantiveBehavioralText(ReadJsonString(entry, "consumerScenario"), 10))
+                {
+                    missingFields.Add("consumerScenario");
+                }
+
+                if (!IsSubstantiveBehavioralText(ReadJsonString(entry, "authoritativeEvidence"), 5))
+                {
+                    missingFields.Add("authoritativeEvidence");
+                }
+
+                if (!IsSubstantiveBehavioralText(ReadJsonString(entry, "expectedObservation"), 8))
+                {
+                    missingFields.Add("expectedObservation");
+                }
+
+                if (missingFields.Count > 0)
+                {
+                    behavioralEvidenceMissing++;
+                    report.Errors.Add(new Diagnostic("BEHAVIORAL_EVIDENCE_MISSING", inv.File, NamespaceFromUid(inv.Uid),
+                        $"Behavioral evidence for example '{inv.ExampleId}' is missing substantive field(s): {string.Join(", ", missingFields)}.",
+                        uid: inv.Uid));
+                    continue;
+                }
+
+                // 3. Enforce execution topology obligations.
+                if (disposition == "source-reviewed-only")
+                {
+                    examplesReviewed++;
+                    examplesSourceReviewedOnly++;
+                    if (inv.ExecutionApplicable)
+                    {
+                        behavioralEvidenceMissing++;
+                        report.Errors.Add(new Diagnostic("BEHAVIORAL_EXECUTION_REQUIRED", inv.File, NamespaceFromUid(inv.Uid),
+                            $"Example '{inv.ExampleId}' has executable topology '{inv.ExecutionTopology}' and cannot close as 'source-reviewed-only'. Compare actual execution output against the expectation or mark 'unavailable-execution' if blocked.",
+                            uid: inv.Uid));
+                    }
+
+                    continue;
+                }
+
+                // disposition == "verified-behavior"
+                var actualObservation = ReadJsonString(entry, "actualObservation");
+                if (!IsSubstantiveBehavioralText(actualObservation, 8))
+                {
+                    behavioralEvidenceMissing++;
+                    report.Errors.Add(new Diagnostic("BEHAVIORAL_EVIDENCE_MISSING", inv.File, NamespaceFromUid(inv.Uid),
+                        $"Example '{inv.ExampleId}' is marked 'verified-behavior' without a substantive 'actualObservation'.",
+                        uid: inv.Uid));
+                    continue;
+                }
+
+                if (IsTransportOnlyObservation(actualObservation!))
+                {
+                    behavioralEvidenceMissing++;
+                    report.Errors.Add(new Diagnostic("BEHAVIORAL_TRANSPORT_ONLY_REJECTED", inv.File, NamespaceFromUid(inv.Uid),
+                        $"Example '{inv.ExampleId}' recorded only process exit or transport status in 'actualObservation' ('{actualObservation!.Trim()}'). Compare actual observed behavior against the documented expectation.",
+                        uid: inv.Uid));
+                    continue;
+                }
+
+                var evidenceLocation = ReadJsonString(entry, "observationEvidencePath")?.Trim();
+                var executionCommand = ReadJsonString(entry, "executionCommand")?.Trim();
+                if (!string.IsNullOrWhiteSpace(evidenceLocation))
+                {
+                    var resolvedEvidence = Path.IsPathRooted(evidenceLocation)
+                        ? evidenceLocation
+                        : File.Exists(Path.GetFullPath(evidenceLocation, ledgerDirectory))
+                            ? Path.GetFullPath(evidenceLocation, ledgerDirectory)
+                            : Path.GetFullPath(evidenceLocation, repoRoot);
+
+                    if (!File.Exists(resolvedEvidence) || new FileInfo(resolvedEvidence).Length == 0)
+                    {
+                        behavioralEvidenceMissing++;
+                        report.Errors.Add(new Diagnostic("BEHAVIORAL_EVIDENCE_MISSING", inv.File, NamespaceFromUid(inv.Uid),
+                            $"Example '{inv.ExampleId}' references missing or empty observation evidence at '{evidenceLocation}'.",
+                            uid: inv.Uid));
+                        continue;
+                    }
+                }
+                else if (string.IsNullOrWhiteSpace(executionCommand))
+                {
+                    behavioralEvidenceMissing++;
+                    report.Errors.Add(new Diagnostic("BEHAVIORAL_EVIDENCE_MISSING", inv.File, NamespaceFromUid(inv.Uid),
+                        $"Example '{inv.ExampleId}' is marked 'verified-behavior' without 'observationEvidencePath' or 'executionCommand'.",
+                        uid: inv.Uid));
+                    continue;
+                }
+
+                if (options.CsrunRequested && inv.ApplicableTransports.Count > 0)
+                {
+                    var unverifiedTransports = new List<string>();
+                    var hasTransportMap = entry.TryGetProperty("transportStatus", out var tsEl) && tsEl.ValueKind == JsonValueKind.Object;
+                    foreach (var transport in inv.ApplicableTransports)
+                    {
+                        var statusVal = hasTransportMap ? ReadJsonString(tsEl, transport) : null;
+                        if (!string.Equals(statusVal, "Verified", StringComparison.OrdinalIgnoreCase))
+                        {
+                            unverifiedTransports.Add($"{transport}={statusVal ?? "missing"}");
+                        }
+                    }
+
+                    if (unverifiedTransports.Count > 0)
+                    {
+                        behavioralEvidenceMissing++;
+                        report.Errors.Add(new Diagnostic("BEHAVIORAL_TRANSPORT_UNVERIFIED", inv.File, NamespaceFromUid(inv.Uid),
+                            $"Example '{inv.ExampleId}' under operation '{options.Operation}' has unverified applicable transport(s): {string.Join(", ", unverifiedTransports)}.",
+                            uid: inv.Uid));
+                        continue;
+                    }
+                }
+
+                examplesReviewed++;
+                if (openFindings == 0)
+                {
+                    examplesBehaviorVerified++;
+                }
+            }
+        }
+
+        CommitSummary();
+    }
+
+    private static int CountOpenBehavioralFindings(JsonElement entry)
+    {
+        if (!entry.TryGetProperty("findings", out var findingsEl) || findingsEl.ValueKind != JsonValueKind.Array)
+        {
+            return 0;
+        }
+
+        var open = 0;
+        foreach (var item in findingsEl.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                if (!string.IsNullOrWhiteSpace(item.GetString()))
+                {
+                    open++;
+                }
+
+                continue;
+            }
+
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (item.TryGetProperty("resolved", out var resolvedEl) && resolvedEl.ValueKind == JsonValueKind.True)
+            {
+                continue;
+            }
+
+            var status = ReadJsonString(item, "status")?.Trim().ToLowerInvariant();
+            if (status is "resolved" or "repaired" or "already-resolved" or "inapplicable")
+            {
+                continue;
+            }
+
+            open++;
+        }
+
+        return open;
+    }
+
+    private static bool IsSubstantiveBehavioralText(string? value, int minimumLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.Length < minimumLength)
+        {
+            return false;
+        }
+
+        return !Regex.IsMatch(trimmed,
+            @"(?i)^(?:todo|tbd|n/?a|none|ok|pass(?:ed)?|verified|green|cached|same as above|looks good|lgtm)[.!]?$");
+    }
+
+    private static bool IsTransportOnlyObservation(string observation)
+    {
+        var trimmed = observation.Trim();
+        return Regex.IsMatch(trimmed,
+            @"(?i)^(?:(?:the\s+)?(?:process|command|script|example|run|execution|transport|native|docker|cached(?:\s+transport)?)\s+(?:exited|completed|succeeded|passed|returned|was\s+verified|is\s+verified|is\s+green)(?:\s+(?:with\s+)?(?:exit\s*code\s*0|code\s*0|successfully|cleanly|ok|without\s+errors?))?|(?:exit\s*code\s*[:=]?\s*0)|(?:(?:native|docker|both)\s+(?:and\s+(?:native|docker)\s+)?(?:transport(?:s)?\s+)?(?:verified|passed|green|cached))|(?:cached\s+(?:native|docker|transport)\s+(?:verification|status)\s+(?:is\s+)?(?:verified|green|passed)))[.!]?$");
+    }
+
     // Safe structured overwrite writer: accepts an authored UID, mapping kind, prose, and C# fence,
     // validates them, preserves BOM/line-endings, and refuses to clobber dirty paths it does not own.
     private static int WriteOverwriteCommand(Options options)
@@ -10132,12 +11800,55 @@ internal static class DocfxValidator
             report.Summary.RemainingGates.Add("--verify-docfx-build");
         }
 
+        var frameworkNarrowed = options.FrameworkExplicitlySpecified &&
+                                report.Summary.OmittedFrameworks is { Count: > 0 };
+        if (frameworkNarrowed)
+        {
+            report.Summary.RemainingGates.Add("unrestricted-multi-tfm");
+        }
+
+        var behavioralErrors = report.Errors.Count(e => e.Code.StartsWith("BEHAVIORAL_", StringComparison.Ordinal));
+        var behavioralIncomplete = report.Summary.BehaviorReviewRequired && (
+            behavioralErrors > 0 ||
+            (report.Summary.ExamplesUnreviewed ?? 0) > 0 ||
+            (report.Summary.BehavioralFindingsRemaining ?? 0) > 0 ||
+            (report.Summary.BehavioralEvidenceMissing ?? 0) > 0 ||
+            (report.Summary.BehavioralEvidenceStale ?? 0) > 0);
+        if (behavioralIncomplete)
+        {
+            var gateName = report.Errors.Any(e => e.Code == "BEHAVIORAL_LEDGER_MISSING")
+                ? "--behavioral-ledger"
+                : "behavioral-review";
+            report.Summary.RemainingGates.Add(gateName);
+        }
+
+        var deterministicErrorCount = report.Errors.Count - behavioralErrors;
+        report.Summary.DeterministicGatesPassed =
+            deterministicErrorCount == 0 &&
+            report.Summary.FullVerificationRan &&
+            !frameworkNarrowed;
+
         report.Summary.CanClaimCompletion = code == ExitCode.Success &&
                                             report.Errors.Count == 0 &&
-                                            report.Summary.RemainingGates.Count == 0;
+                                            report.Summary.RemainingGates.Count == 0 &&
+                                            !behavioralIncomplete;
         report.Summary.CompletionState = report.Summary.CanClaimCompletion
             ? "complete"
-            : report.Errors.Count > 0 ? "incomplete" : "verification-required";
+            : behavioralIncomplete && report.Summary.DeterministicGatesPassed && (report.Summary.BehavioralFindingsRemaining ?? 0) == 0
+                ? "behavioral-review-required"
+                : report.Errors.Count > 0 ? "incomplete" : "verification-required";
+
+        // An explicit --framework that omits other target frameworks of a multi-TFM repository
+        // reports explicit framework-scoped status and cannot satisfy a repository-wide completion claim.
+        if (frameworkNarrowed && report.Summary.RunMode == "full")
+        {
+            report.Summary.CanClaimCompletion = false;
+            var allOtherGatesPassed = report.Errors.Count == 0 &&
+                                      report.Summary.RemainingGates.All(g => string.Equals(g, "unrestricted-multi-tfm", StringComparison.Ordinal));
+            report.Summary.CompletionState = code == ExitCode.Success && allOtherGatesPassed
+                ? "framework-scoped-passed"
+                : "framework-scoped-failed";
+        }
 
         // A dry run or an explicitly scoped run never claims repository-wide completion; it reports
         // only the state of the selected scope so a passing subset is not mistaken for a full digest.
@@ -10566,6 +12277,7 @@ internal static class DocfxValidator
                 case "--framework":
                     if (!Next(args, ref i, out var fw)) { error = "--framework requires a TFM."; return false; }
                     options.Framework = fw;
+                    options.FrameworkExplicitlySpecified = true;
                     break;
                 case "--validate-samples":
                     options.ValidateSamples = true;
@@ -10649,6 +12361,22 @@ internal static class DocfxValidator
                     if (!Next(args, ref i, out var rrp)) { error = "--review-report requires a path."; return false; }
                     options.ReviewReportPath = rrp;
                     break;
+                case "--operation":
+                    if (!Next(args, ref i, out var op)) { error = "--operation requires validate, audit, repair, or repair-csrun."; return false; }
+                    if (!IsValidOperation(op)) { error = "--operation must be validate, audit, repair, or repair-csrun."; return false; }
+                    options.Operation = op.ToLowerInvariant();
+                    options.OperationExplicitlySpecified = true;
+                    break;
+                case "--init-behavioral-ledger":
+                    if (!Next(args, ref i, out var ibl)) { error = "--init-behavioral-ledger requires a path."; return false; }
+                    options.InitBehavioralLedgerPath = ibl;
+                    if (!options.OperationExplicitlySpecified) { options.Operation = "repair"; }
+                    break;
+                case "--behavioral-ledger":
+                    if (!Next(args, ref i, out var bl)) { error = "--behavioral-ledger requires a path."; return false; }
+                    options.BehavioralLedgerPath = bl;
+                    if (!options.OperationExplicitlySpecified) { options.Operation = "repair"; }
+                    break;
                 case "--write-overwrite":
                     if (!Next(args, ref i, out var wo)) { error = "--write-overwrite requires a request JSON path."; return false; }
                     options.WriteOverwriteRequestPath = wo;
@@ -10660,7 +12388,7 @@ internal static class DocfxValidator
                     if (TrySplit(arg, "--repo-root", out var v1)) { options.RepoRoot = v1; break; }
                     if (TrySplit(arg, "--docfx", out var v2)) { options.DocfxPath = v2; break; }
                     if (TrySplit(arg, "--configuration", out var v3)) { options.Configuration = v3; break; }
-                    if (TrySplit(arg, "--framework", out var v4)) { options.Framework = v4; break; }
+                    if (TrySplit(arg, "--framework", out var v4)) { options.Framework = v4; options.FrameworkExplicitlySpecified = true; break; }
                     if (TrySplit(arg, "--assessment-queue", out var v5a)) { options.AssessmentQueuePath = v5a; break; }
                     if (TrySplit(arg, "--sample-reference-mode", out var v7))
                     {
@@ -10716,6 +12444,25 @@ internal static class DocfxValidator
                         options.ReviewReportPath = v19;
                         break;
                     }
+                    if (TrySplit(arg, "--operation", out var v20))
+                    {
+                        if (!IsValidOperation(v20)) { error = "--operation must be validate, audit, repair, or repair-csrun."; return false; }
+                        options.Operation = v20.ToLowerInvariant();
+                        options.OperationExplicitlySpecified = true;
+                        break;
+                    }
+                    if (TrySplit(arg, "--init-behavioral-ledger", out var v21) && !string.IsNullOrWhiteSpace(v21))
+                    {
+                        options.InitBehavioralLedgerPath = v21;
+                        if (!options.OperationExplicitlySpecified) { options.Operation = "repair"; }
+                        break;
+                    }
+                    if (TrySplit(arg, "--behavioral-ledger", out var v22) && !string.IsNullOrWhiteSpace(v22))
+                    {
+                        options.BehavioralLedgerPath = v22;
+                        if (!options.OperationExplicitlySpecified) { options.Operation = "repair"; }
+                        break;
+                    }
                     if (TrySplit(arg, "--write-overwrite", out var v14) && !string.IsNullOrWhiteSpace(v14))
                     {
                         options.WriteOverwriteRequestPath = v14;
@@ -10737,6 +12484,12 @@ internal static class DocfxValidator
         string.Equals(value, "auto", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(value, "conservative", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(value, "high-capacity", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsValidOperation(string value) =>
+        string.Equals(value, "validate", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "audit", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "repair", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "repair-csrun", StringComparison.OrdinalIgnoreCase);
 
     private static bool Next(string[] args, ref int i, out string value)
     {
@@ -10852,6 +12605,15 @@ internal static class DocfxValidator
               --review-report <path>  Required with --resume-project-manifest. Complete the generated sibling
                                       *.review.json file with page-specific evidence, purpose/outcome, observable
                                       result, and cross-page pattern comparison before scoped completion.
+              --operation <validate|audit|repair|repair-csrun>
+                                      Operation mode. Default: validate (ordinary deterministic validation).
+                                      audit, repair, and repair-csrun enforce behavioral review accounting.
+              --init-behavioral-ledger <path>
+                                      Materialize or refresh the behavioral review ledger JSON in temp/session
+                                      storage from the authoritative in-scope example inventory.
+              --behavioral-ledger <path>
+                                      Reconcile the behavioral evidence ledger against the authoritative in-scope
+                                      example inventory before permitting completion.
               --write-overwrite <path> Safe structured overwrite writer. Reads a JSON request with
                                       file/uid/mapping/prose/fence fields, validates it, preserves BOM/line
                                       endings, refuses to replace dirty or duplicate-UID files, and exits.
@@ -10891,6 +12653,8 @@ internal static class DocfxValidator
         public string? DocfxPath { get; set; }
         public string Configuration { get; set; } = "Release";
         public string? Framework { get; set; }
+        public bool FrameworkExplicitlySpecified { get; set; }
+        public bool FrameworkFromDocfxDefault { get; set; }
         public string? AssessmentQueuePath { get; set; }
         public bool ValidateSamples { get; set; }
         public bool ChangedOnly { get; set; }
@@ -10912,6 +12676,15 @@ internal static class DocfxValidator
         public string? ProjectManifestPath { get; set; }
         public string? ResumeProjectManifestPath { get; set; }
         public string? ReviewReportPath { get; set; }
+        public string Operation { get; set; } = "validate";
+        public bool OperationExplicitlySpecified { get; set; }
+        public string? InitBehavioralLedgerPath { get; set; }
+        public string? BehavioralLedgerPath { get; set; }
+        public bool RequiresBehavioralReview =>
+            Operation is "audit" or "repair" or "repair-csrun" ||
+            !string.IsNullOrWhiteSpace(InitBehavioralLedgerPath) ||
+            !string.IsNullOrWhiteSpace(BehavioralLedgerPath);
+        public bool CsrunRequested => string.Equals(Operation, "repair-csrun", StringComparison.OrdinalIgnoreCase);
         public string? WriteOverwriteRequestPath { get; set; }
     }
 
@@ -11213,6 +12986,21 @@ internal sealed class Summary
     public ExecutionSummary Execution { get; set; } = new();
     public string? ValidationMode { get; set; }
     public string? ApiModelSource { get; set; }
+    public string? FrameworkScope { get; set; }
+    public string? RequestedFramework { get; set; }
+    public List<string>? DiscoveredFrameworks { get; set; }
+    public List<string>? OmittedFrameworks { get; set; }
+    public bool DeterministicGatesPassed { get; set; }
+    public string Operation { get; set; } = "validate";
+    public bool BehaviorReviewRequired { get; set; }
+    public int? ExamplesInScope { get; set; }
+    public int? ExamplesReviewed { get; set; }
+    public int? ExamplesBehaviorVerified { get; set; }
+    public int? ExamplesSourceReviewedOnly { get; set; }
+    public int? ExamplesUnreviewed { get; set; }
+    public int? BehavioralFindingsRemaining { get; set; }
+    public int? BehavioralEvidenceMissing { get; set; }
+    public int? BehavioralEvidenceStale { get; set; }
     public string RunMode { get; set; } = "full";
     public string? ScopeState { get; set; }
     public long? Seed { get; set; }
@@ -11271,6 +13059,7 @@ internal sealed class Report
     public string? ProjectManifestPath { get; set; }
     public string? ResumedProjectManifestPath { get; set; }
     public string? ReviewReportPath { get; set; }
+    public string? BehavioralLedgerPath { get; set; }
     public string? Status { get; set; }
     public Summary Summary { get; set; } = new();
     public ScopeReport? Scope { get; set; }

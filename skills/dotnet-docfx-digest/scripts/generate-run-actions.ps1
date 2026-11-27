@@ -1693,7 +1693,9 @@ foreach ($exObj in $normalizedExamples) {
         reasonCode = $exObj.classification.reasonCode
         reason = $null
         native = 'Unverified'
+        nativeVerificationSource = 'unverified'
         docker = 'Unverified'
+        dockerVerificationSource = 'unverified'
     }
     try {
         if ($example.contextError) { $result.reason = $example.contextError; continue }
@@ -1740,12 +1742,14 @@ foreach ($exObj in $normalizedExamples) {
         foreach ($transport in @('native','docker')) {
             if ($recipe -and $recipe.unsupportedTransports.$transport) {
                 $result[$transport] = 'Unsupported'
+                $result["${transport}VerificationSource"] = 'unsupported'
                 $result["${transport}Reason"] = $recipe.unsupportedTransports.$transport
                 $transports = @($transports | Where-Object { $_ -ne $transport })
             }
         }
         if ($isNetFrameworkTarget -and 'docker' -in $transports) {
             $result['docker'] = 'Unsupported'
+            $result['dockerVerificationSource'] = 'unsupported'
             $result['dockerReason'] = $NetFrameworkDockerUnsupportedReason
             $transports = @($transports | Where-Object { $_ -ne 'docker' })
         }
@@ -1908,6 +1912,7 @@ foreach ($exObj in $normalizedExamples) {
                 $shouldRunVerify = $false
                 $verificationReused++
                 $result[$transport] = $cachedState
+                $result["${transport}VerificationSource"] = 'reused'
                 $result["${transport}Evidence"] = $cachedLog
                 continue
             }
@@ -1938,8 +1943,8 @@ foreach ($exObj in $normalizedExamples) {
                 })
             } elseif ($cachedState) {
                 $result[$transport] = $cachedState
+                $result["${transport}VerificationSource"] = 'cached'
                 $result["${transport}Evidence"] = $cachedLog
-                if ($Verify -ne 'None') { $verificationReused++ }
             }
         }
 
@@ -2141,6 +2146,7 @@ if ($pendingVerifications.Count -gt 0) {
             if ($null -eq $vr) { continue }
             $targetResult = $resultMaps[$vr.ResultIndex]
             $targetResult[$vr.Transport] = $vr.State
+            $targetResult["$($vr.Transport)VerificationSource"] = 'executed'
             $targetResult["$($vr.Transport)Evidence"] = $vr.EvidencePath
             if ($vr.Error -and -not $targetResult.reason) {
                 $targetResult.reason = $vr.Error
@@ -2476,12 +2482,28 @@ if ($SummaryJson) {
             $skippedByCategory[$r.category]++
         }
     }
-    $nativeVerified = @($results | Where-Object native -eq 'Verified').Count
-    $dockerVerified = @($results | Where-Object docker -eq 'Verified').Count
+    $freshNativeVerified = @($results | Where-Object { $_.native -eq 'Verified' -and $_.nativeVerificationSource -eq 'executed' }).Count
+    $freshDockerVerified = @($results | Where-Object { $_.docker -eq 'Verified' -and $_.dockerVerificationSource -eq 'executed' }).Count
+    $reusedNativeVerified = @($results | Where-Object { $_.native -eq 'Verified' -and $_.nativeVerificationSource -eq 'reused' }).Count
+    $reusedDockerVerified = @($results | Where-Object { $_.docker -eq 'Verified' -and $_.dockerVerificationSource -eq 'reused' }).Count
+    $cachedNativeVerified = @($results | Where-Object { $_.native -eq 'Verified' -and $_.nativeVerificationSource -eq 'cached' }).Count
+    $cachedDockerVerified = @($results | Where-Object { $_.docker -eq 'Verified' -and $_.dockerVerificationSource -eq 'cached' }).Count
+    $nativeVerified = $freshNativeVerified + $reusedNativeVerified
+    $dockerVerified = $freshDockerVerified + $reusedDockerVerified
+    $cachedVerifiedCount = @($results | Where-Object {
+        ($_.native -eq 'Verified' -and $_.nativeVerificationSource -eq 'cached') -or
+        ($_.docker -eq 'Verified' -and $_.dockerVerificationSource -eq 'cached')
+    }).Count
     $verifiedCount = switch ($Verify) {
+        'None' { 0 }
         'Native' { $nativeVerified }
         'Docker' { $dockerVerified }
-        default { @($results | Where-Object { $_.native -eq 'Verified' -or $_.docker -eq 'Verified' }).Count }
+        default {
+            @($results | Where-Object {
+                ($_.native -eq 'Verified' -and $_.nativeVerificationSource -in @('executed', 'reused')) -or
+                ($_.docker -eq 'Verified' -and $_.dockerVerificationSource -in @('executed', 'reused'))
+            }).Count
+        }
     }
     $verifyScope = if ($Verify -eq 'None') { 'none' }
                    elseif ($verifyTargetIds) { 'id' }
@@ -2493,18 +2515,29 @@ if ($SummaryJson) {
         exitCode = $exitCodeOut
         failureReason = $null
         verifyScope = $verifyScope
+        verificationRequested = ($Verify -ne 'None')
         manifestPreserved = $manifestPreserved
         total = $results.Count
         generated = @($results | Where-Object status -eq 'generated').Count
         unchanged = @($results | Where-Object status -eq 'unchanged').Count
         verified = $verifiedCount
+        cachedVerified = $cachedVerifiedCount
         failed = $failedTotal
         unresolved = $unresolvedTotal
         intrinsic = @($results | Where-Object coverage -eq 'Intrinsically non-executable').Count
         'skipped-by-category' = $skippedByCategory
         verification = [ordered]@{
+            requested = ($Verify -ne 'None')
+            transportOnly = $true
+            behavioralVerification = 'not-evaluated'
             nativeVerified = $nativeVerified
             dockerVerified = $dockerVerified
+            freshNativeVerified = $freshNativeVerified
+            freshDockerVerified = $freshDockerVerified
+            reusedNativeVerified = $reusedNativeVerified
+            reusedDockerVerified = $reusedDockerVerified
+            cachedNativeVerified = $cachedNativeVerified
+            cachedDockerVerified = $cachedDockerVerified
             executed = $verificationExecuted
             reused = $verificationReused
             failed = $verificationFailedCount
