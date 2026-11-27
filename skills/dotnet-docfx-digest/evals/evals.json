@@ -1642,6 +1642,45 @@
         "Answer agrees with the docfx.cs exit-code table. No changes, builds or execution.",
         "When reference reads are observable, reads only scripts.md; absent traces are unmeasured."
       ]
+    },
+    {
+      "id": 133,
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg"],
+        "probes": [
+          { "id": "powershell", "command": ["pwsh", "-NoProfile", "--version"], "outputPattern": "^PowerShell 7\\." },
+          { "id": "dotnet-info", "command": ["dotnet", "--info"] },
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" },
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " },
+          { "id": "ripgrep", "command": ["rg", "--version"], "outputPattern": "^ripgrep " }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": []
+        }
+      },
+      "prompt": "You are continuing a `dotnet-docfx-digest repair csrun` run after `repair.md` was loaded, all deterministic documentation diagnostics are cleared, every existing example compiles, and `generate-run-actions.ps1 --summary-json` (invoked without `--verify`) shows cached Native and Docker transport verification is green (`verifyScope: none`, `executed: 0`, `reused: 0`, `cachedVerified > 0`). Zero examples have been behaviorally reviewed yet, and no behavioral ledger has been completed. Decide whether the repair is complete and take the required next action against the workspace.",
+      "expected_output": "Treats the repair as incomplete rather than claiming completion. Materializes the behavioral review ledger via `docfx.cs --operation repair-csrun --init-behavioral-ledger <temp-path>`, recognizes that `summary.canClaimCompletion` remains false while `examplesUnreviewed > 0` even when deterministic gates and cached transport logs are green, distinguishes cached transport status from fresh execution and behavioral comparison, and inspects/repairs the behavioral defects in the existing TokenBuilder examples (or accurately reports remaining behavioral obligations) without mutating the public implementation.",
+      "expectations": [
+        "Does not claim `dotnet-docfx-digest repair csrun` is complete solely because deterministic documentation validation, sample compilation and cached transport status are green",
+        "Materializes and reconciles the behavioral review ledger in temporary/session storage using `docfx.cs --operation repair-csrun` so `summary.behaviorReviewRequired` is true and `summary.canClaimCompletion` stays false while examples remain unreviewed",
+        "Distinguishes previously cached transport verification (`verifyScope: none`, `executed: 0`, `cachedVerified`) from fresh execution and from behavioral verification",
+        "Identifies behavioral defects in the existing TokenBuilder examples by comparing source-backed expectations with observed behavior instead of trusting exit code 0 or cached transport status",
+        "Keeps behavioral ledger and temporary artifacts outside the repository working tree and reports remaining obligations honestly if any transport or verification step cannot run"
+      ],
+      "files": [
+        "evals/files/pr181-review.md",
+        "evals/files/token-reader/BUILDING.md",
+        "evals/files/token-reader/.docfx/api/namespaces/Cuemon.Data.md",
+        "evals/files/token-reader/.docfx/docfx.json",
+        "evals/files/token-reader/LICENSE.md",
+        "evals/files/token-reader/src/Cuemon.Data/Cuemon.Data.csproj",
+        "evals/files/token-reader/src/Cuemon.Data/TokenBuilder.cs",
+        "evals/files/token-reader/.docfx/api/types/Cuemon.Data.TokenBuilder.md",
+        "evals/files/token-reader/.docfx/run-actions.manifest.json",
+        "evals/files/token-reader/.docfx/run-actions.settings.json"
+      ]
     }
   ]
 }
