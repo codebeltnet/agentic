@@ -2199,13 +2199,18 @@ if (-not $skipMutations) {
         $config.build.resource = @($resources | Where-Object { $null -ne $_ }) + @(@{ files=@('run-actions/**') })
     }
     # Compose with an existing modern main.js rather than overriding its default export/start hook (e.g. Context7).
+    # DocFX supplies the embedded default when template is omitted. Keep that base
+    # when adding our overlay, including sites previously written as [null, overlay].
     $templates = @($config.build.template)
+    $templatesChanged = $null -in $templates
+    if ($templatesChanged) {
+        $templates = @('default') + @($templates | Where-Object { $null -ne $_ -and $_ -ne 'default' })
+    }
     $main = $null
     foreach ($template in $templates) {
         $candidate = Join-Path $workspace "$template/public/main.js"
         if (Test-Path $candidate) { $main=$candidate }
     }
-    $templatesChanged = $false
     if (-not $main) {
         $main = Join-Path $workspace 'templates/modern/public/main.js'
         $null = Write-Changed $main "export default {};`n"

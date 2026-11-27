@@ -14,9 +14,9 @@ function dotnet {
 $work = if ($OutputRoot) { $OutputRoot } else { Join-Path ([IO.Path]::GetTempPath()) ('docfx-actions-' + [guid]::NewGuid().ToString('N')) }
 $null = New-Item -ItemType Directory -Path "$work/docs" -Force
 $reference = Get-Content (Join-Path $PSScriptRoot '../references/one-shot-examples.md') -Raw
-$skill = Get-Content (Join-Path $PSScriptRoot '../SKILL.md') -Raw
-if (-not $skill.Contains('Whenever a runnable example is delivered, surface both complete Native and Docker execution options together') -or
-    -not $skill.Contains('never extract `## Native` alone when the corresponding `## Docker` option exists')) {
+$delivery = Get-Content (Join-Path $PSScriptRoot '../references/csrun-composition.md') -Raw
+if (-not $delivery.Contains('Whenever a runnable example is delivered, surface both complete Native and Docker execution options together') -or
+    -not $delivery.Contains('never extract `## Native` alone when the corresponding `## Docker` option exists')) {
     throw 'The direct Codex delivery contract must require both complete supported transports.'
 }
 if (-not $reference.Contains('Whenever DocFX Digest delivers a runnable example, deliver the complete Native and Docker options together') -or
@@ -685,6 +685,17 @@ foreach ($variant in $buildImageVariants) {
 # Template ordering: templates/modern must come before templates/ms-style, with templates/ms-style always last.
 $templateOrderCases = @(
     @{
+        Name = 'implicit-default'
+        CreateModernMain = $false
+        Expected = @('default', 'templates/modern')
+    }
+    @{
+        Name = 'previous-null-base'
+        Initial = @($null, 'templates/modern')
+        CreateModernMain = $true
+        Expected = @('default', 'templates/modern')
+    }
+    @{
         Name = 'ms-style-without-modern'
         Initial = @('default', 'modern', 'templates/ms-style')
         CreateModernMain = $false
@@ -701,7 +712,9 @@ foreach ($case in $templateOrderCases) {
     $caseRoot = Join-Path $work ("template-order-" + $case.Name)
     $null = [IO.Directory]::CreateDirectory($caseRoot)
     $caseConfig = Join-Path $caseRoot 'docfx.json'
-    [IO.File]::WriteAllText($caseConfig, (@{ build = @{ template = $case.Initial } } | ConvertTo-Json -Depth 5 -Compress))
+    $build = @{ dest = '_site' }
+    if ($case.ContainsKey('Initial')) { $build.template = $case.Initial }
+    [IO.File]::WriteAllText($caseConfig, (@{ build = $build } | ConvertTo-Json -Depth 5 -Compress))
     if ($case.CreateModernMain) {
         $modernPublic = Join-Path $caseRoot 'templates/modern/public'
         $null = [IO.Directory]::CreateDirectory($modernPublic)
