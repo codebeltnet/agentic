@@ -540,8 +540,8 @@ try {
     foreach ($needle in @('manifest.json', 'New-EvalOrchestrationPlan', 'dispatch_owner', 'Get-OrchestrationArmByWorkerId', 'arm.parent_paths.execution_result', 'Start-RunnerChildProcess', 'Wait-AnyRunnerChild', 'Register-DelegationAccepted', 'Register-DelegationSession', 'Register-WorkerTerminal', 'Assert-OrchestrationConcurrency', 'orchestration-state.json')) {
         Assert-True $fanoutText.Contains($needle) "runner-owned helper contains deterministic '$needle' behavior"
     }
-    Assert-True ($fanoutText.Contains('runner child watchdog timed out') -and $fanoutText.Contains('no retry or redispatch was performed')) 'runner-owned helper reports the exact timed-out worker and forbids retry or redispatch'
-    Assert-True ($fanoutProcessText.Contains('DeadlineUtc') -and $fanoutProcessText.Contains('Kill($true)') -and $fanoutProcessText.Contains('WaitForExit(5000)')) 'runner-owned process helper has a finite child deadline, tree kill, and kill grace'
+    Assert-True ($fanoutText.Contains('$($activeRun.worker_id) $($activeRun.child.TerminationReason)') -and $fanoutText.Contains('no retry or redispatch was performed')) 'runner-owned helper reports the exact timed-out worker and forbids retry or redispatch'
+    Assert-True ($fanoutProcessText.Contains('DeadlineUtc') -and $fanoutProcessText.Contains('Stop-EvalOwnedProcess')) 'runner-owned process helper has a finite child deadline and invokes owned process cleanup'
     Assert-True (-not $fanoutText.Contains('Start-Process')) 'runner-owned helper no longer uses window-creating Start-Process for child dispatch'
     Assert-True ($fanoutText -notmatch '(?i)spawn[_ -]?agent|subagent|native-worker-result|with_skill.*worker_id|without_skill.*worker_id') 'runner-owned helper does not create outer subagents, synthetic envelopes, or derived worker IDs'
     Assert-True ($fanoutText -notmatch '(?i)(with[-_]skill|without[-_]skill)\.execution-result|execution_result\s*=\s*.*configuration') 'runner-owned helper does not reconstruct result filenames'
@@ -633,6 +633,23 @@ try {
         execution_freeze = 'execution-freeze.json'
         evals = $fanoutManifestEvals.ToArray()
     })
+    $crashPackage = Join-Path $testRoot 'runner-owned crash package'
+    Copy-Item -LiteralPath $fanoutPackage -Destination $crashPackage -Recurse -Force
+    $crashRun = Join-Path $crashPackage ($fanoutManifestEvals[0].directory + '/with_skill/home')
+    $siblingRun = Join-Path $crashPackage ($fanoutManifestEvals[0].directory + '/without_skill/home')
+    Set-Content -LiteralPath (Join-Path $crashRun 'execute-crash') -Value 'true'
+    Set-Content -LiteralPath (Join-Path $siblingRun 'execute-delay-ms') -Value '30000'
+    $crashControl = Invoke-ForegroundPhaseOne -IterationDirectory $crashPackage
+    $crashSummary = $crashControl.Document
+    Assert-Equal 2 $crashControl.ExitCode 'missing runner evidence fails Phase 1'
+    Assert-Equal 'fixture' $crashSummary.runner 'failed execution preserves runner'
+    Assert-Equal 'fixture-model' $crashSummary.model 'failed execution preserves model'
+    Assert-Equal 16 $crashSummary.requested_concurrency 'failed execution preserves requested concurrency'
+    Assert-Equal 6 $crashSummary.expected_count 'failed execution preserves expected arm count'
+    Assert-True ([string]$crashSummary.error -match 'fixture primary execution failure') 'primary failure survives sibling cancellation'
+    Assert-True (@($crashSummary.interrupted_arms | Where-Object status -eq 'cancelled').Count -ge 1) 'the sibling is reported as cancelled'
+    Assert-Equal 0 $crashSummary.timed_out_count 'cancellation does not increment model timeouts'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $crashPackage 'execution-freeze.json'))) 'missing runner evidence cannot enter freeze'
     $fixtureLogPath = Join-Path $testRoot 'runner-owned-events.jsonl'
     $env:AGENTIC_RUNNER_FIXTURE_LOG = $fixtureLogPath
     $fanoutControl = Invoke-ForegroundPhaseOne -IterationDirectory $fanoutPackage
@@ -866,6 +883,7 @@ try {
     Assert-True ([string]$syntheticStateSummary.error -match 'Runner-owned fan-out refuses to replace an existing orchestration state') ("foreground Phase 1 fails closed on pre-authored state; error: " + [string]$syntheticStateSummary.error)
     Assert-Equal 0 @(Get-ChildItem -LiteralPath $syntheticStatePackage -Recurse -File -Filter 'execution-result.json').Count 'synthetic concurrency rejection starts zero real executions'
 
+    & (Join-Path $PSScriptRoot 'test-windows-process-ownership.ps1')
     Write-Output 'Native worker orchestration: PASS'
 } finally {
     if ($null -eq $oldFixtureLogPath) { Remove-Item Env:AGENTIC_RUNNER_FIXTURE_LOG -ErrorAction SilentlyContinue } else { $env:AGENTIC_RUNNER_FIXTURE_LOG = $oldFixtureLogPath }

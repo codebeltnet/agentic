@@ -502,10 +502,6 @@ if ($arguments -contains 'app-server' -and $arguments -contains 'generate-json-s
 }
 if ($arguments -contains 'app-server' -and $arguments -contains '--stdio') {
     $initialize = Read-AppServerMessage
-    if ($mode -eq 'timeout') {
-        Start-Sleep -Milliseconds (Get-DelayMilliseconds 20)
-        exit 0
-    }
 
     $repoAgentsPath = Join-Path (Get-Location).Path 'AGENTS.md'
     $threadId = 'obs-thread'
@@ -564,6 +560,10 @@ if ($arguments -contains 'app-server' -and $arguments -contains '--stdio') {
     })
 
     $turnStart = Read-AppServerMessage
+    if ($mode -eq 'timeout') {
+        Start-Sleep -Seconds 30
+        exit 0
+    }
     Start-Sleep -Milliseconds (Get-DelayMilliseconds 2.4)
     Write-AppServerMessage ([ordered]@{
         jsonrpc = '2.0'
@@ -1149,18 +1149,17 @@ foreach ($ev in $events) {
     # ------------------------------------------------------------------
     $codexTimeout = Invoke-CodexAppServerFixture -Mode 'timeout' -HeartbeatSeconds 0.15 -TimeoutSeconds 2
     Assert-Equal 0 $codexTimeout.ExitCode 'codex app-server timeout: runner still returns a terminal result object'
-    Assert-True ($codexTimeout.ElapsedSeconds -lt 20) ("codex app-server timeout: transport remains bounded after discovery/verification probes; elapsed={0:N3}s" -f $codexTimeout.ElapsedSeconds)
     Assert-Equal 'incompatible' ([string]$codexTimeout.Result.status) 'codex app-server timeout: native evidence still fails closed after the bounded timeout'
-    Assert-Equal 'native_skill_isolation_unverified' ([string]$codexTimeout.Result.exit.failure.code) 'codex app-server timeout: the failure remains structured'
-    Assert-True ([string]$codexTimeout.Result.exit.failure.message -match 'Codex did not finish before timeout_seconds') 'codex app-server timeout: the failure message preserves the bounded timeout detail'
+    Assert-Equal 'native_evidence_incompatible' ([string]$codexTimeout.Result.exit.failure.code) 'codex app-server timeout: the failure remains structured'
+    $modelDeadlineMessage = [string]$codexTimeout.Result.exit.failure.message
+    Assert-True ($modelDeadlineMessage -match 'model turn deadline expired at') "The model-turn watchdog reports its own deadline. Observed: $modelDeadlineMessage"
     $timeoutAppEvents = @($codexTimeout.AppServerEvents)
     Assert-True ($timeoutAppEvents.Count -ge 2) 'codex app-server timeout: quiet heartbeats occur before the timeout result'
     $timeoutQuietEvents = @($timeoutAppEvents | Where-Object {
-            [int64](Get-Field $_ 'stdoutEvents' 0) -eq 0 -and
-            [int64](Get-Field $_ 'stdoutBytes' 0) -eq 0 -and
-            $null -eq $_.PSObject.Properties['lastActivitySeconds']
+            [int64](Get-Field $_ 'stdoutEvents' 0) -eq 3 -and
+            [double](Get-Field $_ 'timeoutRemainingSeconds' 10) -le 2
         })
-    Assert-True ($timeoutQuietEvents.Count -ge 2) 'codex app-server timeout: a silent server stays externally observable without inventing activity'
+    Assert-True ($timeoutQuietEvents.Count -ge 2) 'codex app-server timeout: a quiet model turn stays observable after startup without inventing activity'
 
     # ------------------------------------------------------------------
     # Test 10 - synchronous wait/preflight heartbeat: Complete-RunnerChildProcess

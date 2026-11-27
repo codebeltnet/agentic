@@ -65,7 +65,8 @@ function Invoke-GeneratedRunnerPrompt {
     param(
         [int]$EvalCount = 3,
         [int]$TimeoutSeconds = 900,
-        [int]$RequestedConcurrency = 2
+        [int]$RequestedConcurrency = 2,
+        [switch]$Codex
     )
 
     $preparePath = Join-Path $repoRoot 'scripts\prepare-skill-evals.ps1'
@@ -77,7 +78,11 @@ function Invoke-GeneratedRunnerPrompt {
     if ($functionAst.Count -ne 1) { throw 'Generated handoff function New-RunnerPrompt was not found.' }
     $evalRunnerToolRelativePath = 'tools/eval-runners'
     Invoke-Expression $functionAst[0].Extent.Text
-    $selection = [pscustomobject]@{ Harness = 'OpenCode CLI'; Runner = 'opencode'; Model = 'opencode/muse-spark-1.2-contributor-free'; Preset = '' }
+    $selection = if ($Codex) {
+        [pscustomobject]@{ Harness = 'Codex CLI'; Runner = 'codex'; Model = 'fixture-model'; Preset = '' }
+    } else {
+        [pscustomobject]@{ Harness = 'OpenCode CLI'; Runner = 'opencode'; Model = 'opencode/muse-spark-1.2-contributor-free'; Preset = '' }
+    }
     $generatedRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-generated-handoff-' + [Guid]::NewGuid().ToString('N'))
     try {
         $manifestEvals = [System.Collections.Generic.List[object]]::new()
@@ -2222,12 +2227,14 @@ try {
     Assert-True ($prepareText.Contains('fresh package/code fix is required') -and $prepareText.Contains('Never patch package-local runner code') -and $prepareText.Contains('delete execution results') -and $prepareText.Contains('delete or replace `execution-freeze.json`') -and $prepareText.Contains('rerun Phase 1') -and $prepareText.Contains('manually broaden a capability check')) 'generated handoff must forbid package-local repair, state deletion, retry, and manual capability broadening'
     $generatedHandoff = Invoke-GeneratedRunnerPrompt
     $generatedConcurrencyThreeHandoff = Invoke-GeneratedRunnerPrompt -RequestedConcurrency 3
+    $generatedCodexHandoff = Invoke-GeneratedRunnerPrompt -Codex
     Assert-True ($generatedHandoff.Contains('evaluation is incomplete and a fresh package/code fix is required') -and $generatedHandoff.Contains('Never patch package-local runner code') -and $generatedHandoff.Contains('delete orchestration state') -and $generatedHandoff.Contains('delete execution results') -and $generatedHandoff.Contains('delete or replace `execution-freeze.json`') -and $generatedHandoff.Contains('rerun Phase 1') -and $generatedHandoff.Contains('manually broaden a capability check')) 'generated handoff output forbids package-local repair, state deletion, retry, and manual capability broadening'
     Assert-True ($generatedHandoff.Contains('invoke-runner-owned-arms.ps1') -and $generatedHandoff.Contains('package-computed Phase 1 allowance') -and $generatedHandoff.Contains('must be started exactly once') -and $generatedHandoff.Contains('If execution is interrupted and no valid `execution-freeze.json` exists')) 'generated handoff exposes one foreground Phase 1 invocation with fail-closed interruption handling'
     Assert-True ($generatedHandoff.Contains('validate-eval-grading.ps1') -and $generatedHandoff.Contains('-ShowSkeleton') -and $generatedHandoff.Contains('Write `grading.json`, then validate it before finalization') -and $generatedHandoff.Contains('Grading validation is retryable; finalization is not') -and $generatedHandoff.Contains('only after grading validation succeeds')) 'generated handoff requires author -> validate/retry -> finalize exactly once'
     Assert-True ($generatedHandoff.Contains('allowance of 6240 seconds') -and $generatedHandoff.Contains('6 arm(s) × 120-second fixed model-free runner preflight timeout = 720-second serial preflight allowance') -and $generatedHandoff.Contains('5490-second execution allowance across 3 batch(es) at concurrency 2') -and $generatedHandoff.Contains('2 scripted user turn(s) × profile.timeout_seconds 900 + 30 seconds runner grace') -and $generatedHandoff.Contains('+ 30 seconds orchestration grace')) 'generated handoff uses the fixed preflight timeout, scripted-turn model timeout, execution batches, and separate orchestration grace'
     Assert-True (-not $generatedHandoff.Contains('max(120, profile.timeout_seconds + runner grace)') -and -not $generatedHandoff.Contains('5580-second serial preflight allowance')) 'generated handoff does not budget preflight from the model timeout plus runner grace'
     Assert-True ($generatedConcurrencyThreeHandoff.Contains('allowance of 4410 seconds') -and $generatedConcurrencyThreeHandoff.Contains('execution allowance across 2 batch(es) at concurrency 3')) 'generated handoff recalculates execution batches when concurrency changes'
+    Assert-True ($generatedCodexHandoff.Contains('allowance of 6945 seconds') -and $generatedCodexHandoff.Contains('900 + 235 seconds Codex preflight/discovery/startup + 30 seconds runner grace')) 'Codex handoff budgets startup separately from per-turn execution and termination grace'
     Assert-True (-not $generatedHandoff.Contains('control-runner-owned-phase1.ps1') -and -not $generatedHandoff.Contains('WaitSeconds') -and -not $generatedHandoff.Contains('SAME controller command again')) 'generated handoff contains no durable controller polling'
     Assert-True ($prepareText -notmatch '(?i)runs\.<arm>|record-native-result\.ps1|Assert-NativeWorkerDelegation|Assert-OrchestrationConcurrency|capture\.worker_authored') 'runner-owned handoff must not teach manual orchestration, recorder, or evidence repair trivia'
     Assert-True ($bridgeText.Contains('Get-PackageRunnerDescriptor') -and $bridgeText.Contains('Assert-NativeTerminalCaptureArtifact') -and $bridgeText.Contains('ExpectedMechanism')) 'native bridge must require runner-produced terminal evidence'
