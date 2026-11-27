@@ -15,13 +15,24 @@ Use the sequence **Discover API → Understand consumer task → Determine execu
 
 During that same discovery, consider optional [contextual source references](contextual-source-references.md) for useful integration or lifecycle depth. Explain the additional knowledge each link offers after the self-sufficient example, outcome and execution guidance. This applies to successfully runnable examples as well as partial illustrations; source browsing never replaces the primary learning experience.
 
-## Review the behavior before publishing
+## Discover consumer usage
 
-For each new or materially revised example, identify the consumer's question and the result that would answer it. Derive the expected result for the **specific inputs and overload** from the implementation, public contract or relevant test for the documented version. For variable output, choose a stable relationship to check.
+Before writing a type or extension-method example, choose the smallest real task that explains the API in context. Start from package-level evidence, then narrow to type-level evidence:
 
-Trace the displayed code from input through the documented operation to the value the consumer observes. Ask whether the check would still pass if that operation were omitted. Printing configured header values, for example, survives removal of the middleware. Send a request through the configured pipeline and check the header on its response. To demonstrate authentication, exercise the registered handler and inspect the resulting authentication outcome. Options inspection supports a claim about configuration alone.
+1. Determine the NuGet package ID or IDs from packable projects, `.nuget/*/README.md`, package release notes, `Directory.Packages.props`, or `PackageReference` usage.
+2. Search local evidence for the exact package ID first, including README files, package docs, samples, tooling projects, tuning projects, functional tests, and generated package documentation.
+3. When internet or GitHub search is available and allowed, search for the exact package ID and prefer consumer repositories outside the target repository. Treat self-repo hits as package-authored docs or samples, not independent usage proof.
+4. Search by namespace, type, and member name only after package-ID evidence has been inspected.
+5. Pick a scenario that connects the documented type to the package workflow. A good sample can include multiple related public types, a small local helper type, dependency-injection setup, host setup, options configuration, file/path setup, or result inspection when that is what a real caller would do.
+6. Determine execution topology before generating source: standalone, library consumer, multi-file/project, framework/application integration, or partial excerpt. Remove incidental test scaffolding for ordinary APIs; retain real `[Fact]` methods, fixture constructors, assertions and runner semantics when the documented API is a testing abstraction. Keep meaningful setup and result inspection.
+7. Prefer domain-specific names such as `BenchmarkRunner`, `WorkspaceUsage`, or `HttpRetryExample` over `Consumer` and `MyNamespace` when the package domain is clear.
+8. Reject metadata-only substitutes before writing: `Type.GetType`, assembly lookup, `typeof`/`nameof` as the only operation, generic `Describe()` helpers, and repeated UID sections do not demonstrate a consumer task.
+9. Confirm the C# fence itself uses the documented type or invokes the documented extension method. Mentions outside the fence do not count.
+10. Reject runtime-type-name substitutes such as `host.Services.GetType().Name` or `service.GetType().FullName`. These reveal implementation metadata rather than the application behavior the API enables.
+11. For entry-point factories and fixtures, never declare an empty local `Program` merely to satisfy compilation. Show a real entry point or name the application-project prerequisite, then make the example's result depend on a service, configuration value, endpoint, or lifecycle event supplied by that application.
+12. Preserve application-owned startup and service registration. Explain executable versus test-runner entry points, references, lifecycle and infrastructure. Use labelled source files bound to maintained projects for a coherent multi-file scenario; never concatenate unrelated fences or independently compile fragments to manufacture success. If a type page becomes unwieldy, keep its essential usage and link directly to a maintained integration test or conceptual walkthrough.
 
-Compare the expected observation with the returned value, emitted output or assertion from the same source using the [existing execution path](csrun-composition.md). Reconcile the lead, comments, output labels and any transcript with that comparison. A mismatch calls for repairing the code or correcting an inaccurate claim. Preserve the intended API operation through standalone conversion. If it needs the real pipeline or project, retain that topology. When execution is unavailable, identify the source-backed expectation and the observation still unverified.
+For new, revised and converted examples, apply the observation checks in [behavioral repair](repair.md#check-one-example).
 
 ## Choose the execution model
 
@@ -78,3 +89,15 @@ Evidence pinned to [codebeltnet/xunit revision 84b13767](https://github.com/code
 Recommended correction to the [published InventoryWorker example](https://xunit.codebelt.net/api/Codebelt.Extensions.Xunit.Hosting.ManagedApplicationFixture-1.html): show the smallest meaningful excerpt from the maintained Bootstrapper worker test, explain its separate application assembly, link its original application/test/project, and offer the [verified one-shot native and Docker commands](one-shot-examples.md). Do not dump both projects into the API page or require developers to assemble them manually. If retaining InventoryWorker domain names, first maintain a faithful working split sample; do not publish bindings to invented paths. Never remove Main, choose a startup object, or re-register the marker inside the test. This skill change does not edit the xunit repository.
 
 `EXAMPLE_APPLICATION_ASSEMBLY_COLLAPSED` is narrowly scoped to the exact Codebelt `ManagedApplicationFixture<TEntryPoint>`/`ApplicationTest<TEntryPoint,T>` UID and a local fixture entry-point type in one C# source unit. Roslyn syntax/local symbol evidence avoids matching comments, strings, or unrelated multiple-class samples. Separate bound files are not merged for this check. Aliased or otherwise unresolved usages require build-backed verification and architectural review. The diagnostic is not a universal C# architecture analyzer and does not certify registration ownership, pipeline ordering, runtime success, or prose truth.
+
+
+## Conditional API framework selection
+
+Treat preprocessor symbols as asset-selection evidence, not as executable target frameworks. Before validating a sample for a conditionally compiled API, inspect the declaration, project TFMs, package `lib/` assets, and the asset selected for the consumer. Choose a runnable consumer TFM that forces selection of the assembly containing the API.
+
+- For `NETSTANDARD2_0` or `NETSTANDARD2_0_OR_GREATER`, if the package also contains modern `lib/netX.0/` assets, use `net48` (or another supported .NET Framework TFM from `net462` onward). That consumer selects the compatible `lib/netstandard2.0/` asset instead of a modern asset that may omit the API.
+- Do not target `netstandard*` for an executable test. It describes an API surface and cannot run by itself.
+- Do not target a modern `netX.0` runtime merely because it is newer. Reject it when restore/build evidence shows that it resolves to an asset without the documented API.
+- For other TFM guards, identify which built asset contains the API and select a compatible runtime target that consumes that asset. Verify the chosen asset through restore/build output or `project.assets.json`.
+
+Pass the resulting runnable TFM through `docfx.cs --framework <tfm>`. Add `--sample-reference-mode package` when the test must prove installed-package asset selection. Use separate scoped validation runs when no single runnable TFM can select every conditional API asset in the documentation scope.
