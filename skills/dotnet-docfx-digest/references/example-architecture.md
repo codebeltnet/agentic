@@ -48,7 +48,9 @@ Prefer a real repository sample/test over generating new projects. When setup wo
 
 ## Preserve responsibilities
 
-Review architecture as well as source shape. Check executable entry points and assembly identity; application-owned versus test-owned DI registration; framework-owned versus application-owned initialization; async and disposal lifetimes; Options binding/validation; fixture/factory initialization; real services versus doubles; and reference/asset selection. For middleware, preserve registration, pipeline order (including authentication/authorization/routing where required), and the request/response that demonstrates the effect.
+Prefer the maintained public registration, configuration and acquisition APIs. Check entry points and assembly identity, initialization ownership, DI lifetimes and request scopes, async and resource disposal, and options binding, registration order and effective values where the consumer uses them. Review security-sensitive operations using the same standards as application code, including any dormant branch the repair makes reachable.
+
+Use a maintained integration test or representative host when behavior depends on hosting, request scopes, pipeline order or response lifecycle. A manually assembled context can exercise isolated logic, but cannot prove semantics it omits, such as headers becoming read-only when the response starts. Exercise the intended route to completion and inspect relevant response content, status, headers and resulting state.
 
 Remove incidental test scaffolding when documenting ordinary libraries. For testing APIs, `[Fact]`, fixture constructor injection, assertions and the real runner can be essential consumer usage. Do not strip them to make a console-shaped example. A test that builds another host, overrides the service it claims the application registered, or merely asserts a test double's behavior proves a different contract. No static heuristic establishes that the prose and assertion mean the same thing: inspect authoritative usage and execute the relevant test when claiming runtime results.
 
