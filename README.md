@@ -696,7 +696,7 @@ A bare invocation audits and repairs public API documentation across the reposit
 - `dotnet-docfx-digest csrun` (alias `generate-run-actions`) preserves consumer scenarios during conversion and generates synchronized execution assets.
 - `dotnet-docfx-digest repair csrun` (also `csrun repair`) discovers and repairs examples, regenerates affected assets, verifies supported transports independently and runs the documentation gates in one invocation.
 
-The [skill entry point](skills/dotnet-docfx-digest/SKILL.md) routes each operation to its authoring, repair, example design, execution or script reference. The existing validator checks structure, compilation and DocFX builds. Behavioral review checks that the documented operation produced the result the page promises.
+The [skill entry point](skills/dotnet-docfx-digest/SKILL.md) routes each operation to its authoring, repair, example design, execution or script reference. Behavioral review compares observations with source-backed expectations established before execution. A distinct final pass checks modified examples for introduced defects and verifies that they still demonstrate recommended consumer usage.
 
 ### Why dotnet-test?
 
