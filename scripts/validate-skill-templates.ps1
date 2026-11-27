@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Ref,
     [switch]$Full,
     [switch]$MetadataOnly,
@@ -3883,6 +3883,10 @@ if ($Full -and $Suite -in @('All', 'Docfx')) {
         [pscustomobject]@{
             Name = 'DocFX digest project-scoped packets, dry run, families, and overwrite writer behave deterministically'
             Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-project-scoped.ps1'
+        }
+        [pscustomobject]@{
+            Name = 'DocFX digest behavioral completion contract, run-action reporting, and multi-TFM discovery enforce closure'
+            Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-behavioral-completion.ps1'
         }
     )
 

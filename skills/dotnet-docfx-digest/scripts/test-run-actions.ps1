@@ -1595,11 +1595,26 @@ if (@(($paraManifestAfterGood | ConvertFrom-Json).examples).Count -ne 4) {
 $paraChangedRun = Invoke-GeneratorSubprocess @('--verify-changed', '--max-parallel', '4', '--engine-path', $paraEngine, '--summary-json')
 if ($paraChangedRun.ExitCode -ne 0) { throw "Parallel --verify-changed failed (exit=$($paraChangedRun.ExitCode)): $($paraChangedRun.Stderr)" }
 $paraChangedSummary = $paraChangedRun.Stdout | ConvertFrom-Json
-if ($paraChangedSummary.verification.executed -ne 0 -or $paraChangedSummary.verification.reused -ne 4) {
+if ($paraChangedSummary.verification.executed -ne 0 -or $paraChangedSummary.verification.reused -ne 4 -or
+    $paraChangedSummary.verification.reusedNativeVerified -ne 4 -or $paraChangedSummary.verification.freshNativeVerified -ne 0) {
     throw "Expected --verify-changed to reuse all 4 cached Verified examples: $($paraChangedRun.Stdout)"
 }
 if ($paraChangedRun.Stderr -match 'Verifying Para\.') {
     throw "Expected no Verifying lines on full cache reuse; got: $($paraChangedRun.Stderr)"
+}
+
+# Generation without --verify must never report previously cached transport logs as fresh/invocation verification.
+$paraGenOnlyRun = Invoke-GeneratorSubprocess @('--summary-json')
+if ($paraGenOnlyRun.ExitCode -ne 0) { throw "Generate-only --summary-json failed (exit=$($paraGenOnlyRun.ExitCode)): $($paraGenOnlyRun.Stderr)" }
+$paraGenOnlySummary = $paraGenOnlyRun.Stdout | ConvertFrom-Json
+if ($paraGenOnlySummary.verifyScope -ne 'none' -or $paraGenOnlySummary.verificationRequested -or
+    $paraGenOnlySummary.verified -ne 0 -or $paraGenOnlySummary.cachedVerified -ne 4 -or
+    $paraGenOnlySummary.verification.requested -or $paraGenOnlySummary.verification.executed -ne 0 -or
+    $paraGenOnlySummary.verification.reused -ne 0 -or $paraGenOnlySummary.verification.nativeVerified -ne 0 -or
+    $paraGenOnlySummary.verification.cachedNativeVerified -ne 4 -or
+    -not $paraGenOnlySummary.verification.transportOnly -or
+    $paraGenOnlySummary.verification.behavioralVerification -ne 'not-evaluated') {
+    throw "Generate-only --summary-json misrepresented cached transport status: $($paraGenOnlyRun.Stdout)"
 }
 
 # Heartbeat, --no-heartbeat, and --quiet behavior on a slow verification run.
