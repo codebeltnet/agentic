@@ -65,7 +65,7 @@ dotnet run --file "<skill-dir>/scripts/agents.cs" -- --repo-root "<repo-root>"
 dotnet run --file "<skill-dir>/scripts/docfx.cs" -- --repo-root "<repo-root>" --build-api-model --validate-samples --verify-docfx-build --json
 ```
 
-Use the final build-backed report. Require `summary.fullVerificationRan` and `summary.canClaimCompletion` true, `summary.remainingWorkItems` zero, empty `summary.remainingGates` and `summary.remainingDiagnosticsByCode`, no new skip markers and no interim artifacts. Honor the scoped/dry-run reporting contract. Report warnings and unexecuted checks accurately.
+For operations that include repair (including bare repository-wide invocations, `repair`, and `repair csrun`), materialize the behavioral ledger in temporary/session storage before editing and reconcile it on the final gate with `--operation repair` (or `--operation repair-csrun`) and `--behavioral-ledger "<temp-ledger>"`. Use the final build-backed report. Require `summary.fullVerificationRan`, `summary.deterministicGatesPassed` and `summary.canClaimCompletion` true, `summary.remainingWorkItems` zero, empty `summary.remainingGates` and `summary.remainingDiagnosticsByCode`, no new skip markers, no interim artifacts and zero outstanding behavioral obligations (`examplesUnreviewed`, `behavioralFindingsRemaining`, `behavioralEvidenceMissing`, `behavioralEvidenceStale`). An explicit `--framework` that omits other target frameworks of a multi-TFM repository stays framework-scoped and cannot satisfy repository-wide completion. Honor the scoped/dry-run reporting contract. Report warnings and unexecuted checks accurately.
 
 Distinguish the evidence for each requested outcome:
 
