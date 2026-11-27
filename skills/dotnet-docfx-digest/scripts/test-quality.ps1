@@ -2949,6 +2949,36 @@ Write the directive as `[!INCLUDE [availability](example.md)]`.
     Assert-DiagnosticMessageContains $typeInclude 'API_INCLUDE_OUTSIDE_NAMESPACES' 'outside'
 
     Write-Host 'DocFX example: [*content], heading, and include placement regressions passed.'
+
+    # Exercise the actual eval fences against the pinned implementation in this disposable workspace.
+    $fixture = Join-Path $PSScriptRoot '../evals/files/token-reader'
+    $app = Join-Path $headingWorkspace 'token-reader'
+    Write-Utf8File (Join-Path $app 'Example.csproj') @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+'@
+    Copy-Item -LiteralPath (Join-Path $fixture 'src/Cuemon.Data/TokenBuilder.cs') -Destination $app
+    $cases = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../evals/token-reader-observations.json') -Raw | ConvertFrom-Json
+    foreach ($case in $cases) {
+        $page = Get-Content -LiteralPath (Join-Path $fixture ".docfx/api/types/$($case.Page).md") -Raw
+        $fence = [regex]::Match($page, '(?ms)^```csharp\r?\n(.+?)\r?\n```')
+        if (-not $fence.Success) { throw "Missing C# fence in $($case.Page)" }
+        $source = $fence.Groups[1].Value
+        if ($case.Page -eq 'RecordReader') {
+            # Observe both library entry points before standalone conversion.
+            $source += "`ninternal class Program { static void Main() { RecordReader.ReadPerson(); RecordReader.ReadProduct(); } }"
+        }
+        Write-Utf8File (Join-Path $app 'Program.cs') $source
+        $output = & dotnet run --project (Join-Path $app 'Example.csproj') --verbosity quiet
+        if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -cne ($case.Expected -join "`n")) {
+            throw "Unexpected observations from $($case.Page): $output"
+        }
+    }
+    Write-Host 'DocFX behavioral fixtures passed: original review, correct control and both pre-conversion entry points.'
 } finally {
     if (Test-Path $headingWorkspace) { Remove-Item -LiteralPath $headingWorkspace -Recurse -Force }
 }
