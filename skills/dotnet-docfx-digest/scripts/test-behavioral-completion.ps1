@@ -468,6 +468,28 @@ Console.WriteLine($"Total={total}");
         Assert-CodePresent $staleClaim.Report 'BEHAVIORAL_EVIDENCE_STALE' 'when documentation claim changes with identical code'
         $staleClaimMsg = ($staleClaim.Report.errors | Where-Object code -eq 'BEHAVIORAL_EVIDENCE_STALE')[0].message
         if ($staleClaimMsg -notlike '*claimSha256*') { throw "Expected claimSha256 in stale message: $staleClaimMsg" }
+
+        $claimRefreshPath = Join-Path $ledgerDir 'claim-refresh.json'
+        Copy-Item -LiteralPath $completeLedgerPath -Destination $claimRefreshPath
+        $claimRefresh = Invoke-DocfxValidator -RepoRoot $repo -ExtraArgs @('--operation', 'repair-csrun', '--init-behavioral-ledger', $claimRefreshPath)
+        Assert-CodePresent $claimRefresh.Report 'BEHAVIORAL_REVIEW_INCOMPLETE' 'after refreshing the ledger for a prose-only edit'
+        $before = (Get-Content -LiteralPath $completeLedgerPath -Raw | ConvertFrom-Json).examples
+        $after = (Get-Content -LiteralPath $claimRefreshPath -Raw | ConvertFrom-Json).examples
+        $beforeCalc = $before | Where-Object exampleId -eq 'Acme.Demo.Calculator#1'
+        $afterCalc = $after | Where-Object exampleId -eq $beforeCalc.exampleId
+        if ($afterCalc.sourceSha256 -ne $beforeCalc.sourceSha256 -or $afterCalc.claimSha256 -eq $beforeCalc.claimSha256 -or
+            $afterCalc.disposition -ne 'unreviewed' -or $afterCalc.actualObservation) {
+            throw 'A prose-only edit must reset the comparison while keeping the source identity.'
+        }
+        $unchanged = @($before | Where-Object disposition -eq 'source-reviewed-only')
+        if ($unchanged.Count -eq 0) { throw 'Expected an unchanged reviewed example as a control.' }
+        foreach ($entry in $unchanged) {
+            $current = $after | Where-Object exampleId -eq $entry.exampleId
+            if ($current.disposition -ne $entry.disposition -or $current.expectedObservation -cne $entry.expectedObservation -or
+                $current.claimSha256 -ne $entry.claimSha256) {
+                throw "A prose-only edit reset the current comparison for '$($entry.exampleId)'."
+            }
+        }
     } finally {
         Write-Utf8File $calcPage $savedCalcText
     }
