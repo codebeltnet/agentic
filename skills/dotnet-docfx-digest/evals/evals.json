@@ -1355,6 +1355,17 @@
     },
     {
       "id": 126,
+      "prerequisites": {
+        "executables": ["git"],
+        "probes": [
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " }
+        ],
+        "repository": {
+          "url": "https://github.com/codebeltnet/cuemon.git",
+          "commit": "544d368fb1d29effa30295fdfbe09dac26b9d0ec",
+          "directory": "cuemon"
+        }
+      },
       "prompt": "Review the six runnable API drafts in the packet for publication. Use the pinned source or tests where needed. Identify what each example establishes and give concrete repairs, including corrected TokenBuilder code and expected observations.",
       "files": [
         "evals/files/pr181-review.md"
@@ -1372,6 +1383,29 @@
     },
     {
       "id": 127,
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg", "docfx"],
+        "dotnetTools": [
+          {
+            "package": "docfx",
+            "version": "2.81.0",
+            "executable": "docfx"
+          }
+        ],
+        "probes": [
+          { "id": "powershell", "command": ["pwsh", "-NoProfile", "--version"], "outputPattern": "^PowerShell 7\\." },
+          { "id": "dotnet-info", "command": ["dotnet", "--info"] },
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" },
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " },
+          { "id": "ripgrep", "command": ["rg", "--version"], "outputPattern": "^ripgrep " },
+          { "id": "docfx", "command": ["docfx", "--version"], "outputPattern": "^2\\.81\\.0(?:\\+|\\s|$)" }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": []
+        }
+      },
       "prompt": "dotnet-docfx-digest repair",
       "expected_output": "Repairs both existing scenarios on disk without being told which example is defective.",
       "expectations": [
@@ -1390,6 +1424,44 @@
     },
     {
       "id": 128,
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg", "docfx", "docker"],
+        "dotnetTools": [
+          {
+            "package": "docfx",
+            "version": "2.81.0",
+            "executable": "docfx"
+          }
+        ],
+        "probes": [
+          { "id": "powershell", "command": ["pwsh", "-NoProfile", "--version"], "outputPattern": "^PowerShell 7\\." },
+          { "id": "dotnet-info", "command": ["dotnet", "--info"] },
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" },
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " },
+          { "id": "ripgrep", "command": ["rg", "--version"], "outputPattern": "^ripgrep " },
+          { "id": "docfx", "command": ["docfx", "--version"], "outputPattern": "^2\\.81\\.0(?:\\+|\\s|$)" },
+          { "id": "docker-daemon", "command": ["docker", "info", "--format", "{{.ServerVersion}}/{{.OSType}}"], "outputPattern": "^\\S+/linux\\s*$" }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": [
+            {
+              "id": "Cuemon.Core",
+              "version": "11.0.0"
+            },
+            {
+              "id": "Cuemon.Data",
+              "version": "11.0.0"
+            }
+          ]
+        },
+        "repository": {
+          "url": "https://github.com/codebeltnet/cuemon.git",
+          "commit": "544d368fb1d29effa30295fdfbe09dac26b9d0ec",
+          "directory": "cuemon"
+        }
+      },
       "prompt": "In a disposable checkout inside your workspace, obtain codebeltnet/cuemon at 544d368fb1d29effa30295fdfbe09dac26b9d0ec. Run dotnet-docfx-digest repair on the pages in pr181-findings.md. Apply the corrections and account for each finding. Keep all edits local.",
       "expected_output": "Produces source-backed edits in the disposable checkout and evidence for all 31 finding identities.",
       "expectations": [
@@ -1406,6 +1478,48 @@
     },
     {
       "id": 129,
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg", "docfx", "docker"],
+        "dotnetTools": [
+          {
+            "package": "docfx",
+            "version": "2.81.0",
+            "executable": "docfx"
+          }
+        ],
+        "skills": ["dotnet-csrun"],
+        "downloads": [
+          {
+            "file": "csrun.ps1",
+            "url": "https://github.com/codebeltnet/csrun/releases/download/v0.3.0/csrun.ps1",
+            "sha256": "701abbf81f33be547fc6d2890598aa9ba9827d240e04617a4936c3364691922b"
+          }
+        ],
+        "probes": [
+          { "id": "powershell", "command": ["pwsh", "-NoProfile", "--version"], "outputPattern": "^PowerShell 7\\." },
+          { "id": "dotnet-info", "command": ["dotnet", "--info"] },
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" },
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " },
+          { "id": "ripgrep", "command": ["rg", "--version"], "outputPattern": "^ripgrep " },
+          { "id": "docfx", "command": ["docfx", "--version"], "outputPattern": "^2\\.81\\.0(?:\\+|\\s|$)" },
+          { "id": "csrun-engine", "command": ["pwsh", "-NoProfile", "-NonInteractive", "-File", "{run}/dependencies/tools/csrun.ps1", "-Framework", "net10.0", "-Source", "System.Console.WriteLine(\"agentic-csrun-ready\");"], "outputPattern": "^agentic-csrun-ready\\s*$", "timeoutMs": 35000 },
+          { "id": "docker-daemon", "command": ["docker", "info", "--format", "{{.ServerVersion}}/{{.OSType}}"], "outputPattern": "^\\S+/linux\\s*$" }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": [
+            {
+              "id": "Cuemon.Core",
+              "version": "11.0.0"
+            },
+            {
+              "id": "Cuemon.Data",
+              "version": "11.0.0"
+            }
+          ]
+        }
+      },
       "prompt": "dotnet-docfx-digest csrun for Cuemon.Data.TokenBuilder. Verify the converted example.",
       "expected_output": "Delivers a converted standalone whose entry point exercises both original readers.",
       "expectations": [
@@ -1424,6 +1538,48 @@
     },
     {
       "id": 130,
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg", "docfx", "docker"],
+        "dotnetTools": [
+          {
+            "package": "docfx",
+            "version": "2.81.0",
+            "executable": "docfx"
+          }
+        ],
+        "skills": ["dotnet-csrun"],
+        "downloads": [
+          {
+            "file": "csrun.ps1",
+            "url": "https://github.com/codebeltnet/csrun/releases/download/v0.3.0/csrun.ps1",
+            "sha256": "701abbf81f33be547fc6d2890598aa9ba9827d240e04617a4936c3364691922b"
+          }
+        ],
+        "probes": [
+          { "id": "powershell", "command": ["pwsh", "-NoProfile", "--version"], "outputPattern": "^PowerShell 7\\." },
+          { "id": "dotnet-info", "command": ["dotnet", "--info"] },
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" },
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " },
+          { "id": "ripgrep", "command": ["rg", "--version"], "outputPattern": "^ripgrep " },
+          { "id": "docfx", "command": ["docfx", "--version"], "outputPattern": "^2\\.81\\.0(?:\\+|\\s|$)" },
+          { "id": "csrun-engine", "command": ["pwsh", "-NoProfile", "-NonInteractive", "-File", "{run}/dependencies/tools/csrun.ps1", "-Framework", "net10.0", "-Source", "System.Console.WriteLine(\"agentic-csrun-ready\");"], "outputPattern": "^agentic-csrun-ready\\s*$", "timeoutMs": 35000 },
+          { "id": "docker-daemon", "command": ["docker", "info", "--format", "{{.ServerVersion}}/{{.OSType}}"], "outputPattern": "^\\S+/linux\\s*$" }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": [
+            {
+              "id": "Cuemon.Core",
+              "version": "11.0.0"
+            },
+            {
+              "id": "Cuemon.Data",
+              "version": "11.0.0"
+            }
+          ]
+        }
+      },
       "prompt": "dotnet-docfx-digest repair csrun",
       "expected_output": "Discovers both behavioral defects before regenerating the stale recipe and delivery assets.",
       "expectations": [
@@ -1447,6 +1603,21 @@
     },
     {
       "id": 131,
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg"],
+        "probes": [
+          { "id": "powershell", "command": ["pwsh", "-NoProfile", "--version"], "outputPattern": "^PowerShell 7\\." },
+          { "id": "dotnet-info", "command": ["dotnet", "--info"] },
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" },
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " },
+          { "id": "ripgrep", "command": ["rg", "--version"], "outputPattern": "^ripgrep " }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": []
+        }
+      },
       "prompt": "dotnet-docfx-digest repair for Cuemon.Data.TokenBuilder",
       "expected_output": "Verifies existing correct code and leaves the authored pages byte-identical.",
       "expectations": [
