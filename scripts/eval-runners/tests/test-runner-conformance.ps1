@@ -235,6 +235,7 @@ function Test-CanaryUnder {
 
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return $false }
     foreach ($file in @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+        if ($file.Name -match '^(clr-debug-pipe-|CoreFxPipe_|dotnet-diagnostic-)' -or $file.Length -eq 0) { continue }
         $text = [IO.File]::ReadAllText($file.FullName, [Text.UTF8Encoding]::new($false))
         if ($text -match 'CODEBELT_BASELINE_LEAK_CANARY_|CODEBELT_BASELINE_FORMS_CANARY_|CODEBELT_OPENCODE_GLOBAL_SKILL_LEAK_CANARY_') { return $true }
     }
