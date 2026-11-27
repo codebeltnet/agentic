@@ -182,6 +182,12 @@ var calculator = new Calculator();
 var total = calculator.Add(3, 4);
 Console.WriteLine($"Total={total}");
 ```
+
+Expected output:
+
+```text
+Total=7
+```
 '@
     Write-Utf8File $fmtPage @'
 ---
@@ -455,13 +461,25 @@ Console.WriteLine($"Total={total}");
         Write-Utf8File $calcPage $savedCalcText
     }
 
-    # 4b. Stale claim (documentation prose changed while C# fence is byte-identical!)
+    # 4b. Stale claim (documentation prose AND non-C# expected output fences both invalidate claimSha256 while C# fence is byte-identical!)
     try {
         Write-Utf8File $calcPage ($savedCalcText.Replace('resulting sum `7`', 'resulting sum `99`'))
         $staleClaim = Invoke-DocfxValidator -RepoRoot $repo -ExtraArgs @('--operation', 'repair-csrun', '--behavioral-ledger', $completeLedgerPath)
         Assert-CodePresent $staleClaim.Report 'BEHAVIORAL_EVIDENCE_STALE' 'when documentation claim changes with identical code'
         $staleClaimMsg = ($staleClaim.Report.errors | Where-Object code -eq 'BEHAVIORAL_EVIDENCE_STALE')[0].message
         if ($staleClaimMsg -notlike '*claimSha256*') { throw "Expected claimSha256 in stale message: $staleClaimMsg" }
+    } finally {
+        Write-Utf8File $calcPage $savedCalcText
+    }
+
+    try {
+        $editedOutputText = $savedCalcText.Replace('Total=7', 'Total=99')
+        if ($editedOutputText -ceq $savedCalcText) { throw 'Expected output fence marker Total=7 was not found in Acme.Demo.Calculator.md.' }
+        Write-Utf8File $calcPage $editedOutputText
+        $staleOutputFence = Invoke-DocfxValidator -RepoRoot $repo -ExtraArgs @('--operation', 'repair-csrun', '--behavioral-ledger', $completeLedgerPath)
+        Assert-CodePresent $staleOutputFence.Report 'BEHAVIORAL_EVIDENCE_STALE' 'when expected output fenced block changes with identical C# code'
+        $staleOutputMsg = ($staleOutputFence.Report.errors | Where-Object code -eq 'BEHAVIORAL_EVIDENCE_STALE')[0].message
+        if ($staleOutputMsg -notlike '*claimSha256*') { throw "Expected claimSha256 in stale output-fence message: $staleOutputMsg" }
     } finally {
         Write-Utf8File $calcPage $savedCalcText
     }
@@ -477,6 +495,19 @@ Console.WriteLine($"Total={total}");
         Write-Utf8File "$repo/src/Acme.Demo/Acme.Demo.csproj" $savedCsprojText
     }
 
+    # 4c-impl. Stale implementation (library C# implementation changed with identical .csproj, docs, and recipe!)
+    $calcImplPath = "$repo/src/Acme.Demo/Calculator.cs"
+    $savedCalcImplText = [IO.File]::ReadAllText($calcImplPath)
+    try {
+        Write-Utf8File $calcImplPath ($savedCalcImplText.Replace('left + right', 'left - right'))
+        $staleImpl = Invoke-DocfxValidator -RepoRoot $repo -ExtraArgs @('--operation', 'repair-csrun', '--behavioral-ledger', $completeLedgerPath)
+        Assert-CodePresent $staleImpl.Report 'BEHAVIORAL_EVIDENCE_STALE' 'when library C# implementation changes without editing .csproj or docs'
+        $staleImplMsg = ($staleImpl.Report.errors | Where-Object code -eq 'BEHAVIORAL_EVIDENCE_STALE')[0].message
+        if ($staleImplMsg -notlike '*dependencySha256*') { throw "Expected dependencySha256 in stale implementation message: $staleImplMsg" }
+    } finally {
+        Write-Utf8File $calcImplPath $savedCalcImplText
+    }
+
     # 4d. Stale recipe (run-actions.settings.json recipe changed)
     try {
         Write-Utf8File "$repo/.docfx/run-actions.settings.json" ($savedSettingsText.Replace('"net10.0"', '"net11.0"'))
@@ -486,6 +517,36 @@ Console.WriteLine($"Total={total}");
         if ($staleRecipeMsg -notlike '*recipeSha256*') { throw "Expected recipeSha256 in stale message: $staleRecipeMsg" }
     } finally {
         Write-Utf8File "$repo/.docfx/run-actions.settings.json" $savedSettingsText
+    }
+
+    # 4e. Re-initializing a stale ledger preserves recorded findings while clearing stale execution evidence.
+    $preserveFindingsPath = Join-Path $ledgerDir 'preserve-findings.json'
+    $preserveSeed = Get-Content -LiteralPath $completeLedgerPath -Raw | ConvertFrom-Json
+    ($preserveSeed.examples | Where-Object exampleId -eq 'Acme.Demo.Calculator#1').findings = @(
+        @{ id = '4713030185'; status = 'open'; summary = 'Verify repaired output after implementation edit.' }
+    )
+    Save-LedgerJson $preserveFindingsPath $preserveSeed
+    try {
+        Write-Utf8File $calcPage ($savedCalcText.Replace('calculator.Add(3, 4)', 'calculator.Add(3, 5)'))
+        $reinitRes = Invoke-DocfxValidator -RepoRoot $repo -ExtraArgs @('--operation', 'repair-csrun', '--init-behavioral-ledger', $preserveFindingsPath)
+        if ($reinitRes.ExitCode -ne 1 -or $reinitRes.Report.summary.canClaimCompletion) {
+            throw 'Re-initialized stale ledger must remain incomplete.'
+        }
+        $reinitLedger = Get-Content -LiteralPath $preserveFindingsPath -Raw | ConvertFrom-Json
+        $reinitCalc = $reinitLedger.examples | Where-Object exampleId -eq 'Acme.Demo.Calculator#1'
+        if ($reinitCalc.disposition -ne 'unreviewed' -or
+            -not [string]::IsNullOrEmpty([string]$reinitCalc.actualObservation) -or
+            -not [string]::IsNullOrEmpty([string]$reinitCalc.observationEvidencePath) -or
+            $reinitCalc.transportStatus.native -ne 'Unverified') {
+            throw "Re-initializing stale entry must clear stale execution evidence and reset disposition: $($reinitCalc | ConvertTo-Json -Compress)"
+        }
+        $preservedIds = @($reinitCalc.findings | ForEach-Object { [string]$_.id })
+        if ('4713030185' -notin $preservedIds) {
+            throw "Re-initializing stale entry dropped recorded findings: $($reinitCalc | ConvertTo-Json -Compress)"
+        }
+        Assert-CodePresent $reinitRes.Report 'BEHAVIORAL_FINDING_UNRESOLVED' 'because preserved open finding must still block completion'
+    } finally {
+        Write-Utf8File $calcPage $savedCalcText
     }
 
     Write-Host 'Behavioral completion contract regressions (Scenarios 1-7, 9, 10) passed.'
@@ -720,6 +781,16 @@ public static class AuthBuilderExtensions
     }
     if ($aspNetSecondTfm -and ($missingMessages -notlike '*SecondTfmWebFeature*')) {
         throw "Unrestricted multi-TFM discovery failed to discover conditional API 'SecondTfmWebFeature' for '$aspNetSecondTfm'."
+    }
+
+    # Issue 4 regression: stale bin/obj DLL from a previously removed TFM must NOT be resurrected when project.assets.json has current TFMs.
+    $staleTfmBinDir = "$multiRepo/src/Demo.Kernel/bin/Release/net6.0"
+    New-Item -ItemType Directory -Path $staleTfmBinDir -Force | Out-Null
+    Copy-Item -LiteralPath "$multiRepo/src/Demo.Kernel/bin/Release/net10.0/Demo.Kernel.dll" -Destination "$staleTfmBinDir/Demo.Kernel.dll" -Force
+    $afterStaleDll = Invoke-DocfxValidator -RepoRoot $multiRepo -ExtraArgs @('--build-api-model')
+    Assert-CodeAbsent $afterStaleDll.Report 'PUBLIC_API_DISCOVERY_FAILED' 'when stale dropped-TFM DLL sits in bin/'
+    if ('net6.0' -in @($afterStaleDll.Report.summary.discoveredFrameworks)) {
+        throw "Stale bin/Release/net6.0 DLL was resurrected despite authoritative project.assets.json: $($afterStaleDll.Report.summary.discoveredFrameworks -join ', ')"
     }
 
     # Scenario 12: Explicit --framework invocation reports explicit framework-scoped status and cannot satisfy repository-wide multi-TFM completion!
