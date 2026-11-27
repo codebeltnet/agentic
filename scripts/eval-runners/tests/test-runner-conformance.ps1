@@ -513,7 +513,8 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server' -and $arguments 
 }
 if ($harness -eq 'codex' -and $arguments -contains 'features' -and $arguments -contains 'list') {
     [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
-    Write-Output 'multi_agent stable true'
+    Write-Output 'multi_agent deprecated true'
+    Write-Output 'multi_agent_v2 stable false'
     exit 0
 }
 if ($harness -eq 'codex' -and $arguments -contains 'debug' -and $arguments -contains 'prompt-input') {
