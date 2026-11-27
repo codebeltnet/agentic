@@ -207,4 +207,18 @@ $summaryIncompatible = New-PreflightWorkerSummary -Record (New-TestRecord) -Invo
 Assert-Equal 'incompatible' ([string]$summaryIncompatible.status) 'Test 5b: runner-provided incompatible status is preserved'
 Assert-True (@($summaryIncompatible.reasons | Where-Object { [string]$_ -eq 'runner rejected the run' }).Count -ge 1) 'Test 5b: runner-provided structured reasons are forwarded'
 
+$invocationIncompatible.Result.readiness = @(@{
+    id = 'required-command'
+    command = @('required-command', '--version')
+    exit_code = 127
+    status = 'infrastructure_blocked'
+    diagnostic = 'Install a supported version of required-command.'
+})
+$blockedArm = New-PreflightWorkerSummary -Record (New-TestRecord -EvalId 12) -Invocation $invocationIncompatible -Descriptor $descriptor
+$gate = Get-PreflightGateSummary -Profile @{ runner = 'test-runner'; model = 'test' } -Preflights @($blockedArm, $summaryCompatible, $summaryIncompatible)
+Assert-Equal 12 $gate.infrastructure_blocked_eval_ids[0] 'Readiness failures identify the eval without treating runner incompatibility as a prerequisite failure'
+Assert-Equal 1 $gate.infrastructure_blocked_eval_ids.Count 'Only the prerequisite-blocked eval was classified'
+Assert-Equal 127 $blockedArm.readiness[0].exit_code 'Exact readiness failure exit code survives the preflight gate'
+Assert-True (-not $gate.execution_started) 'A readiness failure prevents worker dispatch'
+
 Write-Output 'Preflight raw-output boundary: PASS'

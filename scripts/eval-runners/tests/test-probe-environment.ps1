@@ -251,6 +251,7 @@ $version = Get-ExternalCommandVersion -CommandInfo $pwshInfo
     Assert-Equal 'deny' ([string]$withConfig.permission.skill.'*') 'with_skill eval config must deny all skills by default'
     Assert-Equal 'allow' ([string]$withConfig.permission.skill.'dotnet-strong-name-signing') 'with_skill eval config must allow only the prepared candidate'
 
+    & (Join-Path $PSScriptRoot 'test-eval-readiness.ps1')
     Write-Output 'Probe environment regression: PASS'
 } finally {
     if (Test-Path -LiteralPath $testRoot) {
