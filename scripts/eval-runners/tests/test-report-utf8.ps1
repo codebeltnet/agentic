@@ -35,6 +35,50 @@ $reportScript = [System.IO.File]::ReadAllText($reportScriptPath, [System.Text.UT
 Assert-True ($reportScript -match "PYTHONUTF8\s*=\s*'1'") 'generate-eval-report.ps1 forces CPython UTF-8 Mode for upstream Python tooling'
 Assert-True ($reportScript -match "PYTHONIOENCODING\s*=\s*'utf-8'") 'generate-eval-report.ps1 forces UTF-8 Python stdio encoding'
 
+# 1b. Get-ReportSkillStats must read skillDirectory from each run manifest (e.g. dependencies/<skill>
+#     for evals with complementary skills such as cases 129 and 130) instead of hardcoding skill/<name>.
+$reportAst = [Management.Automation.Language.Parser]::ParseFile($reportScriptPath, [ref]$null, [ref]$null)
+foreach ($fnName in @('Read-JsonFile', 'Get-Property', 'Get-ReportSkillStats')) {
+    $fnNode = $reportAst.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fnName }, $false)
+    Assert-True ($null -ne $fnNode) "generate-eval-report.ps1 defines $fnName"
+    . ([scriptblock]::Create($fnNode.Extent.Text))
+}
+
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$statsRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-report-skill-stats-' + [Guid]::NewGuid().ToString('N'))
+try {
+    $withDir = Join-Path $statsRoot 'eval-129\with_skill'
+    $depSkillDir = Join-Path $withDir 'dependencies\dotnet-docfx-digest'
+    New-Item -ItemType Directory -Path (Join-Path $depSkillDir 'references') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $depSkillDir 'SKILL.md'), "# Candidate Skill`n", $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $depSkillDir 'references\repair.md'), "# Repair Guide`n", $utf8NoBom)
+    $runManifestPath = Join-Path $withDir 'run.json'
+    [System.IO.File]::WriteAllText($runManifestPath, '{"skillDirectory":"dependencies/dotnet-docfx-digest","mode":"with_skill"}', $utf8NoBom)
+
+    $mockManifest = [pscustomobject]@{
+        skill_name = 'dotnet-docfx-digest'
+        skill_hash = 'abc123'
+        skill_token_count = 42
+        skill_instructions = [pscustomobject]@{ inlined_resource_bytes = 0; exposure_mode = 'entry-point' }
+    }
+    $mockRecords = @(
+        [pscustomobject]@{ Configuration = 'with_skill'; RunManifestPath = $runManifestPath }
+    )
+    $depStats = Get-ReportSkillStats -Manifest $mockManifest -ManifestRecords $mockRecords -IterationPath $statsRoot
+    Assert-True ($depStats.file_count -eq 2) "Expected file_count=2 from dependencies/dotnet-docfx-digest, got $($depStats.file_count)"
+    Assert-True ($depStats.total_bytes -gt 0) "Expected non-zero total_bytes from dependencies/dotnet-docfx-digest, got $($depStats.total_bytes)"
+
+    # Traversal outside the run directory must be rejected.
+    $outsideDir = Join-Path $statsRoot 'outside-skill'
+    New-Item -ItemType Directory -Path $outsideDir -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $outsideDir 'SKILL.md'), 'outside', $utf8NoBom)
+    [System.IO.File]::WriteAllText($runManifestPath, '{"skillDirectory":"../../outside-skill","mode":"with_skill"}', $utf8NoBom)
+    $escapedStats = Get-ReportSkillStats -Manifest $mockManifest -ManifestRecords $mockRecords -IterationPath $statsRoot
+    Assert-True ($escapedStats.file_count -eq 0 -and $escapedStats.total_bytes -eq 0) 'Get-ReportSkillStats must ignore skillDirectory values that escape the run directory'
+} finally {
+    if (Test-Path -LiteralPath $statsRoot) { Remove-Item -LiteralPath $statsRoot -Recurse -Force }
+}
+
 function Resolve-PythonCommand {
     foreach ($name in @('python', 'py')) {
         $command = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
