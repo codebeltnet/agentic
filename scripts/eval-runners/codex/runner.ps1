@@ -1794,11 +1794,8 @@ function Get-CodexNativeWorkerProbe {
     if ($helpText -notmatch 'generate-json-schema') {
         return [pscustomobject]@{ Available = $false; Detail = 'The installed Codex CLI does not advertise app-server schema generation.' }
     }
-    $features = Invoke-CodexCli -CommandInfo $CommandInfo -Arguments @('features', 'list') -Inputs $Inputs -Environment $environment -TimeoutSeconds 30
-    if ($features.TimedOut -or $features.ExitCode -ne 0 -or ([string]::Join("`n", @($features.Stdout, $features.Stderr)) -notmatch '(?im)multi_agent\s+stable\s+true')) {
-        return [pscustomobject]@{ Available = $false; Detail = 'The installed Codex CLI did not report the stable multi_agent feature required for native child workers.' }
-    }
-
+    # The runner opens a fresh app-server thread per arm. Model-driven subagent
+    # feature flags do not govern thread/start or turn/start.
     $schemaRelativeDirectory = Join-Path ([System.IO.Path]::GetRelativePath($Inputs.Run.WorkingDirectoryPath, $Inputs.Run.HomeDirectoryPath)) 'evidence/codex-app-server-schema'
     $schemaDirectory = [System.IO.Path]::GetFullPath((Join-Path $Inputs.Run.WorkingDirectoryPath $schemaRelativeDirectory))
     New-Item -ItemType Directory -Path $schemaDirectory -Force | Out-Null
@@ -1966,9 +1963,9 @@ function Get-CodexNativeWorkerProbe {
         }
     }
     $schemaDetail = if ($threadReadSchemaAvailable) {
-        'Codex multi_agent is stable and the installed v2 app-server schema structurally proves the consumed skills/list, thread/start, turn/start, thread/read, and model/rerouted fields.'
+        'The installed Codex v2 app-server schema structurally proves the consumed skills/list, thread/start, turn/start, thread/read, and model/rerouted fields.'
     } else {
-        'Codex multi_agent is stable and the installed v2 app-server schema structurally proves the consumed skills/list, thread/start, turn/start, and model/rerouted fields; thread/read is supplemental and not advertised.'
+        'The installed Codex v2 app-server schema structurally proves the consumed skills/list, thread/start, turn/start, and model/rerouted fields; thread/read is supplemental and not advertised.'
     }
     if ($supportsProviderModelFallback) {
         $schemaDetail += ' allowProviderModelFallback is supported and will be sent as false; reroute notifications remain fail-closed.'
