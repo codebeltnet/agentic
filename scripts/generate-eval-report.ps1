@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Adapts this repository's portable eval results to Anthropic skill-creator's benchmark and viewer tools.
 
@@ -494,15 +494,33 @@ function Get-ReportSkillStats {
 
     $skillRoot = $null
     foreach ($record in @($ManifestRecords | Where-Object { [string]$_.Configuration -eq 'with_skill' })) {
-        $runPackageDirectory = Split-Path -Parent ([string]$record.RunManifestPath)
-        $candidate = Join-Path $runPackageDirectory ("skill/$($Manifest.skill_name)")
-        if (Test-Path -LiteralPath $candidate -PathType Container) {
-            $skillRoot = $candidate
+        $runManifestPath = [string]$record.RunManifestPath
+        $runPackageDirectory = Split-Path -Parent $runManifestPath
+        $candidates = [System.Collections.Generic.List[string]]::new()
+        if (-not [string]::IsNullOrWhiteSpace($runManifestPath) -and (Test-Path -LiteralPath $runManifestPath -PathType Leaf)) {
+            $runManifest = Read-JsonFile -Path $runManifestPath
+            $declaredSkillDir = [string](Get-Property -Object $runManifest -Name 'skillDirectory' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($declaredSkillDir)) {
+                $resolvedDeclared = [System.IO.Path]::GetFullPath((Join-Path $runPackageDirectory ($declaredSkillDir -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
+                $resolvedBase = [System.IO.Path]::GetFullPath($runPackageDirectory).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+                if ($resolvedDeclared.StartsWith($resolvedBase, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $candidates.Add($resolvedDeclared)
+                }
+            }
+        }
+        $candidates.Add((Join-Path $runPackageDirectory ("skill/$($Manifest.skill_name)")))
+        foreach ($candidate in $candidates) {
+            if (Test-Path -LiteralPath $candidate -PathType Container) {
+                $skillRoot = $candidate
+                break
+            }
+        }
+        if ($null -ne $skillRoot) {
             break
         }
     }
 
-    $files = if ($null -ne $skillRoot) { @(Get-ChildItem -LiteralPath $skillRoot -Recurse -File -Force) } else { @() }
+    $files = @(if ($null -ne $skillRoot) { Get-ChildItem -LiteralPath $skillRoot -Recurse -File -Force })
     $totalBytes = if ($files.Count -gt 0) { [int64](($files | Measure-Object -Property Length -Sum).Sum) } else { 0 }
     $inlinedBytes = Get-Property -Object $Manifest.skill_instructions -Name 'inlined_resource_bytes' -Default $null
     return [ordered]@{
