@@ -1433,6 +1433,10 @@ function New-OpenCodeExecutionProjection {
                 throw "OpenCode physical repository already contains a native candidate skill at '$physicalSkill'."
             }
             Copy-OpenCodeProjectionDirectory -Source $Inputs.Run.SkillDirectoryPath -Destination $physicalSkill
+            if (Test-JsonProperty -Object $Inputs.Run.Contract -Name 'skillExposure') {
+                $stagedRelative = [IO.Path]::GetRelativePath($Inputs.Run.RunRoot, $Inputs.Run.SkillDirectoryPath)
+                Copy-OpenCodeProjectionDirectory -Source $Inputs.Run.SkillDirectoryPath -Destination (Join-Path $plan.Root $stagedRelative)
+            }
             $physicalSkillHash = Get-OpenCodeTreeHash -Root $physicalSkill
             if ($physicalSkillHash -ne [string]$Inputs.Run.SkillHash) {
                 throw 'OpenCode physical candidate skill hash does not match the prepared run manifest.'
@@ -1949,7 +1953,12 @@ function Get-OpenCodePreflight {
         $mechanisms.Add('no scripted continuation')
     }
     if ($hardConfinement) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
+    $requiresReadiness = Test-JsonProperty -Object $run.Contract -Name 'prerequisites'
+    if ($requiresReadiness) { $reasons.Add('Infrastructure blocked: the OpenCode transport does not currently expose a verified model-free execution probe for declared prerequisites.') }
     $document = New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
+    if ($requiresReadiness) {
+        $document.readiness = @(@{ id = 'native-command-transport'; command = @(); exit_code = $null; status = 'infrastructure_blocked'; diagnostic = $reasons[$reasons.Count - 1] })
+    }
     $preflightFinished = [DateTime]::UtcNow
     $preflightTiming = [ordered]@{
         total_duration_seconds = [Math]::Round(($preflightFinished - $preflightStarted).TotalSeconds, 3)

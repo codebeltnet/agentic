@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.3] - 2026-11-27
+
+This is a minor release that adds eval prerequisite provisioning, entrypoint skill exposure, native Codex App Server readiness probing with isolated shell environments, and Windows process-tree ownership to the evaluation harness, introduces a pre-publish behavioral review and repair workflow with operation-aware ledger accounting, per-TFM `MetadataLoadContext` isolation, and cached-vs-fresh transport provenance in `dotnet-docfx-digest`, removes the unused package release notes target from `dotnet-new-app-slnx`, and fixes DocFX default template preservation, behavioral ledger staleness, isolated `NUGET_PACKAGES` trailing-separator handling, eval report `skillDirectory` resolution, and Codex `multi_agent` probe gating.
+
+### Added
+
+- Eval prerequisite provisioning (`scripts/prepare-eval-prerequisites.ps1` and `scripts/prepare-skill-evals.ps1`) supporting `executables`, `probes`, complementary `skills`, SHA-256-pinned HTTPS `downloads`, exact-version `dotnetTools`, `restore` probes, and pinned `repository` checkouts provisioned once per eval case,
+- `-SkillExposure` (`entrypoint` default or `full-inline`) in `scripts/prepare-skill-evals.ps1`, recording `exposure_mode` / `skill_exposure` in `scripts/generate-eval-report.ps1` and tracking observed shell reads of supporting `references/` files via `Get-ObservedSkillReferenceReads`,
+- Eval runner readiness probes and controlled shell environment isolation (`scripts/eval-runners/eval-readiness.ps1`, `New-RunnerShellEnvironment` in `scripts/eval-runners/runner-common.ps1`, `scripts/eval-runners/manifest-paths.ps1`, `scripts/eval-runners/preflight-summary.ps1`, `scripts/eval-runners/codex/runner.ps1`, `scripts/eval-runners/opencode/runner.ps1`, and `scripts/eval-runners/README.md`), executing declared readiness probes via `command/exec` in Codex App Server with `shell_environment_policy` and a deterministic `.NET` build readiness probe for restore prerequisites, surfacing `infrastructure_blocked_eval_ids` in preflight summaries, failing closed on OpenCode when prerequisites are declared, and covering the behavior in `scripts/eval-runners/tests/test-eval-readiness.ps1` and `test-preflight-summary.ps1`,
+- Windows process-tree ownership and job-object isolation for eval runners (`scripts/eval-runners/process-ownership.ps1` and `scripts/eval-runners/windows-owned-process.cs`, wired into `scripts/eval-runners/fanout-process.ps1`, `scripts/eval-runners/runner-common.ps1`, and `scripts/eval-runners/codex/runner.ps1`) with MSBuild node-reuse disabled, scoped pipe inheritance, and CI regression coverage in `.github/workflows/validate-skill-templates.yml` (`validate-windows` running `scripts/eval-runners/tests/test-windows-process-ownership.ps1`, checked by `scripts/test-validation-suites.ps1`),
+- `dotnet-docfx-digest` pre-publish behavioral review and dedicated repair workflow (`skills/dotnet-docfx-digest/references/repair.md`, `evals/evals.json` cases `126`-`133` with `prerequisites` declarations, `pr181-findings.md`, `pr181-review.md`, `token-reader` fixture project, `token-reader-observations.json`, and `scripts/test-quality.ps1` verification) checking documented examples against source-backed API expectations rather than relying on clean builds or exit codes alone,
+- `dotnet-docfx-digest` operation-aware behavioral review accounting ledger (`--operation`, `--init-behavioral-ledger`, `--behavioral-ledger` in `skills/dotnet-docfx-digest/scripts/docfx.cs`) and per-TFM `MetadataLoadContext` isolation during `--build-api-model`, paired with `generate-run-actions.ps1` `--summary-json` transport provenance separation (`verificationRequested`, `cachedVerified`, `freshNativeVerified`, `freshDockerVerified`, `reusedNativeVerified`, `reusedDockerVerified`, `cachedNativeVerified`, `cachedDockerVerified`, and `behavioralVerification: "not-evaluated"`) and regression coverage in `skills/dotnet-docfx-digest/scripts/test-behavioral-completion.ps1` (registered in `scripts/validate-skill-templates.ps1`).
+
+### Changed
+
+- `dotnet-docfx-digest` streamlines `SKILL.md` and `references/workflow.md`, aligns `csrun-composition.md`, `example-architecture.md`, `run-actions.md`, and `scripts.md` (covering behavioral review accounting, multi-TFM discovery, maintained host coverage, and final review of modified examples), and updates `README.md` with the streamlined workflow, behavioral review ledger, and multi-TFM gates,
+- `scripts/eval-runners/invoke-runner-owned-arms.ps1`, `scripts/eval-runners/fanout-process.ps1`, and `scripts/eval-runners/codex/runner.ps1` include Codex preflight, discovery, and startup allowances in execution timeouts and update orchestration, conformance, and observability tests,
+- `scripts/validate-skill-templates.ps1` asserts that the shared app `Directory.Build.targets` template omits `PackageReleaseNotes`.
+
+### Removed
+
+- `dotnet-new-app-slnx` shared app `Directory.Build.targets` (`skills/dotnet-new-app-slnx/assets/shared/Directory.Build.targets`) removes the `PreparePackageReleaseNotesFromFile` MSBuild target because scaffolded applications are not NuGet packages.
+
+### Fixed
+
+- `dotnet-docfx-digest` `generate-run-actions.ps1` preserves the embedded `default` DocFX template base when `build.template` is omitted or contains `null`, with regression coverage in `scripts/test-run-actions.ps1`,
+- `dotnet-docfx-digest` `docfx.cs` ignores stale `bin/`/`obj/` DLLs for dropped target frameworks when `project.assets.json` defines authoritative target frameworks, hashes project source closures into `dependencySha256`, includes non-C# expected output fences in `claimSha256`, and preserves open findings when re-initializing stale behavioral ledger entries,
+- `scripts/eval-runners/codex/runner.ps1` removes the `multi_agent stable true` CLI feature-flag gate from `Get-CodexNativeWorkerProbe`, preventing false probe failures when `multi_agent` is deprecated, with conformance test coverage in `scripts/eval-runners/tests/test-runner-conformance.ps1`,
+- `scripts/eval-runners/eval-readiness.ps1` and `scripts/eval-runners/runner-common.ps1` preserve a trailing directory separator on isolated `NUGET_PACKAGES` paths so MSBuild `SourceRoot` and deterministic SourceLink builds satisfy Roslyn invariants,
+- `scripts/generate-eval-report.ps1` resolves declared `skillDirectory` paths from `run.json` within the run-package directory before falling back to `skill/<name>`, ensuring accurate skill file counts and byte totals when complementary skills are staged under `dependencies/`.
+
 ## [0.13.2] - 2026-11-22
 
 This is a minor release that adds local SHA-256-verified `csrun.ps1` caching with ETag revalidation, rate-limit fallback, and Windows ACL protection in `dotnet-csrun`, extends `dotnet-docfx-digest` with deterministic Roslyn AST run-action planning, assembly/type-ownership dependency resolution, multi-fence `uid#<ordinal>` recipe health checks, validation-gated candidate application, first-class `mode: host` / `hostHarness` execution, Native-only `net48` run-action support, bounded parallel verification with `stderr` progress/heartbeats, and atomic manifest writes, documents repository-wide tool observability and concurrency guidelines in `AGENTS.md`, and fixes props ancestor scoping, async wrapper `await` emission, manifest/cache preservation, and host timeout handling.
@@ -884,6 +915,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.13.3]: https://github.com/codebeltnet/agentic/compare/v0.13.2...v0.13.3
 [0.13.2]: https://github.com/codebeltnet/agentic/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/codebeltnet/agentic/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/codebeltnet/agentic/compare/v0.12.1...v0.13.0

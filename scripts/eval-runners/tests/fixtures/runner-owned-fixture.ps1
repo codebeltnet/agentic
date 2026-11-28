@@ -126,6 +126,10 @@ try {
         if ([int]::TryParse((([System.IO.File]::ReadAllText($delayMarker, [Text.UTF8Encoding]::new($false))).Trim()), [ref]$parsedDelay) -and $parsedDelay -ge 0) { $delayMs = $parsedDelay }
     }
     Start-Sleep -Milliseconds $delayMs
+    if (Test-Path -LiteralPath (Join-Path $inputs.Run.HomeDirectoryPath 'execute-crash')) {
+        [Console]::Error.WriteLine('fixture primary execution failure')
+        exit 4
+    }
     $executeFinishUtc = [DateTime]::UtcNow
     $capabilities = [ordered]@{}
     foreach ($propertyName in @(Get-JsonPropertyNames -Object $descriptor.capabilities)) { $capabilities[$propertyName] = [string](Get-JsonProperty -Object $descriptor.capabilities -Name $propertyName) }

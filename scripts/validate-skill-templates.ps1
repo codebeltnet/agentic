@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Ref,
     [switch]$Full,
     [switch]$MetadataOnly,
@@ -1280,7 +1280,7 @@ Add-ValidationResult -Results $results -Name 'App templates import required boot
     Assert-Contains -Name 'web/Startup.cs' -Content $webStartup -Needle 'using Codebelt.Bootstrapper.Web;'
 }
 
-Add-ValidationResult -Results $results -Name 'App shared assets keep MinVer versioning wired end-to-end' -Action {
+Add-ValidationResult -Results $results -Name 'App shared assets keep MinVer versioning without package release notes' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/SKILL.md' -GitRef $Ref
     $buildProps = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/assets/app/Directory.Build.props' -GitRef $Ref
     $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/assets/shared/AGENTS.md' -GitRef $Ref
@@ -1290,6 +1290,7 @@ Add-ValidationResult -Results $results -Name 'App shared assets keep MinVer vers
     Assert-Contains -Name 'app shared AGENTS.md' -Content $agents -Needle 'MinVer for semantic versioning from Git tags'
     Assert-Contains -Name 'app shared Directory.Build.targets' -Content $targets -Needle 'AfterTargets="MinVer"'
     Assert-Contains -Name 'app shared Directory.Build.targets' -Content $targets -Needle '$(MinVerMajor).$(MinVerMinor).$(MinVerPatch)'
+    Assert-NotContains -Name 'app shared Directory.Build.targets' -Content $targets -Needle 'PackageReleaseNotes'
 }
 
 Add-ValidationResult -Results $results -Name 'Web variant package references stay scoped to the correct variant' -Action {
@@ -3882,6 +3883,10 @@ if ($Full -and $Suite -in @('All', 'Docfx')) {
         [pscustomobject]@{
             Name = 'DocFX digest project-scoped packets, dry run, families, and overwrite writer behave deterministically'
             Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-project-scoped.ps1'
+        }
+        [pscustomobject]@{
+            Name = 'DocFX digest behavioral completion contract, run-action reporting, and multi-TFM discovery enforce closure'
+            Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-behavioral-completion.ps1'
         }
     )
 

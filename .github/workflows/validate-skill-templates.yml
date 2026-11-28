@@ -88,17 +88,47 @@ jobs:
           "Validation suite $env:VALIDATION_SUITE completed in $([Math]::Round($watch.Elapsed.TotalSeconds, 1)) seconds (exit $exitCode)." | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY
           exit $exitCode
 
-  # Preserve the existing required status check; every matrix entry must pass.
+  validate-windows:
+    name: Validate (windows-process-ownership)
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Run Windows process ownership regression suite
+        shell: pwsh
+        run: |
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          $output = & pwsh -NoProfile -NonInteractive -File scripts/eval-runners/tests/test-windows-process-ownership.ps1 2>&1
+          $exitCode = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          "Windows process ownership suite completed in $([Math]::Round($watch.Elapsed.TotalSeconds, 1)) seconds (exit $exitCode)." | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY
+          if ($exitCode -ne 0) { exit $exitCode }
+          if (($output -join [Environment]::NewLine) -notmatch '(?m)^Windows process ownership:\s+PASS\s*$') {
+            throw 'Windows process ownership suite did not report PASS.'
+          }
+
+  # Preserve the existing required status check; every matrix entry and the Windows job must pass.
   validate-skill-templates:
     if: always()
-    needs: validate
+    needs: [validate, validate-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Require all validation suites
         shell: pwsh
         env:
           VALIDATION_RESULT: ${{ needs.validate.result }}
+          WINDOWS_VALIDATION_RESULT: ${{ needs.validate-windows.result }}
         run: |
           if ($env:VALIDATION_RESULT -ne 'success') {
             throw "Validation suites did not all pass: $env:VALIDATION_RESULT"
+          }
+          if ($env:WINDOWS_VALIDATION_RESULT -ne 'success') {
+            throw "Windows validation suite did not pass: $env:WINDOWS_VALIDATION_RESULT"
           }

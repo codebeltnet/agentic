@@ -1352,6 +1352,433 @@
         "Uses a `mode: host` / `hostHarness` recipe with timeout and clean shutdown for blocking ASP.NET Core host examples, reserving `intrinsicLimitation` strictly for code with no observable behavior",
         "Uses `--engine-path`, `--summary-json`, `--verify-changed`, and `--verify --id <uid>` with atomic manifest writes that preserve the previous manifest and emit `failureReason` (e.g. `github-403-no-cached-engine`) if verification fails"
       ]
+    },
+    {
+      "id": 126,
+      "prerequisites": {
+        "executables": ["git"],
+        "probes": [
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " }
+        ],
+        "repository": {
+          "url": "https://github.com/codebeltnet/cuemon.git",
+          "commit": "544d368fb1d29effa30295fdfbe09dac26b9d0ec",
+          "directory": "cuemon"
+        }
+      },
+      "prompt": "Review the six runnable API drafts in the packet for publication. Use the pinned source or tests where needed. Identify what each example establishes and give concrete repairs, including corrected TokenBuilder code and expected observations.",
+      "files": [
+        "evals/files/pr181-review.md"
+      ],
+      "expected_output": "Repairs misleading claims and preserves the documented operations. Distinguishes the recorded TokenBuilder output from proposed checks.",
+      "expectations": [
+        "Rejects treating sibling text elements as columns of one record. For example, uses two record elements with id and name attributes and checks two rows with the expected id/name pairs.",
+        "Accounts for True and the truncated suffix. For example, appends Alice,30, followed by New York,Engineer and checks false then true and the full Alice,30,New York,Engineer buffer. Equivalent source-backed repairs pass.",
+        "Aligns the FNV-128 factory and checksum label or deliberately selects and verifies SHA-256.",
+        "Exercises a supported redaction path and checks the masked body or limits the claim to capture.",
+        "Sends a request through middleware and checks the response header.",
+        "Exercises the registered authentication handler and checks the authentication result.",
+        "Separates recorded observations from expected results and transport status."
+      ]
+    },
+    {
+      "id": 127,
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg", "docfx"],
+        "dotnetTools": [
+          {
+            "package": "docfx",
+            "version": "2.81.0",
+            "executable": "docfx"
+          }
+        ],
+        "probes": [
+          { "id": "powershell", "command": ["pwsh", "-NoProfile", "--version"], "outputPattern": "^PowerShell 7\\." },
+          { "id": "dotnet-info", "command": ["dotnet", "--info"] },
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" },
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " },
+          { "id": "ripgrep", "command": ["rg", "--version"], "outputPattern": "^ripgrep " },
+          { "id": "docfx", "command": ["docfx", "--version"], "outputPattern": "^2\\.81\\.0(?:\\+|\\s|$)" }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": []
+        }
+      },
+      "prompt": "dotnet-docfx-digest repair",
+      "expected_output": "Repairs both existing scenarios on disk without being told which example is defective.",
+      "expectations": [
+        "Running the repaired visible source against the provided implementation produces false before the last field, true after it and the full Alice,30,New York,Engineer record.",
+        "The quoted product description retains its embedded semicolon, delimiters and complete $49.99 field in observed output.",
+        "The workspace diff repairs the example, preserves the public implementation and ties observed output to the actual TokenBuilder."
+      ],
+      "files": [
+        "evals/files/token-reader/.docfx/api/namespaces/Cuemon.Data.md",
+        "evals/files/token-reader/.docfx/docfx.json",
+        "evals/files/token-reader/LICENSE.md",
+        "evals/files/token-reader/src/Cuemon.Data/Cuemon.Data.csproj",
+        "evals/files/token-reader/src/Cuemon.Data/TokenBuilder.cs",
+        "evals/files/token-reader/.docfx/api/types/Cuemon.Data.TokenBuilder.md"
+      ]
+    },
+    {
+      "id": 128,
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg", "docfx", "docker"],
+        "dotnetTools": [
+          {
+            "package": "docfx",
+            "version": "2.81.0",
+            "executable": "docfx"
+          }
+        ],
+        "probes": [
+          { "id": "powershell", "command": ["pwsh", "-NoProfile", "--version"], "outputPattern": "^PowerShell 7\\." },
+          { "id": "dotnet-info", "command": ["dotnet", "--info"] },
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" },
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " },
+          { "id": "ripgrep", "command": ["rg", "--version"], "outputPattern": "^ripgrep " },
+          { "id": "docfx", "command": ["docfx", "--version"], "outputPattern": "^2\\.81\\.0(?:\\+|\\s|$)" },
+          { "id": "docker-daemon", "command": ["docker", "info", "--format", "{{.ServerVersion}}/{{.OSType}}"], "outputPattern": "^\\S+/linux\\s*$" }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": [
+            {
+              "id": "Cuemon.Core",
+              "version": "11.0.0"
+            },
+            {
+              "id": "Cuemon.Data",
+              "version": "11.0.0"
+            }
+          ]
+        },
+        "repository": {
+          "url": "https://github.com/codebeltnet/cuemon.git",
+          "commit": "544d368fb1d29effa30295fdfbe09dac26b9d0ec",
+          "directory": "cuemon"
+        }
+      },
+      "prompt": "In a disposable checkout inside your workspace, obtain codebeltnet/cuemon at 544d368fb1d29effa30295fdfbe09dac26b9d0ec. Run dotnet-docfx-digest repair on the pages in pr181-findings.md. Apply the corrections and account for each finding. Keep all edits local.",
+      "expected_output": "Produces source-backed edits in the disposable checkout and evidence for all 31 finding identities.",
+      "expectations": [
+        "Accounts for all 31 distinct IDs including multiple findings on one page, with path, concrete disposition and evidence.",
+        "Trace or execute XML row cardinality, cursor lifetime, both TokenBuilder inputs, DateSpan and checksum labels.",
+        "Execute all documented entry points and check loop boundaries, partition counts, status codes and response bodies.",
+        "Preserve MVC, authentication and middleware behavior. Read observed headers from their destination and exercise the documented pipeline or attribute.",
+        "Repair disposal and all reviewed indentation defects. Inspect displayed source against affected execution assets and distinguish pending synchronization or unavailable evidence from verified delivery.",
+        "Actual file changes, build or runtime evidence, and unresolved checks are inspectable; a list of suggested patches alone fails."
+      ],
+      "files": [
+        "evals/files/pr181-findings.md"
+      ]
+    },
+    {
+      "id": 129,
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg", "docfx", "docker"],
+        "dotnetTools": [
+          {
+            "package": "docfx",
+            "version": "2.81.0",
+            "executable": "docfx"
+          }
+        ],
+        "skills": ["dotnet-csrun"],
+        "downloads": [
+          {
+            "file": "csrun.ps1",
+            "url": "https://github.com/codebeltnet/csrun/releases/download/v0.3.0/csrun.ps1",
+            "sha256": "701abbf81f33be547fc6d2890598aa9ba9827d240e04617a4936c3364691922b"
+          }
+        ],
+        "probes": [
+          { "id": "powershell", "command": ["pwsh", "-NoProfile", "--version"], "outputPattern": "^PowerShell 7\\." },
+          { "id": "dotnet-info", "command": ["dotnet", "--info"] },
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" },
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " },
+          { "id": "ripgrep", "command": ["rg", "--version"], "outputPattern": "^ripgrep " },
+          { "id": "docfx", "command": ["docfx", "--version"], "outputPattern": "^2\\.81\\.0(?:\\+|\\s|$)" },
+          { "id": "csrun-engine", "command": ["pwsh", "-NoProfile", "-NonInteractive", "-File", "{run}/dependencies/tools/csrun.ps1", "-Framework", "net10.0", "-Source", "System.Console.WriteLine(\"agentic-csrun-ready\");"], "outputPattern": "^agentic-csrun-ready\\s*$", "timeoutMs": 35000 },
+          { "id": "docker-daemon", "command": ["docker", "info", "--format", "{{.ServerVersion}}/{{.OSType}}"], "outputPattern": "^\\S+/linux\\s*$" }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": [
+            {
+              "id": "Cuemon.Core",
+              "version": "11.0.0"
+            },
+            {
+              "id": "Cuemon.Data",
+              "version": "11.0.0"
+            }
+          ]
+        }
+      },
+      "prompt": "dotnet-docfx-digest csrun for Cuemon.Data.TokenBuilder. Verify the converted example.",
+      "expected_output": "Delivers a converted standalone whose entry point exercises both original readers.",
+      "expectations": [
+        "Both ReadPerson and ReadProduct scenarios execute; the first prints False then the complete record and the second preserves the quoted delimiter and price.",
+        "Exact visible C#, manifest and generated assets agree and use the documented package version. Both transport outcomes are independently evidenced."
+      ],
+      "files": [
+        "evals/files/token-reader/BUILDING.md",
+        "evals/files/token-reader/.docfx/api/namespaces/Cuemon.Data.md",
+        "evals/files/token-reader/.docfx/docfx.json",
+        "evals/files/token-reader/LICENSE.md",
+        "evals/files/token-reader/src/Cuemon.Data/Cuemon.Data.csproj",
+        "evals/files/token-reader/src/Cuemon.Data/TokenBuilder.cs",
+        "evals/files/token-reader/.docfx/api/types/RecordReader.md"
+      ]
+    },
+    {
+      "id": 130,
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg", "docfx", "docker"],
+        "dotnetTools": [
+          {
+            "package": "docfx",
+            "version": "2.81.0",
+            "executable": "docfx"
+          }
+        ],
+        "skills": ["dotnet-csrun"],
+        "downloads": [
+          {
+            "file": "csrun.ps1",
+            "url": "https://github.com/codebeltnet/csrun/releases/download/v0.3.0/csrun.ps1",
+            "sha256": "701abbf81f33be547fc6d2890598aa9ba9827d240e04617a4936c3364691922b"
+          }
+        ],
+        "probes": [
+          { "id": "powershell", "command": ["pwsh", "-NoProfile", "--version"], "outputPattern": "^PowerShell 7\\." },
+          { "id": "dotnet-info", "command": ["dotnet", "--info"] },
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" },
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " },
+          { "id": "ripgrep", "command": ["rg", "--version"], "outputPattern": "^ripgrep " },
+          { "id": "docfx", "command": ["docfx", "--version"], "outputPattern": "^2\\.81\\.0(?:\\+|\\s|$)" },
+          { "id": "csrun-engine", "command": ["pwsh", "-NoProfile", "-NonInteractive", "-File", "{run}/dependencies/tools/csrun.ps1", "-Framework", "net10.0", "-Source", "System.Console.WriteLine(\"agentic-csrun-ready\");"], "outputPattern": "^agentic-csrun-ready\\s*$", "timeoutMs": 35000 },
+          { "id": "docker-daemon", "command": ["docker", "info", "--format", "{{.ServerVersion}}/{{.OSType}}"], "outputPattern": "^\\S+/linux\\s*$" }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": [
+            {
+              "id": "Cuemon.Core",
+              "version": "11.0.0"
+            },
+            {
+              "id": "Cuemon.Data",
+              "version": "11.0.0"
+            }
+          ]
+        }
+      },
+      "prompt": "dotnet-docfx-digest repair csrun",
+      "expected_output": "Discovers both behavioral defects before regenerating the stale recipe and delivery assets.",
+      "expectations": [
+        "Running the repaired visible source against the provided implementation produces false before the last field, true after it and the full Alice,30,New York,Engineer record.",
+        "The quoted product description retains its embedded semicolon, delimiters and complete $49.99 field in observed output.",
+        "The workspace diff repairs the example, preserves the public implementation and ties observed output to the actual TokenBuilder.",
+        "Generated recipe and manifest match corrected source; materialized Native and Docker assets have separate observed verification outcomes or precise environmental blockers.",
+        "Finishes applicable DocFX gates or identifies the exact unresolved command and result without claiming completion."
+      ],
+      "files": [
+        "evals/files/token-reader/BUILDING.md",
+        "evals/files/token-reader/.docfx/api/namespaces/Cuemon.Data.md",
+        "evals/files/token-reader/.docfx/docfx.json",
+        "evals/files/token-reader/LICENSE.md",
+        "evals/files/token-reader/src/Cuemon.Data/Cuemon.Data.csproj",
+        "evals/files/token-reader/src/Cuemon.Data/TokenBuilder.cs",
+        "evals/files/token-reader/.docfx/api/types/Cuemon.Data.TokenBuilder.md",
+        "evals/files/token-reader/.docfx/run-actions.manifest.json",
+        "evals/files/token-reader/.docfx/run-actions.settings.json"
+      ]
+    },
+    {
+      "id": 131,
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg"],
+        "probes": [
+          { "id": "powershell", "command": ["pwsh", "-NoProfile", "--version"], "outputPattern": "^PowerShell 7\\." },
+          { "id": "dotnet-info", "command": ["dotnet", "--info"] },
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" },
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " },
+          { "id": "ripgrep", "command": ["rg", "--version"], "outputPattern": "^ripgrep " }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": []
+        }
+      },
+      "prompt": "dotnet-docfx-digest repair for Cuemon.Data.TokenBuilder",
+      "expected_output": "Verifies existing correct code and leaves the authored pages byte-identical.",
+      "expectations": [
+        "Execution shows True and the complete quoted product record.",
+        "No changes to the authored page, API source or project and no generated run-action files.",
+        "Names the comparison with source or execution evidence."
+      ],
+      "files": [
+        "evals/files/token-reader/.docfx/api/namespaces/Cuemon.Data.md",
+        "evals/files/token-reader/.docfx/docfx.json",
+        "evals/files/token-reader/LICENSE.md",
+        "evals/files/token-reader/src/Cuemon.Data/Cuemon.Data.csproj",
+        "evals/files/token-reader/src/Cuemon.Data/TokenBuilder.cs",
+        "evals/files/token-reader/.docfx/api/types/ProductRecord.md"
+      ]
+    },
+    {
+      "id": 132,
+      "prompt": "What does docfx.cs exit code 2 mean? Only answer the CLI question.",
+      "expected_output": "Resolves the CLI question from the script documentation.",
+      "expectations": [
+        "Answer agrees with the docfx.cs exit-code table. No changes, builds or execution.",
+        "When reference reads are observable, reads only scripts.md; absent traces are unmeasured."
+      ]
+    },
+    {
+      "id": 133,
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg"],
+        "probes": [
+          { "id": "powershell", "command": ["pwsh", "-NoProfile", "--version"], "outputPattern": "^PowerShell 7\\." },
+          { "id": "dotnet-info", "command": ["dotnet", "--info"] },
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" },
+          { "id": "git", "command": ["git", "--version"], "outputPattern": "^git version " },
+          { "id": "ripgrep", "command": ["rg", "--version"], "outputPattern": "^ripgrep " }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": []
+        }
+      },
+      "prompt": "You are continuing a `dotnet-docfx-digest repair csrun` run after `repair.md` was loaded, all deterministic documentation diagnostics are cleared, every existing example compiles, and `generate-run-actions.ps1 --summary-json` (invoked without `--verify`) shows cached Native and Docker transport verification is green (`verifyScope: none`, `executed: 0`, `reused: 0`, `cachedVerified > 0`). Zero examples have been behaviorally reviewed yet, and no behavioral ledger has been completed. Decide whether the repair is complete and take the required next action against the workspace.",
+      "expected_output": "Treats the repair as incomplete rather than claiming completion. Materializes the behavioral review ledger via `docfx.cs --operation repair-csrun --init-behavioral-ledger <temp-path>`, recognizes that `summary.canClaimCompletion` remains false while `examplesUnreviewed > 0` even when deterministic gates and cached transport logs are green, distinguishes cached transport status from fresh execution and behavioral comparison, and inspects/repairs the behavioral defects in the existing TokenBuilder examples (or accurately reports remaining behavioral obligations) without mutating the public implementation.",
+      "expectations": [
+        "Does not claim `dotnet-docfx-digest repair csrun` is complete solely because deterministic documentation validation, sample compilation and cached transport status are green",
+        "Materializes and reconciles the behavioral review ledger in temporary/session storage using `docfx.cs --operation repair-csrun` so `summary.behaviorReviewRequired` is true and `summary.canClaimCompletion` stays false while examples remain unreviewed",
+        "Distinguishes previously cached transport verification (`verifyScope: none`, `executed: 0`, `cachedVerified`) from fresh execution and from behavioral verification",
+        "Identifies behavioral defects in the existing TokenBuilder examples by comparing source-backed expectations with observed behavior instead of trusting exit code 0 or cached transport status",
+        "Keeps behavioral ledger and temporary artifacts outside the repository working tree and reports remaining obligations honestly if any transport or verification step cannot run"
+      ],
+      "files": [
+        "evals/files/pr181-review.md",
+        "evals/files/token-reader/BUILDING.md",
+        "evals/files/token-reader/.docfx/api/namespaces/Cuemon.Data.md",
+        "evals/files/token-reader/.docfx/docfx.json",
+        "evals/files/token-reader/LICENSE.md",
+        "evals/files/token-reader/src/Cuemon.Data/Cuemon.Data.csproj",
+        "evals/files/token-reader/src/Cuemon.Data/TokenBuilder.cs",
+        "evals/files/token-reader/.docfx/api/types/Cuemon.Data.TokenBuilder.md",
+        "evals/files/token-reader/.docfx/run-actions.manifest.json",
+        "evals/files/token-reader/.docfx/run-actions.settings.json"
+      ]
+    },
+    {
+      "id": 134,
+      "name": "host",
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg", "docfx"],
+        "dotnetTools": [{ "package": "docfx", "version": "2.81.0", "executable": "docfx" }],
+        "probes": [
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "aspnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.AspNetCore\\.App 10\\.0\\.\\d+\\s+\\[" }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": [
+            { "id": "Cuemon.AspNetCore.Mvc", "version": "11.0.0" },
+            { "id": "Cuemon.Extensions.AspNetCore.Mvc", "version": "11.0.0" },
+            { "id": "Microsoft.AspNetCore.TestHost", "version": "10.0.0" }
+          ]
+        },
+        "repository": { "url": "https://github.com/codebeltnet/cuemon.git", "commit": "d68154f2ff508dc08779a5ff3b1e29b21d50b050", "directory": "cuemon" }
+      },
+      "prompt": "Repair the runnable DocFX examples in the staged cuemon checkout for Cuemon.AspNetCore.Mvc.Filters.Diagnostics.ServerTimingFilter and Cuemon.AspNetCore.Builder.MiddlewareBuilderFactory. Limit the authored diff to those pages under .docfx/api/types. Run the final displayed examples or their exact maintained bound contexts on .NET 10. Keep the actual edits and include reproducible commands and observed results. Generated run-action delivery is out of scope.",
+      "expected_output": "The two repaired pages demonstrate request-scoped MVC timing and a custom middleware whose request completes under a real host. Compare against the registration-only and constructor-only examples at original PR #181 revision 2d0603f95e372cb802982f0397b39dcad2bda6f8 and the repair at d68154f2ff508dc08779a5ff3b1e29b21d50b050.",
+      "expectations": [
+        "The final example uses the public AddServerTiming registration and the MVC filter registration or attribute. Source evidence establishes that IServerTiming is scoped. Hosted evidence shows the action timing on its response and distinct requests do not inherit prior metrics. A manually registered singleton or hand-invoked filter does not satisfy this assertion.",
+        "The custom middleware is invoked by a hosted request through MiddlewareBuilderFactory. The client receives a successful status and full OK body. Timing is observable without writing headers after the response starts. A standalone DefaultHttpContext or a header check without consuming the body does not satisfy this assertion.",
+        "The final diff and executed commands are inspectable. Each documented claim matches the final observed behavior, including scope and lifecycle. The repair preserves the scenarios, leaves product code, tests and unrelated pages unchanged, and avoids new errors or unsupported success claims."
+      ]
+    },
+    {
+      "id": 135,
+      "name": "pipeline",
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg", "docfx"],
+        "dotnetTools": [{ "package": "docfx", "version": "2.81.0", "executable": "docfx" }],
+        "probes": [
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "aspnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.AspNetCore\\.App 10\\.0\\.\\d+\\s+\\[" }
+        ],
+        "restore": {
+          "framework": "net10.0",
+          "packages": [
+            { "id": "Cuemon.Extensions.AspNetCore.Authentication", "version": "11.0.0" },
+            { "id": "Cuemon.Extensions.AspNetCore.Mvc.Formatters.Xml", "version": "11.0.0" },
+            { "id": "Microsoft.AspNetCore.TestHost", "version": "10.0.0" }
+          ]
+        },
+        "repository": { "url": "https://github.com/codebeltnet/cuemon.git", "commit": "d68154f2ff508dc08779a5ff3b1e29b21d50b050", "directory": "cuemon" }
+      },
+      "prompt": "Repair the runnable DocFX examples in the staged cuemon checkout for Cuemon.Extensions.AspNetCore.Authentication.ApplicationBuilderExtensions and Cuemon.Extensions.AspNetCore.Mvc.Formatters.Xml.MvcBuilderExtensions. Limit the authored diff to those pages under .docfx/api/types. Run the final displayed examples or their exact maintained bound contexts on .NET 10. Keep the actual edits and include reproducible commands and observed results. Generated run-action delivery is out of scope.",
+      "expected_output": "Repairs the three alternative authentication registrations so a request can reach its endpoint, and demonstrates the intended XML configuration at the point of use. The original reference is 2d0603f95e372cb802982f0397b39dcad2bda6f8 and the faulty repair is d68154f2ff508dc08779a5ff3b1e29b21d50b050.",
+      "expectations": [
+        "The final example preserves Basic, Digest and HMAC as alternatives with independent pipelines or equivalent route selection. Runtime evidence shows a successful authenticated endpoint response and a rejection path. Each promised scheme is exercised in the runnable example or its exact maintained integration context. Seeing an identity before a later 401 does not satisfy this assertion.",
+        "The XML example preserves formatter registration and customization. It executes with both formatters registered and the requested Indent=true effective in the resolved settings or serialized response. The final source handles first-registration behavior and never substitutes the observed default for the intended setting.",
+        "The diff, commands and results establish that the final authored claims hold. Product code, maintained tests and unrelated pages are unchanged. No newly introduced failure or misleading success claim is present."
+      ]
+    },
+    {
+      "id": 136,
+      "name": "crypto",
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg", "docfx"],
+        "dotnetTools": [{ "package": "docfx", "version": "2.81.0", "executable": "docfx" }],
+        "probes": [
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" }
+        ],
+        "restore": { "framework": "net10.0", "packages": [{ "id": "Cuemon.Security.Cryptography", "version": "11.0.0" }] },
+        "repository": { "url": "https://github.com/codebeltnet/cuemon.git", "commit": "d68154f2ff508dc08779a5ff3b1e29b21d50b050", "directory": "cuemon" }
+      },
+      "prompt": "Repair the runnable DocFX examples in the staged cuemon checkout for Cuemon.Security.Cryptography.HmacMessageDigest5 and Cuemon.Security.Cryptography.AesKeyOptions. Limit the authored diff to those pages under .docfx/api/types. Run the final displayed examples on .NET 10. Keep the actual edits and include reproducible commands and observed results. Generated run-action delivery is out of scope.",
+      "expected_output": "The repaired pages correctly verify MACs and safely demonstrate AES key options. Use 2d0603f95e372cb802982f0397b39dcad2bda6f8 as historical reference for the failed HMAC equality and dormant AES callback, and d68154f2ff508dc08779a5ff3b1e29b21d50b050 for the regressions introduced during repair.",
+      "expectations": [
+        "The final HMAC example compares the actual MAC bytes using a fixed-time primitive or equivalent documented constant-time API. Runtime evidence shows matching input is accepted, tampered input is rejected, and the options path executes. Ordinary string equality and early-exit byte comparison fail this assertion even when outputs agree.",
+        "The AES example exercises supported key-size options with observed 16-, 24- and 32-byte lengths. It preserves a meaningful provider customization example with a cryptographically appropriate source or an explicitly test-only deterministic provider isolated from consumer key-generation guidance. Moving an insecure example back to unreachable code does not satisfy this assertion.",
+        "The final diff and runtime evidence are inspectable. The repair preserves the public API and example purposes, keeps demonstration secrets out of production guidance, and introduces no new insecure pattern or unexercised promised branch."
+      ]
+    },
+    {
+      "id": 137,
+      "name": "records",
+      "prerequisites": {
+        "executables": ["pwsh", "dotnet", "git", "rg", "docfx"],
+        "dotnetTools": [{ "package": "docfx", "version": "2.81.0", "executable": "docfx" }],
+        "probes": [
+          { "id": "dotnet-sdk", "command": ["dotnet", "--list-sdks"], "outputPattern": "^10\\.0\\.\\d+\\s+\\[" },
+          { "id": "dotnet-runtime", "command": ["dotnet", "--list-runtimes"], "outputPattern": "^Microsoft\\.NETCore\\.App 10\\.0\\.\\d+\\s+\\[" }
+        ],
+        "restore": { "framework": "net10.0", "packages": [{ "id": "Cuemon.Data", "version": "11.0.0" }] },
+        "repository": { "url": "https://github.com/codebeltnet/cuemon.git", "commit": "d68154f2ff508dc08779a5ff3b1e29b21d50b050", "directory": "cuemon" }
+      },
+      "prompt": "Review and repair as needed the runnable DocFX examples in the staged cuemon checkout for Cuemon.Data.TokenBuilder and Cuemon.Data.DsvDataReader. Limit the authored diff to those pages under .docfx/api/types. Run both final displayed examples on .NET 10. Keep any edits and include reproducible commands and observed results. Generated run-action delivery is out of scope.",
+      "expected_output": "Repairs both TokenBuilder inputs and preserves the working DsvDataReader page byte-for-byte. The intended incomplete-then-complete scenario is visible at 2d0603f95e372cb802982f0397b39dcad2bda6f8. The changed expected comment with the same defective runtime path is visible at d68154f2ff508dc08779a5ff3b1e29b21d50b050.",
+      "expectations": [
+        "Running the final displayed TokenBuilder source yields False before the last field, True after it, and the exact complete record Alice,30,New York,Engineer. Editing comments or weakening the scenario to accept New YorkE fails this assertion.",
+        "The final displayed example preserves the quoted product description, embedded semicolon and full $49.99 field, with both field separators and all three values in their intended positions. The evidence comes from the produced buffer rather than the input string or configured token count.",
+        "The original DsvDataReader fence executes and produces the documented headers and all three rows in order. The control page remains byte-identical to the pinned checkout. The actual diff is limited to the defective example and leaves the library implementation and project intact."
+      ]
     }
   ]
 }

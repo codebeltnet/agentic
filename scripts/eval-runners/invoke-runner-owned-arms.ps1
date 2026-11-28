@@ -82,14 +82,18 @@ function Invoke-RunnerPreflight {
         $exitCode = Complete-RunnerChildProcess -Child $child
         $childTimedOut = [bool]$child.TimedOut
         $childTerminationObserved = [bool]$child.TerminationObserved
+        $childCleanupFailures = @($child.CleanupFailures)
         $child = $null
         $stdout = if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) { [System.IO.File]::ReadAllText($stdoutPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
         $stderr = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { [System.IO.File]::ReadAllText($stderrPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
         $result = $null
         $parseError = ''
+        if ($childCleanupFailures.Count -gt 0) {
+            $stderr = (@($stderr) + $childCleanupFailures) -join [Environment]::NewLine
+        }
         if (-not [string]::IsNullOrWhiteSpace($stdout)) {
             try {
-                $result = $stdout | ConvertFrom-Json -Depth 100
+                if ($childCleanupFailures.Count -eq 0) { $result = $stdout | ConvertFrom-Json -Depth 100 }
             } catch {
                 $parseError = $_.Exception.Message
             }
@@ -135,19 +139,21 @@ function Get-RunnerRunTurnCount {
 function Get-RunnerChildTimeoutSeconds {
     param(
         [Parameter(Mandatory = $true)][string]$RunPath,
-        [Parameter(Mandatory = $true)][int]$ProfileTimeoutSeconds
+        [Parameter(Mandatory = $true)][int]$ProfileTimeoutSeconds,
+        [string]$Runner = ''
     )
 
     $turnCount = Get-RunnerRunTurnCount -RunPath $RunPath
+    $startupAllowance = if ($Runner -eq 'codex') { Get-CodexExecutionStartupAllowanceSeconds } else { 0 }
     return [pscustomobject]@{
         TurnCount = $turnCount
         RunnerGraceSeconds = Get-RunnerGraceSeconds
-        TimeoutSeconds = ($turnCount * [Math]::Max(1, $ProfileTimeoutSeconds)) + (Get-RunnerGraceSeconds)
+        TimeoutSeconds = ($turnCount * [Math]::Max(1, $ProfileTimeoutSeconds)) + $startupAllowance + (Get-RunnerGraceSeconds)
     }
 }
 
 function New-ArmSummary {
-    param([Parameter(Mandatory = $true)][object]$State)
+    param([AllowNull()][object]$State)
 
     return @(Get-OrchestrationCompletedEntries -State $State | Sort-Object { [string](Get-JsonProperty -Object $_ -Name 'worker_id' -Default '') } | ForEach-Object {
         $evidenceValidation = Get-JsonProperty -Object $_ -Name 'evidence_validation' -Default $null
@@ -170,9 +176,9 @@ function New-ArmSummary {
 
 function Get-FanoutSummary {
     param(
-        [Parameter(Mandatory = $true)][object]$Profile,
-        [Parameter(Mandatory = $true)][object]$Plan,
-        [Parameter(Mandatory = $true)][object]$State,
+        [AllowNull()][object]$Profile,
+        [AllowNull()][object]$Plan,
+        [AllowNull()][object]$State,
         [object]$Concurrency = $null,
         [object[]]$Preflights = @(),
         [string]$Status = 'failed',
@@ -215,6 +221,11 @@ function Get-FanoutSummary {
 }
 
 $running = $null
+$profile = $null
+$plan = $null
+$state = $null
+$activeRun = $null
+$preflightRecords = [System.Collections.Generic.List[object]]::new()
 try {
     $manifestPath = Join-Path $iteration 'manifest.json'
     $manifest = Read-RunnerJson -Path $manifestPath
@@ -234,6 +245,9 @@ try {
     if ([string](Get-JsonProperty -Object $delegation -Name 'dispatch_owner' -Default '') -ne 'runner') {
         throw "Selected runner '$runnerName' does not declare delegation.dispatch_owner=runner."
     }
+    $plan = New-EvalOrchestrationPlan -IterationDirectory $iteration -Manifest $manifest -Profile $profile -Descriptor $descriptor
+    [void](Assert-OrchestrationPlanContract -Plan $plan)
+    if ([string]$plan.dispatch_owner -ne 'runner') { throw 'Runner-owned fan-out requires a runner-owned orchestration plan.' }
 
     $statePath = Join-Path $iteration 'orchestration-state.json'
     if (Test-Path -LiteralPath $statePath -PathType Leaf) {
@@ -252,7 +266,6 @@ try {
     # invoked standalone (no flag) stay byte-identical and silent.
     [Environment]::SetEnvironmentVariable('AGENTIC_RUNNER_PROGRESS', '1')
     $manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $iteration -Manifest $manifest)
-    $preflightRecords = [System.Collections.Generic.List[object]]::new()
     foreach ($record in $manifestRecords) {
         $preflightWorkerId = 'arm-{0}-{1}' -f $record.EvalId, $record.Configuration
         $invocation = Invoke-RunnerPreflight -RunnerPath $runnerPath -RunPath $record.RunManifestPath -ProfilePath ([string]$profile.Path) -TimeoutSeconds (Get-RunnerPreflightTimeoutSeconds) -Runner $runnerName -WorkerId $preflightWorkerId -EvalId ([int]$record.EvalId) -Configuration ([string]$record.Configuration) -ProgressLogPath $progressLogPath
@@ -263,9 +276,6 @@ try {
         Write-FanoutSummary -Summary (Get-PreflightGateSummary -Profile $profile.Profile -Preflights @($preflightRecords.ToArray())) -ExitCode 2
     }
 
-    $plan = New-EvalOrchestrationPlan -IterationDirectory $iteration -Manifest $manifest -Profile $profile -Descriptor $descriptor
-    [void](Assert-OrchestrationPlanContract -Plan $plan)
-    if ([string]$plan.dispatch_owner -ne 'runner') { throw 'Runner-owned fan-out requires a runner-owned orchestration plan.' }
     $state = New-OrchestrationState -Plan $plan
     $state.preflight = [ordered]@{
         status = 'passed'
@@ -286,7 +296,7 @@ try {
             if (Test-Path -LiteralPath $executionResultPath) {
                 throw "$workerId has an existing manifest-declared execution result; refusing to overwrite a prior attempt."
             }
-            $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-runner-owned-' + [Guid]::NewGuid().ToString('N') + '.stderr')
+            $stderrPath = Join-Path $progressDirectory ($workerId + '.stderr')
             # ProcessStartInfo.ArgumentList escapes each argument natively, so raw
             # paths are passed without manual quoting.
             $arguments = @(
@@ -300,19 +310,19 @@ try {
                 ([string]$profile.Path)
             )
             $pwshPath = [string]((Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source)
-            $childBudget = Get-RunnerChildTimeoutSeconds -RunPath $runPath -ProfileTimeoutSeconds ([int]$profile.TimeoutSeconds)
+            $childBudget = Get-RunnerChildTimeoutSeconds -RunPath $runPath -ProfileTimeoutSeconds ([int]$profile.TimeoutSeconds) -Runner $runnerName
             # Headless child: CreateNoWindow suppresses the per-child console
             # window on Windows while the process stays a real isolation
             # boundary. The child's sole stdout is streamed to the exact
             # manifest-declared execution result; stderr is captured separately.
             $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $runPath) -StdoutPath $executionResultPath -StderrPath $stderrPath -TimeoutSeconds ([int]$childBudget.TimeoutSeconds) -Runner $runnerName -WorkerId $workerId -EvalId ([int]$arm.eval_id) -Configuration ([string]$arm.configuration) -Phase 'runner-cli' -Turn ([int]$childBudget.TurnCount) -ProgressLogPath $progressLogPath
+            $running.Add([pscustomobject]@{ worker_id = $workerId; child = $child; Process = $child.Process; result_path = $executionResultPath; stderr_path = $stderrPath; run_path = $runPath; timeout_seconds = [int]$childBudget.TimeoutSeconds; turn_count = [int]$childBudget.TurnCount })
             if (-not [bool]$state.preflight.execution_started) {
                 $state.preflight.execution_started = $true
                 Save-OrchestrationState -Path $statePath -State $state
             }
             [void](Register-DelegationAccepted -State $state -WorkerId $workerId)
             Save-OrchestrationState -Path $statePath -State $state
-            $running.Add([pscustomobject]@{ worker_id = $workerId; child = $child; Process = $child.Process; result_path = $executionResultPath; stderr_path = $stderrPath; run_path = $runPath; timeout_seconds = [int]$childBudget.TimeoutSeconds; turn_count = [int]$childBudget.TurnCount })
         }
 
         if ($running.Count -eq 0) { throw 'Runner-owned fan-out has pending arms but no active native process.' }
@@ -322,8 +332,12 @@ try {
         $completedIndex = Wait-AnyRunnerChild -Running $running
         $activeRun = $running[$completedIndex]
         $exitCode = Complete-RunnerChildProcess -Child $activeRun.child
+        $running.RemoveAt($completedIndex)
         if ([bool]$activeRun.child.TimedOut) {
-            throw "$($activeRun.worker_id) runner child watchdog timed out after $($activeRun.timeout_seconds) seconds (turns=$($activeRun.turn_count)); no retry or redispatch was performed."
+            throw "$($activeRun.worker_id) $($activeRun.child.TerminationReason) (budget=$($activeRun.timeout_seconds)s, turns=$($activeRun.turn_count)); no retry or redispatch was performed."
+        }
+        if ($activeRun.child.CleanupFailures.Count -gt 0) {
+            throw "$($activeRun.worker_id) process isolation or evidence capture failed: $($activeRun.child.CleanupFailures -join ' ')"
         }
         if (-not (Test-Path -LiteralPath $activeRun.result_path -PathType Leaf) -or (Get-Item -LiteralPath $activeRun.result_path).Length -eq 0) {
             $stderr = if (Test-Path -LiteralPath $activeRun.stderr_path -PathType Leaf) { [System.IO.File]::ReadAllText($activeRun.stderr_path, [System.Text.UTF8Encoding]::new($false)).Trim() } else { '' }
@@ -336,7 +350,7 @@ try {
         [void](Register-WorkerTerminal -Plan $plan -State $state -WorkerId ([string]$activeRun.worker_id) -ExecutionEvidence $executionResult)
         Save-OrchestrationState -Path $statePath -State $state
         if (Test-Path -LiteralPath $activeRun.stderr_path -PathType Leaf) { Remove-Item -LiteralPath $activeRun.stderr_path -Force -ErrorAction SilentlyContinue }
-        $running.RemoveAt($completedIndex)
+        $activeRun = $null
     }
 
     $concurrency = Assert-OrchestrationConcurrency -Plan $plan -State $state
@@ -354,7 +368,7 @@ try {
     }
     Save-OrchestrationState -Path $statePath -State $state
     $aggregate = Get-FanoutPhase1Aggregate -ExpectedCount @($plan.arms).Count -State $state
-    $summary = Get-FanoutSummary -Profile $profile -Plan $plan -State $state -Concurrency $concurrency -Preflights @($preflightRecords.ToArray()) -Status ([string]$aggregate.status)
+    $summary = Get-FanoutSummary -Profile $profile.Profile -Plan $plan -State $state -Concurrency $concurrency -Preflights @($preflightRecords.ToArray()) -Status ([string]$aggregate.status)
     $summary.execution_freeze = [ordered]@{
         path = $freezePath
         sha256 = [string]$state.execution_freeze.sha256
@@ -364,43 +378,51 @@ try {
     Write-FanoutSummary -Summary $summary -ExitCode $phaseOneExitCode
 } catch {
     $errorMessage = $_.Exception.Message
+    $interrupted = [System.Collections.Generic.List[object]]::new()
+    if ($null -ne $activeRun) {
+        $interrupted.Add([ordered]@{
+            worker_id = $activeRun.worker_id
+            status = if ($activeRun.child.TimedOut) { 'timed_out' } else { 'failed' }
+            exit_code = $activeRun.child.ExitCode
+            stderr_path = $activeRun.stderr_path
+            termination_reason = $activeRun.child.TerminationReason
+            cleanup_failures = @($activeRun.child.CleanupFailures)
+        })
+    }
     if ($null -ne $running) {
         foreach ($active in @($running.ToArray())) {
-            try { [void](Complete-RunnerChildProcess -Child $active.child -TimeoutSeconds 1) } catch { }
+            $diagnostic = [ordered]@{
+                worker_id = $active.worker_id
+                status = 'unregistered'
+                exit_code = $null
+                stderr_path = $active.stderr_path
+                termination_reason = ''
+                cleanup_failures = @()
+            }
+            try {
+                $diagnostic.exit_code = Complete-RunnerChildProcess -Child $active.child -CancellationReason 'Phase 1 cancelled after another runner or orchestration failure'
+                $diagnostic.termination_reason = $active.child.TerminationReason
+                if ($active.child.TerminationReason) { $diagnostic.status = 'cancelled' }
+                $diagnostic.cleanup_failures = @($active.child.CleanupFailures)
+            } catch {
+                $diagnostic.cleanup_failures = @($_.Exception.Message)
+            }
+            $interrupted.Add($diagnostic)
         }
     }
-    $fallbackProfile = [ordered]@{ runner = ''; model = '' }
-    $fallbackPlan = [ordered]@{ dispatch_owner = 'runner'; requested_concurrency = 0 }
-    $fallbackState = [ordered]@{ max_observed_active = 0; completed = [ordered]@{} }
-    try {
-        if (Test-Path -LiteralPath (Join-Path $iteration 'orchestration-state.json') -PathType Leaf) { $fallbackState = Read-RunnerJson -Path (Join-Path $iteration 'orchestration-state.json') }
-    } catch { }
-    try {
-        Write-FanoutSummary -Summary (Get-FanoutSummary -Profile $fallbackProfile -Plan $fallbackPlan -State $fallbackState -Status 'failed' -Error $errorMessage) -ExitCode 2
-    } catch {
-        # A persisted JSON state is intentionally deserialized and therefore no
-        # longer exposes the mutable dictionaries used by the live queue. Keep
-        # the failure machine-readable without masking its original reason.
-        Write-FanoutSummary -Summary ([ordered]@{
-            schema = 'codebeltnet/agentic/runner-owned-fanout-summary/1'
-            phase = 'phase1'
-            status = 'failed'
-            runner = ''
-            model = ''
-            dispatch_owner = 'runner'
-            requested_concurrency = 0
-            expected_count = 0
-            terminal_count = 0
-            completed_count = 0
-            failed_count = 0
-            timed_out_count = 0
-            cancelled_count = 0
-            incompatible_count = 0
-            evidence_validation_failed_count = 0
-            max_observed_active = 0
-            orchestration_state = 'orchestration-state.json'
-            arms = @()
-            error = $errorMessage
-        }) -ExitCode 2
+    $resolvedProfile = Get-JsonProperty -Object $profile -Name 'Profile' -Default $null
+    $summary = Get-FanoutSummary -Profile $resolvedProfile -Plan $plan -State $state -Preflights @($preflightRecords.ToArray()) -Status failed -Error $errorMessage
+    $summary.interrupted_arms = @($interrupted.ToArray())
+    Write-FanoutSummary -Summary $summary -ExitCode 2
+} finally {
+    # This also runs when PowerShell interrupts the foreground pipeline.
+    foreach ($active in @($running | Where-Object { $null -ne $_ })) {
+        if ($null -eq $active.child.FinishedUtc) {
+            try {
+                [void](Complete-RunnerChildProcess -Child $active.child -CancellationReason 'Phase 1 foreground invocation ended')
+            } catch {
+                [Console]::Error.WriteLine("Unable to finalize $($active.worker_id): $($_.Exception.Message)")
+            }
+        }
     }
 }

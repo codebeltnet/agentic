@@ -14,9 +14,9 @@ function dotnet {
 $work = if ($OutputRoot) { $OutputRoot } else { Join-Path ([IO.Path]::GetTempPath()) ('docfx-actions-' + [guid]::NewGuid().ToString('N')) }
 $null = New-Item -ItemType Directory -Path "$work/docs" -Force
 $reference = Get-Content (Join-Path $PSScriptRoot '../references/one-shot-examples.md') -Raw
-$skill = Get-Content (Join-Path $PSScriptRoot '../SKILL.md') -Raw
-if (-not $skill.Contains('Whenever a runnable example is delivered, surface both complete Native and Docker execution options together') -or
-    -not $skill.Contains('never extract `## Native` alone when the corresponding `## Docker` option exists')) {
+$delivery = Get-Content (Join-Path $PSScriptRoot '../references/csrun-composition.md') -Raw
+if (-not $delivery.Contains('Whenever a runnable example is delivered, surface both complete Native and Docker execution options together') -or
+    -not $delivery.Contains('never extract `## Native` alone when the corresponding `## Docker` option exists')) {
     throw 'The direct Codex delivery contract must require both complete supported transports.'
 }
 if (-not $reference.Contains('Whenever DocFX Digest delivers a runnable example, deliver the complete Native and Docker options together') -or
@@ -685,6 +685,17 @@ foreach ($variant in $buildImageVariants) {
 # Template ordering: templates/modern must come before templates/ms-style, with templates/ms-style always last.
 $templateOrderCases = @(
     @{
+        Name = 'implicit-default'
+        CreateModernMain = $false
+        Expected = @('default', 'templates/modern')
+    }
+    @{
+        Name = 'previous-null-base'
+        Initial = @($null, 'templates/modern')
+        CreateModernMain = $true
+        Expected = @('default', 'templates/modern')
+    }
+    @{
         Name = 'ms-style-without-modern'
         Initial = @('default', 'modern', 'templates/ms-style')
         CreateModernMain = $false
@@ -701,7 +712,9 @@ foreach ($case in $templateOrderCases) {
     $caseRoot = Join-Path $work ("template-order-" + $case.Name)
     $null = [IO.Directory]::CreateDirectory($caseRoot)
     $caseConfig = Join-Path $caseRoot 'docfx.json'
-    [IO.File]::WriteAllText($caseConfig, (@{ build = @{ template = $case.Initial } } | ConvertTo-Json -Depth 5 -Compress))
+    $build = @{ dest = '_site' }
+    if ($case.ContainsKey('Initial')) { $build.template = $case.Initial }
+    [IO.File]::WriteAllText($caseConfig, (@{ build = $build } | ConvertTo-Json -Depth 5 -Compress))
     if ($case.CreateModernMain) {
         $modernPublic = Join-Path $caseRoot 'templates/modern/public'
         $null = [IO.Directory]::CreateDirectory($modernPublic)
@@ -1582,11 +1595,26 @@ if (@(($paraManifestAfterGood | ConvertFrom-Json).examples).Count -ne 4) {
 $paraChangedRun = Invoke-GeneratorSubprocess @('--verify-changed', '--max-parallel', '4', '--engine-path', $paraEngine, '--summary-json')
 if ($paraChangedRun.ExitCode -ne 0) { throw "Parallel --verify-changed failed (exit=$($paraChangedRun.ExitCode)): $($paraChangedRun.Stderr)" }
 $paraChangedSummary = $paraChangedRun.Stdout | ConvertFrom-Json
-if ($paraChangedSummary.verification.executed -ne 0 -or $paraChangedSummary.verification.reused -ne 4) {
+if ($paraChangedSummary.verification.executed -ne 0 -or $paraChangedSummary.verification.reused -ne 4 -or
+    $paraChangedSummary.verification.reusedNativeVerified -ne 4 -or $paraChangedSummary.verification.freshNativeVerified -ne 0) {
     throw "Expected --verify-changed to reuse all 4 cached Verified examples: $($paraChangedRun.Stdout)"
 }
 if ($paraChangedRun.Stderr -match 'Verifying Para\.') {
     throw "Expected no Verifying lines on full cache reuse; got: $($paraChangedRun.Stderr)"
+}
+
+# Generation without --verify must never report previously cached transport logs as fresh/invocation verification.
+$paraGenOnlyRun = Invoke-GeneratorSubprocess @('--summary-json')
+if ($paraGenOnlyRun.ExitCode -ne 0) { throw "Generate-only --summary-json failed (exit=$($paraGenOnlyRun.ExitCode)): $($paraGenOnlyRun.Stderr)" }
+$paraGenOnlySummary = $paraGenOnlyRun.Stdout | ConvertFrom-Json
+if ($paraGenOnlySummary.verifyScope -ne 'none' -or $paraGenOnlySummary.verificationRequested -or
+    $paraGenOnlySummary.verified -ne 0 -or $paraGenOnlySummary.cachedVerified -ne 4 -or
+    $paraGenOnlySummary.verification.requested -or $paraGenOnlySummary.verification.executed -ne 0 -or
+    $paraGenOnlySummary.verification.reused -ne 0 -or $paraGenOnlySummary.verification.nativeVerified -ne 0 -or
+    $paraGenOnlySummary.verification.cachedNativeVerified -ne 4 -or
+    -not $paraGenOnlySummary.verification.transportOnly -or
+    $paraGenOnlySummary.verification.behavioralVerification -ne 'not-evaluated') {
+    throw "Generate-only --summary-json misrepresented cached transport status: $($paraGenOnlyRun.Stdout)"
 }
 
 # Heartbeat, --no-heartbeat, and --quiet behavior on a slow verification run.

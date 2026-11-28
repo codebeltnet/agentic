@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Adapts this repository's portable eval results to Anthropic skill-creator's benchmark and viewer tools.
 
@@ -494,21 +494,40 @@ function Get-ReportSkillStats {
 
     $skillRoot = $null
     foreach ($record in @($ManifestRecords | Where-Object { [string]$_.Configuration -eq 'with_skill' })) {
-        $runPackageDirectory = Split-Path -Parent ([string]$record.RunManifestPath)
-        $candidate = Join-Path $runPackageDirectory ("skill/$($Manifest.skill_name)")
-        if (Test-Path -LiteralPath $candidate -PathType Container) {
-            $skillRoot = $candidate
+        $runManifestPath = [string]$record.RunManifestPath
+        $runPackageDirectory = Split-Path -Parent $runManifestPath
+        $candidates = [System.Collections.Generic.List[string]]::new()
+        if (-not [string]::IsNullOrWhiteSpace($runManifestPath) -and (Test-Path -LiteralPath $runManifestPath -PathType Leaf)) {
+            $runManifest = Read-JsonFile -Path $runManifestPath
+            $declaredSkillDir = [string](Get-Property -Object $runManifest -Name 'skillDirectory' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($declaredSkillDir)) {
+                $resolvedDeclared = [System.IO.Path]::GetFullPath((Join-Path $runPackageDirectory ($declaredSkillDir -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
+                $resolvedBase = [System.IO.Path]::GetFullPath($runPackageDirectory).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+                if ($resolvedDeclared.StartsWith($resolvedBase, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $candidates.Add($resolvedDeclared)
+                }
+            }
+        }
+        $candidates.Add((Join-Path $runPackageDirectory ("skill/$($Manifest.skill_name)")))
+        foreach ($candidate in $candidates) {
+            if (Test-Path -LiteralPath $candidate -PathType Container) {
+                $skillRoot = $candidate
+                break
+            }
+        }
+        if ($null -ne $skillRoot) {
             break
         }
     }
 
-    $files = if ($null -ne $skillRoot) { @(Get-ChildItem -LiteralPath $skillRoot -Recurse -File -Force) } else { @() }
+    $files = @(if ($null -ne $skillRoot) { Get-ChildItem -LiteralPath $skillRoot -Recurse -File -Force })
     $totalBytes = if ($files.Count -gt 0) { [int64](($files | Measure-Object -Property Length -Sum).Sum) } else { 0 }
     $inlinedBytes = Get-Property -Object $Manifest.skill_instructions -Name 'inlined_resource_bytes' -Default $null
     return [ordered]@{
         file_count = $files.Count
         total_bytes = $totalBytes
         inlined_bytes = $inlinedBytes
+        exposure_mode = Get-Property -Object $Manifest.skill_instructions -Name 'exposure_mode' -Default 'legacy'
         token_count = Get-Property -Object $Manifest -Name 'skill_token_count' -Default $null
         hash = [string](Get-Property -Object $Manifest -Name 'skill_hash' -Default '')
     }
@@ -794,6 +813,8 @@ $benchmark.metadata.runs_per_configuration = 1
 $benchmark.metadata.executor_model = if ($models.Count -eq 0) { 'model not recorded' } else { $models -join ', ' }
 $benchmark.metadata.analyzer_model = 'external skill-creator evaluator'
 $benchmark.metadata.evals_run = @($workspaceEntries | ForEach-Object { $_.EvalId })
+$skillInstructions = Get-Property -Object $manifest -Name 'skill_instructions' -Default $null
+$benchmark.metadata | Add-Member -NotePropertyName skill_exposure -NotePropertyValue (Get-Property -Object $skillInstructions -Name 'exposure_mode' -Default 'legacy') -Force
 foreach ($run in @($benchmark.runs)) {
     $match = @($workspaceEntries | Where-Object { $_.EvalId -eq [int]$run.eval_id }) | Select-Object -First 1
     if ($null -ne $match) {

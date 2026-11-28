@@ -87,6 +87,7 @@ function New-PreflightWorkerSummary {
         run_manifest = [string]$Record.RunManifestRelative
         execution_result = [string]$Record.ExecutionResultRelative
         status = if ($status -eq 'compatible' -and $delegationAssertion -eq 'passed' -and $null -ne $invocationExitCode -and [int]$invocationExitCode -eq 0 -and -not $invocationTimedOut -and $invocationTerminated) { 'compatible' } else { 'incompatible' }
+        readiness = @(Get-JsonProperty -Object $effectivePreflight -Name 'readiness' -Default @())
         reasons = @($reasons.ToArray())
         native_delegation_assertion = [ordered]@{
             status = $delegationAssertion
@@ -107,6 +108,9 @@ function Get-PreflightGateSummary {
     )
 
     $incompatible = @($Preflights | Where-Object { [string]$_.status -ne 'compatible' })
+    $blocked = @($Preflights | Where-Object {
+        @(Get-JsonProperty -Object $_ -Name 'readiness' -Default @() | Where-Object status -eq 'infrastructure_blocked').Count -gt 0
+    } | ForEach-Object eval_id | Sort-Object -Unique)
     $summary = [ordered]@{
         schema = 'codebeltnet/agentic/runner-owned-fanout-summary/1'
         phase = 'preflight'
@@ -117,6 +121,7 @@ function Get-PreflightGateSummary {
         requested_concurrency = [int](Get-JsonProperty -Object $Profile -Name 'concurrency' -Default 0)
         preflight_count = @($Preflights).Count
         incompatible_count = $incompatible.Count
+        infrastructure_blocked_eval_ids = $blocked
         execution_started = $ExecutionStarted
         execution_count = $ExecutionCount
         progress_log = 'progress/phase1-progress.jsonl'

@@ -18,6 +18,7 @@ param(
     [switch] $SummaryJson,
     [switch] $VerifyChanged,
     [Alias('Id')][string[]] $TargetId,
+    [string[]] $Uid,
     [int] $TimeoutSeconds = 60,
     [int] $MaxParallel = 0,
     [int] $MaxDockerParallel = 0,
@@ -43,6 +44,8 @@ Set-StrictMode -Off
 # Parse GNU/CLI-style --flags alongside native PowerShell parameters.
 $idList = [Collections.Generic.List[string]]::new()
 if ($TargetId) { foreach ($item in $TargetId) { if ($item) { $idList.Add($item) } } }
+$uidList = [Collections.Generic.List[string]]::new()
+if ($Uid) { foreach ($item in $Uid) { if ($item) { $uidList.Add($item) } } }
 if ($CliArgs -and $CliArgs.Count -gt 0) {
     $i = 0
     while ($i -lt $CliArgs.Count) {
@@ -87,6 +90,10 @@ if ($CliArgs -and $CliArgs.Count -gt 0) {
             '--id' {
                 if (($i + 1) -ge $CliArgs.Count) { [Console]::Error.WriteLine('Missing value for --id'); exit 3 }
                 $idList.Add([string]$CliArgs[++$i])
+            }
+            '--uid' {
+                if (($i + 1) -ge $CliArgs.Count) { [Console]::Error.WriteLine('Missing value for --uid'); exit 3 }
+                $uidList.Add([string]$CliArgs[++$i])
             }
             '--run-action-plan' { $RunActionPlan = $true }
             '--check-recipes' { $CheckRecipes = $true }
@@ -141,8 +148,14 @@ if ($CliArgs -and $CliArgs.Count -gt 0) {
                 $HeartbeatSeconds = $parsedHb
             }
             default {
-                [Console]::Error.WriteLine("Unknown argument: $arg")
-                exit 3
+                if ($arg.StartsWith('--uid=', [StringComparison]::Ordinal)) {
+                    $uVal = $arg.Substring(6)
+                    if ([string]::IsNullOrWhiteSpace($uVal)) { [Console]::Error.WriteLine('Missing value for --uid'); exit 3 }
+                    $uidList.Add($uVal)
+                } else {
+                    [Console]::Error.WriteLine("Unknown argument: $arg")
+                    exit 3
+                }
             }
         }
         $i++
@@ -531,6 +544,148 @@ function Select-TargetExamples([string[]] $Selectors) {
     return $matched
 }
 
+function Resolve-UidScopeSelectors([string[]] $Selectors) {
+    if (-not $Selectors -or $Selectors.Count -eq 0) { return $null }
+
+    $knownUids = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $knownExampleIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($ex in $normalizedExamples) {
+        if ($ex.uid) { $null = $knownUids.Add([string]$ex.uid) }
+        if ($ex.exampleId) { $null = $knownExampleIds.Add([string]$ex.exampleId) }
+    }
+
+    function Find-NearUidMatches([string] $Candidate) {
+        $near = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($u in $knownUids) {
+            $tick = $u.LastIndexOf('`')
+            if ($tick -gt 0) {
+                $suffix = $u.Substring($tick + 1)
+                if ($suffix -match '^\d+$' -and $u.Substring(0, $tick) -ieq $Candidate) {
+                    $null = $near.Add($u); continue
+                }
+            }
+            if ($u.EndsWith(".$Candidate", [StringComparison]::OrdinalIgnoreCase)) {
+                $null = $near.Add($u); continue
+            }
+            $lastDot = $u.LastIndexOf('.')
+            $simple = if ($lastDot -ge 0) { $u.Substring($lastDot + 1) } else { $u }
+            $simpleNoArity = if ($simple.IndexOf('`') -ge 0) { $simple.Substring(0, $simple.IndexOf('`')) } else { $simple }
+            if ($simple -ieq $Candidate -or $simpleNoArity -ieq $Candidate) {
+                $null = $near.Add($u)
+            }
+        }
+        return @($near | Sort-Object)
+    }
+
+    $matchedExamples = [Collections.Generic.List[object]]::new()
+    $matchedExampleIdSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $matchedUidSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $canonicalSelectors = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $errors = [Collections.Generic.List[object]]::new()
+
+    foreach ($rawSel in $Selectors) {
+        $sel = ([string]$rawSel).Trim()
+        if ([string]::IsNullOrWhiteSpace($sel)) {
+            $errors.Add([ordered]@{ code = 'example-not-found'; selector = $rawSel; message = 'Empty --uid selector.' })
+            continue
+        }
+
+        $hashIdx = $sel.LastIndexOf('#')
+        if ($hashIdx -ge 0) {
+            $basePart = $sel.Substring(0, $hashIdx).Trim()
+            $ordPart = $sel.Substring($hashIdx + 1).Trim()
+            $ordNum = 0
+            if ([string]::IsNullOrWhiteSpace($basePart) -or -not [int]::TryParse($ordPart, [ref]$ordNum) -or $ordNum -lt 1) {
+                $errors.Add([ordered]@{ code = 'example-not-found'; selector = $sel; message = "Invalid example selector '$sel'. Expected '<uid>#<positive-ordinal>'." })
+                continue
+            }
+            $normSel = "$basePart#$ordNum"
+            $exactEx = @($normalizedExamples | Where-Object { $_.exampleId -ceq $normSel })
+            if ($exactEx.Count -eq 1) {
+                $null = $canonicalSelectors.Add($exactEx[0].exampleId)
+                if ($matchedExampleIdSet.Add($exactEx[0].exampleId)) { $matchedExamples.Add($exactEx[0]) }
+                continue
+            }
+            $ciEx = @($normalizedExamples | Where-Object { $_.exampleId -ieq $normSel })
+            if ($ciEx.Count -eq 1) {
+                $null = $canonicalSelectors.Add($ciEx[0].exampleId)
+                if ($matchedExampleIdSet.Add($ciEx[0].exampleId)) { $matchedExamples.Add($ciEx[0]) }
+                continue
+            }
+            if ($ciEx.Count -gt 1) {
+                $errors.Add([ordered]@{ code = 'ambiguous-selector'; selector = $sel; message = "Example selector '$sel' matched multiple examples: $(($ciEx.exampleId | Sort-Object) -join ', ')." })
+                continue
+            }
+            $nearBase = @(Find-NearUidMatches $basePart | Where-Object { $knownExampleIds.Contains("$_#$ordNum") })
+            if ($nearBase.Count -gt 1) {
+                $errors.Add([ordered]@{ code = 'ambiguous-selector'; selector = $sel; message = "Example selector '$sel' is ambiguous: $(($nearBase | ForEach-Object { "$_#$ordNum" }) -join ', ')." })
+                continue
+            }
+            $errors.Add([ordered]@{ code = 'example-not-found'; selector = $sel; message = "Example selector '$sel' did not match any example." })
+            continue
+        }
+
+        if ($knownUids.Contains($sel)) {
+            $null = $canonicalSelectors.Add($sel)
+            $null = $matchedUidSet.Add($sel)
+            foreach ($ex in $normalizedExamples) {
+                if ($ex.uid -ceq $sel -and $matchedExampleIdSet.Add($ex.exampleId)) { $matchedExamples.Add($ex) }
+            }
+            continue
+        }
+
+        $ciUids = @($knownUids | Where-Object { $_ -ieq $sel } | Sort-Object)
+        if ($ciUids.Count -eq 1) {
+            $resolvedUid = $ciUids[0]
+            $null = $canonicalSelectors.Add($resolvedUid)
+            $null = $matchedUidSet.Add($resolvedUid)
+            foreach ($ex in $normalizedExamples) {
+                if ($ex.uid -ceq $resolvedUid -and $matchedExampleIdSet.Add($ex.exampleId)) { $matchedExamples.Add($ex) }
+            }
+            continue
+        }
+        if ($ciUids.Count -gt 1) {
+            $errors.Add([ordered]@{ code = 'ambiguous-selector'; selector = $sel; message = "UID selector '$sel' matched multiple UIDs differing only by case: $($ciUids -join ', ')." })
+            continue
+        }
+
+        $nearUids = @(Find-NearUidMatches $sel)
+        if ($nearUids.Count -gt 1) {
+            $errors.Add([ordered]@{ code = 'ambiguous-selector'; selector = $sel; message = "UID selector '$sel' is ambiguous and matched multiple UIDs: $($nearUids -join ', '). Pass an exact fully qualified UID." })
+            continue
+        }
+        $hintText = if ($nearUids.Count -eq 1) { " Did you mean exact UID '$($nearUids[0])'?" } else { '' }
+        $errors.Add([ordered]@{ code = 'example-not-found'; selector = $sel; message = "UID selector '$sel' did not match any example UID.$hintText" })
+    }
+
+    if ($errors.Count -gt 0) {
+        $primary = $errors[0]
+        if ($SummaryJson -or $Json) {
+            ([ordered]@{
+                schemaVersion = 2
+                exitCode = 3
+                failureReason = $primary.code
+                error = $primary.message
+                errors = @($errors)
+            } | ConvertTo-Json -Depth 10)
+        } else {
+            foreach ($e in $errors) { [Console]::Error.WriteLine($e.message) }
+        }
+        exit 3
+    }
+
+    $selectedPages = @($matchedExamples | ForEach-Object { $_.file } | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
+    return [pscustomobject]@{
+        SelectedExamples = $matchedExamples
+        SelectedExampleIdSet = $matchedExampleIdSet
+        SelectedUidSet = $matchedUidSet
+        CanonicalSelectors = @($canonicalSelectors | Sort-Object)
+        SelectedPages = $selectedPages
+    }
+}
+
+$uidScope = Resolve-UidScopeSelectors @($uidList)
+
 function Get-EffectivePlanEntry($ExampleObj) {
     $recipe = Find-MatchingRecipe $ExampleObj
     $cat = [string]$ExampleObj.classification.category
@@ -706,10 +861,11 @@ function Build-CandidateRecipeAndSource($ExampleObj) {
 # MODE 1: --run-action-plan [--json]
 # ---------------------------------------------------------------------------
 if ($RunActionPlan) {
+    $planSourceExamples = if ($uidScope) { $uidScope.SelectedExamples } else { $normalizedExamples }
     $planItems = [Collections.Generic.List[object]]::new()
     $byCategory = [ordered]@{}
     $convertibleCount = 0; $nonConvertibleCount = 0; $pairedCount = 0; $unresolvedCount = 0; $intrinsicCount = 0
-    foreach ($ex in $normalizedExamples) {
+    foreach ($ex in $planSourceExamples) {
         $item = Get-EffectivePlanEntry $ex
         $planItems.Add($item)
         if (-not $byCategory.Contains($item.category)) { $byCategory[$item.category] = 0 }
@@ -724,6 +880,8 @@ if ($RunActionPlan) {
     $plan = [ordered]@{
         schemaVersion = 2
         config = $configPath
+        scopeMode = if ($uidScope) { 'uid' } else { 'repository' }
+        selectedUids = if ($uidScope) { @($uidScope.CanonicalSelectors) } else { @() }
         summary = [ordered]@{
             total = $planItems.Count
             convertible = $convertibleCount
@@ -791,8 +949,23 @@ if ($CheckRecipes) {
     $recipeStatuses = [Collections.Generic.List[object]]::new()
     $matchedCount = 0; $movedCount = 0; $dupCount = 0; $orphanCount = 0; $wsOrphanCount = 0; $semOrphanCount = 0
 
+    $scopedRecipeExamples = if ($uidScope) { $uidScope.SelectedExamples } else { $normalizedExamples }
+    $scopedRecipes = if ($uidScope) {
+        @($recipes | Where-Object {
+            $rUidCheck = [string]$_.uid
+            $rExIdCheck = if ($_.PSObject.Properties['exampleId'] -and $_.exampleId) { [string]$_.exampleId }
+                          elseif ($_.PSObject.Properties['fenceOrdinal'] -and $null -ne $_.fenceOrdinal) { "$rUidCheck#$($_.fenceOrdinal)" }
+                          else { $null }
+            $uidScope.SelectedUidSet.Contains($rUidCheck) -or
+            ($rExIdCheck -and $uidScope.SelectedExampleIdSet.Contains($rExIdCheck)) -or
+            ($uidScope.SelectedExamples | Where-Object { $_.uid -ceq $rUidCheck }).Count -gt 0
+        })
+    } else {
+        $recipes
+    }
+
     $byUid = [hashtable]::new([StringComparer]::Ordinal)
-    foreach ($ex in $normalizedExamples) {
+    foreach ($ex in $scopedRecipeExamples) {
         $k = [string]$ex.uid
         if (-not $byUid.ContainsKey($k)) { $byUid[$k] = [Collections.Generic.List[object]]::new() }
         $byUid[$k].Add($ex)
@@ -802,8 +975,8 @@ if ($CheckRecipes) {
     $seenExact = [hashtable]::new([StringComparer]::Ordinal)
     $seenUidHash = [hashtable]::new([StringComparer]::Ordinal)
     $unindexedCountByUid = [hashtable]::new([StringComparer]::Ordinal)
-    for ($idx = 0; $idx -lt $recipes.Count; $idx++) {
-        $r = $recipes[$idx]
+    for ($idx = 0; $idx -lt $scopedRecipes.Count; $idx++) {
+        $r = $scopedRecipes[$idx]
         $rUid = [string]$r.uid
         $rHash = if ($r.sourceSha256) { ([string]$r.sourceSha256).ToUpperInvariant() } else { '' }
         $rOrd = $null
@@ -855,8 +1028,8 @@ if ($CheckRecipes) {
     }
 
     # Check every recipe for matched / moved / orphaned (whitespace-only vs semantic).
-    for ($idx = 0; $idx -lt $recipes.Count; $idx++) {
-        $r = $recipes[$idx]
+    for ($idx = 0; $idx -lt $scopedRecipes.Count; $idx++) {
+        $r = $scopedRecipes[$idx]
         $rUid = [string]$r.uid
         $rHash = if ($r.sourceSha256) { ([string]$r.sourceSha256).ToUpperInvariant() } else { '' }
         $rWsHash = if ($r.PSObject.Properties['whitespaceSha256'] -and $r.whitespaceSha256) { ([string]$r.whitespaceSha256).ToUpperInvariant() } else { $null }
@@ -1579,9 +1752,13 @@ if ($duplicateRecipeKeys.Count -gt 0) {
     throw "Duplicate recipe for $($duplicateRecipeKeys[0])"
 }
 
+$examplesToProcess = if ($uidScope) { $uidScope.SelectedExamples } else { $normalizedExamples }
 $verifyTargetIds = $null
 if ($idList.Count -gt 0) {
     $matchedTargets = Select-TargetExamples @($idList)
+    if ($uidScope) {
+        $matchedTargets = @($matchedTargets | Where-Object { $uidScope.SelectedExampleIdSet.Contains($_.exampleId) })
+    }
     if ($matchedTargets.Count -eq 0) {
         $msg = "No examples matched --id selector(s): $($idList -join ', ')"
         if ($SummaryJson -or $Json) {
@@ -1600,7 +1777,11 @@ $resultMaps = [Collections.Generic.List[object]]::new()
 $pendingVerifications = [Collections.Generic.List[object]]::new()
 $manifestEntries = [Collections.Generic.List[object]]::new()
 $associations = [hashtable]::new([StringComparer]::Ordinal)
-$pages = @((@($inventory.examples.file) + @($inventory.associatedPages)) | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
+$pages = if ($uidScope) {
+    @($uidScope.SelectedPages)
+} else {
+    @((@($inventory.examples.file) + @($inventory.associatedPages)) | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
+}
 foreach ($page in $pages) { Assert-RepositoryPath $page }
 
 # Preflight verification engine BEFORE mutating any file or manifest!
@@ -1631,7 +1812,7 @@ if ($EnginePath) {
 
 $needsStandaloneEnginePreflight = $false
 if ($Verify -ne 'None' -and -not $resolvedVerificationEngine) {
-    foreach ($ex in $normalizedExamples) {
+    foreach ($ex in $examplesToProcess) {
         if ($verifyTargetIds -and -not $verifyTargetIds.Contains($ex.exampleId)) { continue }
         $r = Find-MatchingRecipe $ex
         if ($r -and ($r.intrinsicLimitation -or $r.PSObject.Properties['repository'] -or $r.mode -eq 'host' -or $r.PSObject.Properties['hostHarness'])) { continue }
@@ -1674,7 +1855,7 @@ $verificationExecuted = 0
 $verificationReused = 0
 $verificationFailedCount = 0
 
-foreach ($exObj in $normalizedExamples) {
+foreach ($exObj in $examplesToProcess) {
     $example = $exObj.raw
     $displayedSource = $exObj.displayedSource
     $source = $exObj.source
@@ -1693,7 +1874,9 @@ foreach ($exObj in $normalizedExamples) {
         reasonCode = $exObj.classification.reasonCode
         reason = $null
         native = 'Unverified'
+        nativeVerificationSource = 'unverified'
         docker = 'Unverified'
+        dockerVerificationSource = 'unverified'
     }
     try {
         if ($example.contextError) { $result.reason = $example.contextError; continue }
@@ -1740,12 +1923,14 @@ foreach ($exObj in $normalizedExamples) {
         foreach ($transport in @('native','docker')) {
             if ($recipe -and $recipe.unsupportedTransports.$transport) {
                 $result[$transport] = 'Unsupported'
+                $result["${transport}VerificationSource"] = 'unsupported'
                 $result["${transport}Reason"] = $recipe.unsupportedTransports.$transport
                 $transports = @($transports | Where-Object { $_ -ne $transport })
             }
         }
         if ($isNetFrameworkTarget -and 'docker' -in $transports) {
             $result['docker'] = 'Unsupported'
+            $result['dockerVerificationSource'] = 'unsupported'
             $result['dockerReason'] = $NetFrameworkDockerUnsupportedReason
             $transports = @($transports | Where-Object { $_ -ne 'docker' })
         }
@@ -1908,6 +2093,7 @@ foreach ($exObj in $normalizedExamples) {
                 $shouldRunVerify = $false
                 $verificationReused++
                 $result[$transport] = $cachedState
+                $result["${transport}VerificationSource"] = 'reused'
                 $result["${transport}Evidence"] = $cachedLog
                 continue
             }
@@ -1938,8 +2124,8 @@ foreach ($exObj in $normalizedExamples) {
                 })
             } elseif ($cachedState) {
                 $result[$transport] = $cachedState
+                $result["${transport}VerificationSource"] = 'cached'
                 $result["${transport}Evidence"] = $cachedLog
-                if ($Verify -ne 'None') { $verificationReused++ }
             }
         }
 
@@ -2141,6 +2327,7 @@ if ($pendingVerifications.Count -gt 0) {
             if ($null -eq $vr) { continue }
             $targetResult = $resultMaps[$vr.ResultIndex]
             $targetResult[$vr.Transport] = $vr.State
+            $targetResult["$($vr.Transport)VerificationSource"] = 'executed'
             $targetResult["$($vr.Transport)Evidence"] = $vr.EvidencePath
             if ($vr.Error -and -not $targetResult.reason) {
                 $targetResult.reason = $vr.Error
@@ -2166,11 +2353,43 @@ if (-not $skipMutations) {
         if (-not (Test-Path -LiteralPath $page)) { continue }
         $original = [IO.File]::ReadAllText($page)
         $edits = [Collections.Generic.List[object]]::new()
-        foreach ($block in [regex]::Matches($original, '(?s)(?:\A|(?:\r\n|\n|\r){1,2})<!-- docfx-run-actions:start -->.*?<!-- docfx-run-actions:end -->')) {
-            $edits.Add(@{ Offset = $block.Index; Length = $block.Length; Text = '' })
+        $lines = [regex]::Matches($original, '(?<text>[^\r\n]*)(?<ending>\r\n|\n|\r|$)')
+        $partialPageUidScope = $false
+        $inScopeStartLines = $null
+        if ($uidScope) {
+            $pageAllExamples = @($normalizedExamples | Where-Object { $_.file -ceq $page })
+            $pageSelectedExamples = @($pageAllExamples | Where-Object { $uidScope.SelectedExampleIdSet.Contains($_.exampleId) })
+            if ($pageSelectedExamples.Count -lt $pageAllExamples.Count) {
+                $partialPageUidScope = $true
+                $inScopeStartLines = [Collections.Generic.HashSet[int]]::new()
+                foreach ($pse in $pageSelectedExamples) { $null = $inScopeStartLines.Add([int]$pse.startLine) }
+            }
+        }
+        if ($partialPageUidScope) {
+            # Preserve sibling fence associations when UID scope targets only specific fence ordinal(s) on this page.
+            $existingBlocks = @([regex]::Matches($original, '(?s)(?:\A|(?:\r\n|\n|\r){1,2})<!-- docfx-run-actions:start -->.*?<!-- docfx-run-actions:end -->'))
+            foreach ($startLine in $inScopeStartLines) {
+                $end = $startLine
+                while ($end -lt $lines.Count -and $lines[$end].Groups['text'].Value -notmatch '^\s*```') { $end++ }
+                if ($end -ge $lines.Count) { throw "Unclosed fence in $page" }
+                $fence = $lines[$end]
+                $fenceEndOffset = $fence.Index + $fence.Groups['text'].Length
+                foreach ($blk in $existingBlocks) {
+                    if ($blk.Index -ge $fenceEndOffset) {
+                        $gap = $original.Substring($fenceEndOffset, $blk.Index - $fenceEndOffset)
+                        if ($gap -match '^\s*$') {
+                            $edits.Add(@{ Offset = $blk.Index; Length = $blk.Length; Text = '' })
+                        }
+                        break
+                    }
+                }
+            }
+        } else {
+            foreach ($block in [regex]::Matches($original, '(?s)(?:\A|(?:\r\n|\n|\r){1,2})<!-- docfx-run-actions:start -->.*?<!-- docfx-run-actions:end -->')) {
+                $edits.Add(@{ Offset = $block.Index; Length = $block.Length; Text = '' })
+            }
         }
         if ($associations.ContainsKey($page)) {
-            $lines = [regex]::Matches($original, '(?<text>[^\r\n]*)(?<ending>\r\n|\n|\r|$)')
             foreach ($line in $associations[$page].Keys) {
                 $end = $line
                 while ($end -lt $lines.Count -and $lines[$end].Groups['text'].Value -notmatch '^\s*```') { $end++ }
@@ -2199,13 +2418,18 @@ if (-not $skipMutations) {
         $config.build.resource = @($resources | Where-Object { $null -ne $_ }) + @(@{ files=@('run-actions/**') })
     }
     # Compose with an existing modern main.js rather than overriding its default export/start hook (e.g. Context7).
+    # DocFX supplies the embedded default when template is omitted. Keep that base
+    # when adding our overlay, including sites previously written as [null, overlay].
     $templates = @($config.build.template)
+    $templatesChanged = $null -in $templates
+    if ($templatesChanged) {
+        $templates = @('default') + @($templates | Where-Object { $null -ne $_ -and $_ -ne 'default' })
+    }
     $main = $null
     foreach ($template in $templates) {
         $candidate = Join-Path $workspace "$template/public/main.js"
         if (Test-Path $candidate) { $main=$candidate }
     }
-    $templatesChanged = $false
     if (-not $main) {
         $main = Join-Path $workspace 'templates/modern/public/main.js'
         $null = Write-Changed $main "export default {};`n"
@@ -2228,7 +2452,27 @@ if (-not $skipMutations) {
     if (-not $mainText.Contains("import './run-actions.js';")) { $null = Write-Changed $main ($mainText + "`nimport './run-actions.js';`n") }
     $null = Write-Changed (Join-Path (Split-Path $main -Parent) 'run-actions.js') ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../assets/run-actions.js')))
     $null = Write-Changed $configPath (($config | ConvertTo-Json -Depth 100) + "`n")
-    $sortedManifest = @($manifestEntries | Sort-Object { $_.id })
+    if ($uidScope -and $oldManifestDoc -and $oldManifestDoc.examples) {
+        # Preserve existing manifest entries for out-of-scope examples while replacing in-scope entries atomically.
+        $mergedManifest = [Collections.Generic.List[object]]::new()
+        $inScopeProcessedIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($procEx in $examplesToProcess) { $null = $inScopeProcessedIds.Add($procEx.id) }
+        foreach ($oldEntry in @($oldManifestDoc.examples)) {
+            $oldExId = if ($oldEntry.PSObject.Properties['exampleId'] -and $oldEntry.exampleId) { [string]$oldEntry.exampleId } else { $null }
+            $oldUid = if ($oldEntry.PSObject.Properties['uid'] -and $oldEntry.uid) { [string]$oldEntry.uid } else { $null }
+            $oldId = if ($oldEntry.PSObject.Properties['id'] -and $oldEntry.id) { [string]$oldEntry.id } else { $null }
+            $isReplaced = ($oldExId -and $uidScope.SelectedExampleIdSet.Contains($oldExId)) -or
+                          ($oldUid -and $uidScope.SelectedUidSet.Contains($oldUid)) -or
+                          ($oldId -and $inScopeProcessedIds.Contains($oldId))
+            if (-not $isReplaced) {
+                $mergedManifest.Add($oldEntry)
+            }
+        }
+        foreach ($newEntry in $manifestEntries) { $mergedManifest.Add($newEntry) }
+        $sortedManifest = @($mergedManifest | Sort-Object { $_.id })
+    } else {
+        $sortedManifest = @($manifestEntries | Sort-Object { $_.id })
+    }
     $null = Write-AtomicChanged $manifestPath (([ordered]@{ schemaVersion = 1; examples = $sortedManifest } | ConvertTo-Json -Depth 30) + "`n")
     $null = Write-Changed (Join-Path $workspace 'BuildRunActions.ps1') ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../assets/BuildRunActions.ps1')))
 }
@@ -2471,35 +2715,65 @@ if ($SummaryJson) {
             $skippedByCategory[$r.category]++
         }
     }
-    $nativeVerified = @($results | Where-Object native -eq 'Verified').Count
-    $dockerVerified = @($results | Where-Object docker -eq 'Verified').Count
+    $freshNativeVerified = @($results | Where-Object { $_.native -eq 'Verified' -and $_.nativeVerificationSource -eq 'executed' }).Count
+    $freshDockerVerified = @($results | Where-Object { $_.docker -eq 'Verified' -and $_.dockerVerificationSource -eq 'executed' }).Count
+    $reusedNativeVerified = @($results | Where-Object { $_.native -eq 'Verified' -and $_.nativeVerificationSource -eq 'reused' }).Count
+    $reusedDockerVerified = @($results | Where-Object { $_.docker -eq 'Verified' -and $_.dockerVerificationSource -eq 'reused' }).Count
+    $cachedNativeVerified = @($results | Where-Object { $_.native -eq 'Verified' -and $_.nativeVerificationSource -eq 'cached' }).Count
+    $cachedDockerVerified = @($results | Where-Object { $_.docker -eq 'Verified' -and $_.dockerVerificationSource -eq 'cached' }).Count
+    $nativeVerified = $freshNativeVerified + $reusedNativeVerified
+    $dockerVerified = $freshDockerVerified + $reusedDockerVerified
+    $cachedVerifiedCount = @($results | Where-Object {
+        ($_.native -eq 'Verified' -and $_.nativeVerificationSource -eq 'cached') -or
+        ($_.docker -eq 'Verified' -and $_.dockerVerificationSource -eq 'cached')
+    }).Count
     $verifiedCount = switch ($Verify) {
+        'None' { 0 }
         'Native' { $nativeVerified }
         'Docker' { $dockerVerified }
-        default { @($results | Where-Object { $_.native -eq 'Verified' -or $_.docker -eq 'Verified' }).Count }
+        default {
+            @($results | Where-Object {
+                ($_.native -eq 'Verified' -and $_.nativeVerificationSource -in @('executed', 'reused')) -or
+                ($_.docker -eq 'Verified' -and $_.dockerVerificationSource -in @('executed', 'reused'))
+            }).Count
+        }
     }
     $verifyScope = if ($Verify -eq 'None') { 'none' }
+                   elseif ($uidScope) { 'uid' }
                    elseif ($verifyTargetIds) { 'id' }
                    elseif ($VerifyChanged) { 'changed' }
                    else { 'all' }
     $summaryDoc = [ordered]@{
         schemaVersion = 2
         mode = if ($Verify -ne 'None') { 'verify' } else { 'generate' }
+        scopeMode = if ($uidScope) { 'uid' } else { 'repository' }
+        selectedUids = if ($uidScope) { @($uidScope.CanonicalSelectors) } else { @() }
         exitCode = $exitCodeOut
         failureReason = $null
         verifyScope = $verifyScope
+        verificationRequested = ($Verify -ne 'None')
         manifestPreserved = $manifestPreserved
         total = $results.Count
         generated = @($results | Where-Object status -eq 'generated').Count
         unchanged = @($results | Where-Object status -eq 'unchanged').Count
         verified = $verifiedCount
+        cachedVerified = $cachedVerifiedCount
         failed = $failedTotal
         unresolved = $unresolvedTotal
         intrinsic = @($results | Where-Object coverage -eq 'Intrinsically non-executable').Count
         'skipped-by-category' = $skippedByCategory
         verification = [ordered]@{
+            requested = ($Verify -ne 'None')
+            transportOnly = $true
+            behavioralVerification = 'not-evaluated'
             nativeVerified = $nativeVerified
             dockerVerified = $dockerVerified
+            freshNativeVerified = $freshNativeVerified
+            freshDockerVerified = $freshDockerVerified
+            reusedNativeVerified = $reusedNativeVerified
+            reusedDockerVerified = $reusedDockerVerified
+            cachedNativeVerified = $cachedNativeVerified
+            cachedDockerVerified = $cachedDockerVerified
             executed = $verificationExecuted
             reused = $verificationReused
             failed = $verificationFailedCount

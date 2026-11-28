@@ -38,8 +38,11 @@
     Workspace root. Defaults to .bot/<skill>-workspace. A path inside this repository must stay under .bot/.
 
 .PARAMETER MaxInlineBytes
-    Budget for inlining referenced skill resources beyond SKILL.md, which is always inlined. Anything over budget is
-    bundled under skill/ and listed in the prompt instead.
+    Supporting-resource byte budget for full-inline mode.
+
+.PARAMETER SkillExposure
+    Defaults to entrypoint, which embeds SKILL.md and stages supporting resources for on-demand reads.
+    Select full-inline to embed referenced text resources up to MaxInlineBytes.
 
 .PARAMETER Force
     Overwrite an existing iteration directory.
@@ -124,6 +127,8 @@ param(
     [Parameter(ParameterSetName = 'Prepare')]
     [Parameter(ParameterSetName = 'Changed')]
     [int]$MaxInlineBytes = 120000,
+    [ValidateSet('entrypoint', 'full-inline')]
+    [string]$SkillExposure = 'entrypoint',
 
     [Parameter(ParameterSetName = 'Prepare')]
     [Parameter(ParameterSetName = 'Changed')]
@@ -184,6 +189,7 @@ $OutputEncoding = $utf8NoBom
 
 . (Join-Path $PSScriptRoot 'eval-runners/manifest-paths.ps1')
 . (Join-Path $PSScriptRoot 'eval-runners/package-integrity.ps1')
+. (Join-Path $PSScriptRoot 'prepare-eval-prerequisites.ps1')
 
 $packageSchema = 'codebeltnet/agentic/eval-package/2'
 $metadataSchema = 'codebeltnet/agentic/eval-metadata/2'
@@ -592,7 +598,8 @@ function New-SkillInstructionSection {
     param(
         [string]$SkillName,
         [string]$SkillBody,
-        [object]$Inventory
+        [object]$Inventory,
+        [string]$RelativeSkillRoot
     )
 
     $builder = [System.Text.StringBuilder]::new()
@@ -601,6 +608,8 @@ function New-SkillInstructionSection {
     [void]$builder.AppendLine("## Skill: $SkillName")
     [void]$builder.AppendLine()
     [void]$builder.AppendLine($SkillBody.Trim())
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine("The staged skill root is ``../$RelativeSkillRoot/`` relative to the working directory. Resolve the skill's relative paths from that root. Follow its instructions about when to read supporting files.")
     [void]$builder.AppendLine()
 
     foreach ($item in $Inventory.Inlined) {
@@ -611,17 +620,6 @@ function New-SkillInstructionSection {
         [void]$builder.AppendLine($fence + 'markdown')
         [void]$builder.AppendLine($resourceText)
         [void]$builder.AppendLine($fence)
-        [void]$builder.AppendLine()
-    }
-
-    if ($Inventory.Bundled.Count -gt 0) {
-        [void]$builder.AppendLine('## Skill resources that are not inlined')
-        [void]$builder.AppendLine()
-        [void]$builder.AppendLine("These files belong to the skill but are too large, not text, or not referenced from its main instructions. The complete skill tree, including these, is staged in your run package under ``skill/$SkillName/`` (a sibling of your working directory). Read them from there when your environment allows it; otherwise work from the instructions above and say what you could not reach.")
-        [void]$builder.AppendLine()
-        foreach ($item in $Inventory.Bundled) {
-            [void]$builder.AppendLine("- ``skill/$SkillName/$($item.Path)`` ($($item.Bytes) bytes)")
-        }
         [void]$builder.AppendLine()
     }
 
@@ -1248,10 +1246,12 @@ function New-RunManifest {
         [string]$SkillHash,
         [bool]$GitWorkspace,
         [string]$InteractionFile = '',
-        [string]$InteractionHash = ''
+        [string]$InteractionHash = '',
+        [string]$CandidateRoot,
+        [object]$Prerequisites
     )
 
-    $skillDirectory = if ($Configuration -eq 'with_skill') { "$($runDirectoryNames.Skill)/$SkillName" } else { $null }
+    $skillDirectory = if ($Configuration -eq 'with_skill') { $CandidateRoot } else { $null }
     $effectiveCandidateSkillName = if ([string]::IsNullOrWhiteSpace($CandidateSkillName)) { $SkillName } else { $CandidateSkillName }
 
     $manifest = [ordered]@{
@@ -1273,6 +1273,7 @@ function New-RunManifest {
         inputFiles = @($RepoFiles)
         fixtureHash = $FixtureHash
         skillHash = if ($Configuration -eq 'with_skill') { $SkillHash } else { $null }
+        skillExposure = if ($Configuration -eq 'with_skill') { $SkillExposure } else { 'none' }
         contract = [ordered]@{
             sandboxRoot = '.'
             workingDirectory = $runDirectoryNames.Working
@@ -1281,6 +1282,7 @@ function New-RunManifest {
             mustNotExposeGlobalSkillsOrConfig = $true
         }
     }
+    if ($null -ne $Prerequisites) { $manifest.prerequisites = $Prerequisites }
     if (-not [string]::IsNullOrWhiteSpace($InteractionFile)) {
         $manifest.interactionFile = $InteractionFile
         $manifest.interactionHash = $InteractionHash
@@ -1302,6 +1304,12 @@ function Assert-RunIsolation {
 
     $withSkillDir = Join-Path $EvalCaseDirectory 'with_skill'
     $withoutSkillDir = Join-Path $EvalCaseDirectory 'without_skill'
+    $withRun = Read-RunnerJson -Path (Join-Path $withSkillDir $runDirectoryNames.Run)
+    $withoutRun = Read-RunnerJson -Path (Join-Path $withoutSkillDir $runDirectoryNames.Run)
+    Assert-EvalStagedDependencies -RunRoot $withSkillDir -Contract $withRun
+    Assert-EvalStagedDependencies -RunRoot $withoutSkillDir -Contract $withoutRun
+    $requirements = Get-JsonProperty -Object $withRun -Name 'prerequisites'
+    $pinnedRepository = Get-JsonProperty -Object $requirements -Name 'repository'
 
     foreach ($configuration in @('with_skill', 'without_skill')) {
         $runDir = Join-Path $EvalCaseDirectory $configuration
@@ -1315,10 +1323,12 @@ function Assert-RunIsolation {
             throw "$EvalName/$configuration is missing its materialized repo/."
         }
         foreach ($directory in (Get-ChildItem -LiteralPath $repoDir -Recurse -Directory -Force -ErrorAction SilentlyContinue)) {
-            if ($forbiddenFixtureSegments -contains $directory.Name) {
+            $insidePinnedRepository = $null -ne $pinnedRepository -and (Test-PathInside -BasePath (Join-Path $runDir $pinnedRepository.path) -CandidatePath $directory.FullName)
+            if ($forbiddenFixtureSegments -contains $directory.Name -and -not $insidePinnedRepository) {
                 throw "$EvalName/$configuration staged generated build state under repo/ ('$($directory.Name)')."
             }
-            if ($directory.Name -eq '.git' -and -not $GitWorkspace) {
+            $pinnedGitDirectory = $null -ne $pinnedRepository -and $directory.FullName -eq (Join-Path $runDir "$($pinnedRepository.path)/.git")
+            if ($directory.Name -eq '.git' -and -not $GitWorkspace -and -not $pinnedGitDirectory) {
                 throw "$EvalName/$configuration staged an unexpected .git directory."
             }
         }
@@ -1347,19 +1357,22 @@ function Assert-RunIsolation {
         }
 
         # 6. No run manifest references the source repository, and 7. none references a global skill install.
+        # Prerequisite paths are validated structurally. Probe arguments and
+        # expected-output regular expressions are command data.
+        $runPathContract = ConvertTo-RunnerJson -Value (Get-JsonWithoutProperty -Object $runManifest -PropertyName 'prerequisites') -Depth 20
         foreach ($needle in @('skills/', '.agents', '.claude', '.codex', '.gemini', ':\', ':/')) {
             if ($configuration -eq 'with_skill' -and $needle -eq 'skills/') {
                 # with_skill legitimately names skill/<name>; only reject an out-of-package skills/ reference.
                 continue
             }
-            if ($runJsonText.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            if ($runPathContract.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
                 throw "$EvalName/$configuration run.json references '$needle', which points outside the run package."
             }
         }
     }
 
     # 2. with_skill contains the candidate skill; 4. required skill files are staged and match the source revision.
-    $stagedSkillRoot = Join-Path (Join-Path $withSkillDir $runDirectoryNames.Skill) $SkillName
+    $stagedSkillRoot = Join-Path $withSkillDir $withRun.skillDirectory
     if (-not (Test-Path -LiteralPath (Join-Path $stagedSkillRoot 'SKILL.md'))) {
         throw "$EvalName/with_skill is missing the candidate skill (skill/$SkillName/SKILL.md)."
     }
@@ -1467,11 +1480,11 @@ function Invoke-PrepareMode {
     $skillBody = if ($skillText -match '(?ms)\A---\r?\n.*?\r?\n---\r?\n(?<body>.*)\z') { $Matches['body'] } else { $skillText }
     $candidateSkillName = Get-CandidateSkillName -SkillDirectory $skillDirectory -FolderName $Skill -SkillText $skillText
 
-    $inventory = Get-SkillFileInventory -SkillDirectory $skillDirectory -SkillBody $skillBody -Budget $MaxInlineBytes
+    $inlineBudget = if ($SkillExposure -eq 'full-inline') { $MaxInlineBytes } else { 0 }
+    $inventory = Get-SkillFileInventory -SkillDirectory $skillDirectory -SkillBody $skillBody -Budget $inlineBudget
     $skillHash = Get-CandidateSkillHash -SkillDirectory $skillDirectory
 
     $generatedUtc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
-    $withSkillInstructions = New-SkillInstructionSection -SkillName $Skill -SkillBody $skillBody -Inventory $inventory
     $manifestEvals = [System.Collections.Generic.List[object]]::new()
 
     foreach ($evalEntry in $selectedEvals) {
@@ -1480,6 +1493,10 @@ function Invoke-PrepareMode {
         New-Item -ItemType Directory -Path $evalDirectory -Force | Out-Null
 
         $workspaceOption = Get-EvalWorkspaceOption -EvalEntry $evalEntry
+        $requirements = Get-JsonProperty -Object $evalEntry -Name 'prerequisites'
+        $dependencySkills = @(Get-JsonProperty -Object $requirements -Name 'skills' -Default @())
+        $candidateRoot = if ($dependencySkills.Count -gt 0) { "dependencies/$Skill" } else { "$($runDirectoryNames.Skill)/$Skill" }
+        $stagedPrerequisites = $null
 
         $fixturePaths = @()
         if ($evalEntry.PSObject.Properties.Name -contains 'files' -and $null -ne $evalEntry.files) {
@@ -1534,19 +1551,35 @@ function Invoke-PrepareMode {
             Write-Utf8File -Path (Join-Path $homeDir 'README.txt') -Content "This is an isolated, deliberately empty home directory for one eval run. A harness sets HOME - and the platform-equivalent profile and config roots - here so the worker cannot see the machine's global agent configuration, skills, plugins, MCP servers, or memories.`n"
 
             if ($configuration -eq 'with_skill') {
-                $stagedSkillRoot = Join-Path (Join-Path $runDir $runDirectoryNames.Skill) $Skill
-                [void](Copy-SkillTree -SkillDirectory $skillDirectory -DestinationSkillRoot $stagedSkillRoot)
+                $stagedPrerequisites = Initialize-EvalPrerequisites -Requirements $requirements -RunRoot $runDir -CandidateName $Skill
+            } elseif ($null -ne $stagedPrerequisites) {
+                $firstArm = Join-Path $evalDirectory 'with_skill'
+                foreach ($relative in @('dependencies', 'home/tools', 'home/restore-probe', [string](Get-JsonProperty -Object $stagedPrerequisites.repository -Name 'path' -Default ''))) {
+                    if (-not $relative) { continue }
+                    $source = Join-Path $firstArm $relative
+                    if (Test-Path -LiteralPath $source -PathType Container) {
+                        Copy-Item -LiteralPath $source -Destination (Join-Path $runDir $relative) -Recurse -Force
+                    }
+                }
             }
         }
+        $stagedSkillRoot = Join-Path (Join-Path $evalDirectory 'with_skill') $candidateRoot
+        [void](Copy-SkillTree -SkillDirectory $skillDirectory -DestinationSkillRoot $stagedSkillRoot)
 
         # Identical between runs by construction; validated below. The .git directory is excluded because two git init
         # runs would otherwise differ, while the tracked fixture content is the same.
         $fixtureHash = Get-TreeHash -Root (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Working) -ExcludeSegments @('.git')
 
         $inputFilesSection = New-InputFilesSection -Fixtures @($fixtures)
+        if ($null -ne $stagedPrerequisites) {
+            $sharedPaths = @($stagedPrerequisites.skills | ForEach-Object { "../$($_.path)/" }) + @($stagedPrerequisites.downloads | ForEach-Object { "../$($_.path)" })
+            if ($null -ne $stagedPrerequisites.repository) { $sharedPaths += $stagedPrerequisites.repository.path.Substring('repo/'.Length) + '/' }
+            if ($sharedPaths.Count -gt 0) { $inputFilesSection += "`n`nShared prerequisites staged for this task:`n" + (($sharedPaths | ForEach-Object { "- ``$_``" }) -join "`n") }
+        }
         $assertions = Get-Assertions -EvalEntry $evalEntry
         $interactionDocument = New-InteractionDocument -EvalEntry $evalEntry
 
+        $withSkillInstructions = New-SkillInstructionSection -SkillName $Skill -SkillBody $skillBody -Inventory $inventory -RelativeSkillRoot $candidateRoot
         $withSkillPrompt = New-PromptDocument -EvalEntry $evalEntry -InstructionSection $withSkillInstructions -InputFilesSection $inputFilesSection
         $withoutSkillPrompt = New-PromptDocument -EvalEntry $evalEntry -InstructionSection $withoutSkillPreamble -InputFilesSection $inputFilesSection
 
@@ -1564,8 +1597,8 @@ function Invoke-PrepareMode {
                 if ((Get-FileSha256 -Path $interactionPath) -ne $interactionHash) { throw "Scripted interaction sidecar diverged between configurations for '$evalName'." }
             }
         }
-        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -CandidateSkillName $candidateSkillName -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $skillHash -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
-        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -CandidateSkillName $candidateSkillName -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $null -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
+        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -CandidateSkillName $candidateSkillName -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $skillHash -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash -CandidateRoot $candidateRoot -Prerequisites $stagedPrerequisites)
+        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -CandidateSkillName $candidateSkillName -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $null -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash -CandidateRoot $candidateRoot -Prerequisites $stagedPrerequisites)
 
         $assumptions = [System.Collections.Generic.List[string]]::new()
         $assumptions.Add('Run with_skill and without_skill on the same model, same version, and same configuration. Different models measure the model, not the skill.')
@@ -1724,6 +1757,7 @@ function Invoke-PrepareMode {
             'transcript capture'
         )
         skill_instructions = [ordered]@{
+            exposure_mode = $SkillExposure
             inlined = @('SKILL.md') + @($inventory.Inlined | ForEach-Object { $_.Path })
             inlined_resource_bytes = $inventory.InlinedBytes
             staged_full_tree = $true
@@ -1756,8 +1790,8 @@ function Invoke-PrepareMode {
     Write-Host "Prepared $($manifestEvals.Count) eval case(s) for '$Skill' (iteration $iterationNumber) as $($manifestEvals.Count * 2) isolated run package(s)."
     Write-Host "Package: $iterationDirectory"
     Write-Host ''
-    Write-Host 'Every run is a self-contained directory: repo/ is the working tree, home/ is an isolated'
-    Write-Host 'profile, and skill/ (with_skill only) holds the candidate. A harness runs a worker from that'
+    Write-Host 'Every run is a self-contained directory: repo/ is the working tree and home/ is an isolated'
+    Write-Host 'profile. The candidate arm also holds the staged skill. A harness runs a worker from that'
     Write-Host 'directory alone and never needs the source repository or a globally installed skill.'
     Write-Host ''
     Write-Host 'Hand this one file to the agent of your choice. It drives the whole package:'
@@ -1815,7 +1849,9 @@ function New-RunnerPrompt {
     $executionBatches = [Math]::Max(1, [int][Math]::Ceiling($armCount / [double]$effectiveConcurrency))
     $preflightTimeoutSeconds = Get-RunnerPreflightTimeoutSeconds
     $serialPreflightAllowanceSeconds = $armCount * $preflightTimeoutSeconds
-    $longestChildAllowanceSeconds = ([Math]::Max(1, $maxScriptedUserTurns) * [Math]::Max(1, $PerArmTimeoutSeconds)) + [Math]::Max(0, $RunnerGraceSeconds)
+    $startupAllowance = if ($ExecutionSelection.Runner -eq 'codex') { Get-CodexExecutionStartupAllowanceSeconds } else { 0 }
+    $startupDetail = if ($startupAllowance -gt 0) { " + $startupAllowance seconds Codex preflight/discovery/startup" } else { '' }
+    $longestChildAllowanceSeconds = ([Math]::Max(1, $maxScriptedUserTurns) * [Math]::Max(1, $PerArmTimeoutSeconds)) + $startupAllowance + [Math]::Max(0, $RunnerGraceSeconds)
     $executionAllowanceSeconds = $executionBatches * $longestChildAllowanceSeconds
     $orchestrationGraceSeconds = [Math]::Max(1, $RunnerGraceSeconds)
     $phaseOneAllowanceSeconds = $serialPreflightAllowanceSeconds + $executionAllowanceSeconds + $orchestrationGraceSeconds
@@ -1830,7 +1866,7 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Phase 1 — blind execution')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine(("Phase 1 is one long-running foreground command. Set the caller shell/tool timeout to at least the package-computed Phase 1 allowance of {0} seconds ({1} arm(s) × {2}-second fixed model-free runner preflight timeout = {3}-second serial preflight allowance + {4}-second execution allowance across {5} batch(es) at concurrency {6}; each child allows {7} scripted user turn(s) × profile.timeout_seconds {8} + {9} seconds runner grace; + {10} seconds orchestration grace), not a default short timeout. For OpenCode, pass this allowance to the shell tool's explicit timeout setting before invoking the command." -f $phaseOneAllowanceSeconds, $armCount, $preflightTimeoutSeconds, $serialPreflightAllowanceSeconds, $executionAllowanceSeconds, $executionBatches, $effectiveConcurrency, $maxScriptedUserTurns, $PerArmTimeoutSeconds, [Math]::Max(0, $RunnerGraceSeconds), $orchestrationGraceSeconds))
+    [void]$builder.AppendLine(("Phase 1 is one long-running foreground command. Set the caller shell/tool timeout to at least the package-computed Phase 1 allowance of {0} seconds ({1} arm(s) × {2}-second fixed model-free runner preflight timeout = {3}-second serial preflight allowance + {4}-second execution allowance across {5} batch(es) at concurrency {6}; each child allows {7} scripted user turn(s) × profile.timeout_seconds {8}{11} + {9} seconds runner grace; + {10} seconds orchestration grace), not a default short timeout. For OpenCode, pass this allowance to the shell tool's explicit timeout setting before invoking the command." -f $phaseOneAllowanceSeconds, $armCount, $preflightTimeoutSeconds, $serialPreflightAllowanceSeconds, $executionAllowanceSeconds, $executionBatches, $effectiveConcurrency, $maxScriptedUserTurns, $PerArmTimeoutSeconds, [Math]::Max(0, $RunnerGraceSeconds), $orchestrationGraceSeconds, $startupDetail))
     [void]$builder.AppendLine('A caller-side shell timeout is not permission to invoke Phase 1 again. `invoke-runner-owned-arms.ps1` must be started exactly once for this iteration. If execution is interrupted and no valid `execution-freeze.json` exists, the package is incomplete and requires a fresh iteration.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Read the selected runner descriptor and its `delegation.dispatch_owner`. For runner-owned behavioral transport, invoke:')

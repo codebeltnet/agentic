@@ -1,5 +1,18 @@
 # Eval Runner protocol
 
+## Evaluation prerequisites and skill exposure
+
+An eval can declare a `prerequisites` object in `evals/evals.json`. Omit it for cases that need no readiness probes. The preparer provisions declared files once per case and copies them into both arms before staging the candidate separately.
+
+- `executables` lists application names to resolve onto the controlled PATH. `probes` give an `id`, a `command` argument array starting with a declared executable, an optional `outputPattern`, and an optional `timeoutMs`. Arguments can use `{run}` for the projected run root. These are trusted repository-authored commands. Use probes for SDK versions, runtimes, service connectivity, and any required network access.
+- `skills` names complementary skills from this repository. The staged files are identical in both arms and their hashes are checked before execution. For a case with complementary skills the candidate sits beside them in the candidate arm, so it can resolve sibling tools without using a global skill installation.
+- `downloads` pins an HTTPS asset with `url`, `file`, and `sha256`. `dotnetTools` reuses a matching executable or installs the declared package and version into the isolated tool directory. `restore` defines a target `framework` and optional exact package `id` and `version` pairs for NuGet restore and deterministic `.NET` build readiness probes.
+- `repository` specifies an HTTPS Git `url`, a full `commit`, and a child `directory` of the working tree. Both arms get independent detached checkouts. Preparation checks HEAD, records the fixture hash, and adds a native HEAD probe.
+
+The Codex App Server runs the readiness commands through `command/exec` in a disposable projection during preflight and again before the actual project's first model turn. Child shells use `inherit=none`, explicit environment values without credentials, and no login profile. A failed prerequisite reports its command, exit status, and diagnostic under `readiness`. Phase 1 lists affected eval IDs separately and keeps the existing all-arms preflight gate. OpenCode and the Codex API-key compatibility path currently fail closed when a case requires native readiness evidence.
+
+Preparation defaults to `-SkillExposure entrypoint`. Each candidate receives its entry-point instructions and a path to its staged skill tree. The model can read supporting files selectively. `-SkillExposure full-inline` embeds referenced text resources up to `-MaxInlineBytes`. The manifest and benchmark record the exposure mode. Codex execution evidence also records successful shell commands that name supporting references and return output. Reads via tools or commands that cannot identify an individual file are unmeasured.
+
 ## Native worker orchestration
 
 The external handoff uses this topology:
