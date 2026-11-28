@@ -1,6 +1,6 @@
 # Design examples around the developer task
 
-Read this before writing application integration, testing-framework, multi-file/project examples, or partial excerpts. Keep package-ID-first discovery and the existing project packets. A compilation success is one kind of evidence, not approval of the example's architecture.
+Read this before reviewing, modifying, or writing examples involving framework integration, dependency injection, authentication, middleware, hosting, testing frameworks, multi-file/project graphs, or partial excerpts. Keep package-ID-first discovery and the existing project packets. A compilation success is one kind of evidence, not approval of the example's architecture.
 
 ## Design contract
 

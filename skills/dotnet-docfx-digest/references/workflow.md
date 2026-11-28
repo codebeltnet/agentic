@@ -2,7 +2,7 @@
 
 ## Targeted authoring
 
-Start from the selected public symbol, its owning project and package, related namespace pages, XML comments and existing overwrites. Inspect affected siblings when the change alters a shared entry point, extension family or framework availability. For a member change, limit edits to documentation surfaces whose claims or coverage changed.
+Start from the selected public symbol, its owning project and package, related namespace pages, XML comments and existing overwrites. Scope validator, assessment queue, behavioral ledger, sample compilation, and run-action runs to the exact requested targets with repeatable `--uid <uid-or-uid#ordinal>` arguments (explicitly selected unchanged examples stay in scope; never substitute `--changed-only` for `--uid`). Inspect affected siblings when the change alters a shared entry point, extension family or framework availability. For a member change, limit edits to documentation surfaces whose claims or coverage changed.
 
 ## Key entry-point and upstream comparison pass
 
@@ -34,7 +34,7 @@ Dry run is a limited real run that writes useful documentation directly to the w
 7. Continue repairing the selected packets until the resumed command reports `dry-run-passed`, zero remaining gates, compiled samples, and a verified DocFX build. Any error or omitted final gate is `dry-run-failed`.
 8. Dry run never claims the repository digest is complete. Report selected projects, seed, the complete changed-page review table, representative prose/examples, reproduction command, and resume command for human approval before a full run.
 
-Use `--dry-run [--seed <n>]` for automatic selection, `--dry-run --project <hint> [--project <hint> ...]` for explicit selection, and always pair the initial `--project-manifest` invocation with the final `--resume-project-manifest` invocation. Use `--project <hint>` without `--dry-run` only for a scoped non-random validation; it still cannot claim repository completion.
+Use `--dry-run [--seed <n>]` for automatic selection, `--dry-run --project <hint> [--project <hint> ...]` for explicit dry-run selection (which skips dirty projects via `PROJECT_DIRTY_SKIPPED` to protect pre-existing work), and always pair the initial `--project-manifest` invocation with the final `--resume-project-manifest` invocation. Use `--project <hint>` without `--dry-run` or repeatable `--uid <uid-or-uid#ordinal>` for non-random scoped validation/repair; those runs verify edited documentation without excluding dirty projects via `PROJECT_DIRTY_SKIPPED`, and report `scoped-passed` with `canClaimCompletion: false` so they never claim repository-wide completion.
 
 ## Page examples
 
