@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ValidatorPath = (Join-Path $PSScriptRoot 'docfx.cs'),
     [string]$AgentsPath = (Join-Path $PSScriptRoot 'agents.cs'),
     [string]$GeneratorPath = (Join-Path $PSScriptRoot 'generate-run-actions.ps1')
@@ -829,6 +829,708 @@ public static class AuthBuilderExtensions
     }
 
     Write-Host 'Multi-TFM discovery and explicit framework-scope regressions (Scenarios 11 & 12) passed.'
+
+    # =========================================================================
+    # PART 4: Precise --uid scope, Cuemon & Eval #135 regression scenarios,
+    #         dirty-project handling, and run-actions --uid scoping
+    # =========================================================================
+    $uidRepo = Join-Path $workRoot 'uid-scoped-repo'
+    $uidLedgerDir = Join-Path $workRoot 'uid-ledgers'
+    New-Item -ItemType Directory -Path "$uidRepo/src/Demo.Data", "$uidRepo/src/Demo.Mvc", "$uidRepo/src/Demo.Pipeline", "$uidRepo/.docfx/api/namespaces", "$uidRepo/.docfx/api/types", $uidLedgerDir -Force | Out-Null
+
+    Write-Utf8File "$uidRepo/Directory.Packages.props" @'
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>
+'@
+    Write-Utf8File "$uidRepo/src/Demo.Data/Demo.Data.csproj" @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+</Project>
+'@
+    Write-Utf8File "$uidRepo/src/Demo.Data/DataTypes.cs" @'
+namespace Demo.Data;
+
+/// <summary>Builds delimited records incrementally.</summary>
+public sealed class TokenBuilder
+{
+    private readonly System.Text.StringBuilder _sb = new();
+    /// <summary>Appends a token.</summary>
+    public TokenBuilder Append(string token) { if (_sb.Length > 0) _sb.Append(','); _sb.Append(token); return this; }
+    /// <summary>Returns the built record.</summary>
+    public override string ToString() => _sb.ToString();
+}
+
+/// <summary>Reads delimiter-separated values.</summary>
+public sealed class DsvDataReader
+{
+    /// <summary>Splits a CSV line.</summary>
+    public string[] ReadRow(string line) => line.Split(',');
+}
+
+/// <summary>Unrelated type whose example intentionally fails compilation if compiled out of scope.</summary>
+public sealed class BrokenUnrelated
+{
+    /// <summary>Returns a tag.</summary>
+    public string Tag => "broken";
+}
+
+/// <summary>Colliding simple type name in Demo.Data.</summary>
+public sealed class SharedResult
+{
+    /// <summary>Result code.</summary>
+    public int Code => 1;
+}
+'@
+    Write-Utf8File "$uidRepo/src/Demo.Mvc/Demo.Mvc.csproj" @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+</Project>
+'@
+    Write-Utf8File "$uidRepo/src/Demo.Mvc/MvcTypes.cs" @'
+namespace Demo.Mvc.Filters.Diagnostics;
+
+/// <summary>Records request server timing metrics.</summary>
+public sealed class ServerTimingFilter
+{
+    /// <summary>Formats a timing header value.</summary>
+    public string FormatHeader(string name, double ms) => $"{name};dur={ms:F1}";
+}
+
+/// <summary>Unrelated MVC filter whose example intentionally fails compilation if compiled out of scope.</summary>
+public sealed class UnrelatedFilter
+{
+    /// <summary>Returns filter name.</summary>
+    public string Name => "unrelated";
+}
+
+/// <summary>Colliding simple type name in Demo.Mvc.Filters.Diagnostics.</summary>
+public sealed class SharedResult
+{
+    /// <summary>Result code.</summary>
+    public int Code => 2;
+}
+'@
+    Write-Utf8File "$uidRepo/src/Demo.Pipeline/Demo.Pipeline.csproj" @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+</Project>
+'@
+    Write-Utf8File "$uidRepo/src/Demo.Pipeline/PipelineExtensions.cs" @'
+namespace Demo.Extensions.Authentication
+{
+    /// <summary>Represents a minimal application pipeline builder.</summary>
+    public sealed class PipelineBuilder
+    {
+        /// <summary>Registered middleware steps.</summary>
+        public System.Collections.Generic.List<string> Steps { get; } = new();
+    }
+
+    /// <summary>Authentication extension methods for PipelineBuilder.</summary>
+    public static class ApplicationBuilderExtensions
+    {
+        /// <summary>Registers Basic authentication on the pipeline.</summary>
+        public static PipelineBuilder UseBasicAuthentication(this PipelineBuilder builder)
+        {
+            builder.Steps.Add("Basic");
+            return builder;
+        }
+    }
+}
+
+namespace Demo.Extensions.Mvc.Formatters.Xml
+{
+    /// <summary>Represents an MVC formatter builder.</summary>
+    public sealed class FormatterBuilder
+    {
+        /// <summary>Whether XML output is indented.</summary>
+        public bool Indent { get; set; }
+    }
+
+    /// <summary>XML formatter extension methods for FormatterBuilder.</summary>
+    public static class MvcBuilderExtensions
+    {
+        /// <summary>Configures XML serialization formatters.</summary>
+        public static FormatterBuilder AddXmlSerializationFormatters(this FormatterBuilder builder, bool indent = false)
+        {
+            builder.Indent = indent;
+            return builder;
+        }
+    }
+
+    /// <summary>Unrelated pipeline type with intentionally broken example.</summary>
+    public sealed class UnrelatedMiddleware
+    {
+        /// <summary>Returns step label.</summary>
+        public string Label => "noop";
+    }
+}
+'@
+    Write-Utf8File "$uidRepo/.docfx/docfx.json" @'
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "files": ["Demo.Data/Demo.Data.csproj", "Demo.Mvc/Demo.Mvc.csproj", "Demo.Pipeline/Demo.Pipeline.csproj"],
+          "src": "../src"
+        }
+      ],
+      "dest": "api"
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": ["api/**/*.yml"],
+        "exclude": ["api/namespaces/**", "api/types/**"]
+      }
+    ],
+    "overwrite": [
+      {
+        "files": ["api/namespaces/**/*.md", "api/types/**/*.md"]
+      }
+    ],
+    "dest": "_site",
+    "template": ["default", "modern"]
+  }
+}
+'@
+    Write-Utf8File "$uidRepo/.docfx/includes/availability.md" "Available on .NET 10.0.`n"
+    Write-Utf8File "$uidRepo/.docfx/api/namespaces/Demo.Data.md" @'
+---
+uid: Demo.Data
+summary: *content
+---
+The `Demo.Data` namespace builds and reads delimited records for structured data exchange. Use it when you need lightweight token assembly or CSV row parsing. Start with `TokenBuilder` or `DsvDataReader`.
+
+[!INCLUDE [availability](../../includes/availability.md)]
+'@
+    Write-Utf8File "$uidRepo/.docfx/api/namespaces/Demo.Mvc.Filters.Diagnostics.md" @'
+---
+uid: Demo.Mvc.Filters.Diagnostics
+summary: *content
+---
+The `Demo.Mvc.Filters.Diagnostics` namespace captures server-side timing metrics for diagnostic HTTP headers. Use it when profiling MVC actions. Start with `ServerTimingFilter`.
+
+[!INCLUDE [availability](../../includes/availability.md)]
+'@
+    Write-Utf8File "$uidRepo/.docfx/api/namespaces/Demo.Extensions.Authentication.md" @'
+---
+uid: Demo.Extensions.Authentication
+summary: *content
+---
+The `Demo.Extensions.Authentication` namespace configures authentication steps on a pipeline builder. Use it when protecting endpoints with pluggable schemes. Start with `UseBasicAuthentication`.
+
+[!INCLUDE [availability](../../includes/availability.md)]
+
+### Extension Members
+
+|Type|Ext|Methods|
+|--:|:-:|---|
+|PipelineBuilder|⬇️|`UseBasicAuthentication`|
+'@
+    Write-Utf8File "$uidRepo/.docfx/api/namespaces/Demo.Extensions.Mvc.Formatters.Xml.md" @'
+---
+uid: Demo.Extensions.Mvc.Formatters.Xml
+summary: *content
+---
+The `Demo.Extensions.Mvc.Formatters.Xml` namespace registers XML serialization formatters with indentation control. Use it when endpoints serve XML payloads. Start with `AddXmlSerializationFormatters`.
+
+[!INCLUDE [availability](../../includes/availability.md)]
+
+### Extension Members
+
+|Type|Ext|Methods|
+|--:|:-:|---|
+|FormatterBuilder|⬇️|`AddXmlSerializationFormatters`|
+'@
+    $tokenBuilderPage = "$uidRepo/.docfx/api/types/Demo.Data.TokenBuilder.md"
+    Write-Utf8File $tokenBuilderPage @'
+---
+uid: Demo.Data.TokenBuilder
+example:
+- *content
+---
+The following two standalone console programs require the `Demo.Data` package and demonstrate how `TokenBuilder` assembles comma-delimited records step by step: the first builds a person record and prints `Alice,30`, and the second builds a product record and prints `Widget,49.99`.
+
+```csharp
+// Program.cs
+using System;
+using Demo.Data;
+
+var person = new TokenBuilder().Append("Alice").Append("30").ToString();
+Console.WriteLine(person);
+```
+
+```csharp
+// Program.cs
+using System;
+using Demo.Data;
+
+var product = new TokenBuilder().Append("Widget").Append("49.99").ToString();
+Console.WriteLine(product);
+```
+'@
+    $dsvPage = "$uidRepo/.docfx/api/types/Demo.Data.DsvDataReader.md"
+    Write-Utf8File $dsvPage @'
+---
+uid: Demo.Data.DsvDataReader
+example:
+- *content
+---
+The following standalone program parses a comma-separated row with `DsvDataReader` and prints the column count.
+
+```csharp
+// Program.cs
+using System;
+using Demo.Data;
+
+var columns = new DsvDataReader().ReadRow("Alice,30,Engineer");
+Console.WriteLine(columns.Length);
+```
+'@
+    Write-Utf8File "$uidRepo/.docfx/api/types/Demo.Data.BrokenUnrelated.md" @'
+---
+uid: Demo.Data.BrokenUnrelated
+example:
+- *content
+---
+The following broken example intentionally fails compilation to verify out-of-scope fences are not compiled.
+
+```csharp
+// Program.cs
+using Demo.Data;
+
+var broken = new BrokenUnrelated();
+THIS_SYMBOL_DOES_NOT_EXIST_DATA(broken.Tag);
+```
+'@
+    Write-Utf8File "$uidRepo/.docfx/api/types/Demo.Data.SharedResult.md" @'
+---
+uid: Demo.Data.SharedResult
+example:
+- *content
+---
+The following standalone program prints the result code from `Demo.Data.SharedResult`.
+
+```csharp
+// Program.cs
+using System;
+using Demo.Data;
+
+Console.WriteLine(new SharedResult().Code);
+```
+'@
+    $serverTimingPage = "$uidRepo/.docfx/api/types/Demo.Mvc.Filters.Diagnostics.ServerTimingFilter.md"
+    Write-Utf8File $serverTimingPage @'
+---
+uid: Demo.Mvc.Filters.Diagnostics.ServerTimingFilter
+example:
+- *content
+---
+The following standalone program formats a `Server-Timing` metric using `ServerTimingFilter` and prints the header value.
+
+```csharp
+// Program.cs
+using System;
+using Demo.Mvc.Filters.Diagnostics;
+
+var filter = new ServerTimingFilter();
+Console.WriteLine(filter.FormatHeader("db", 12.5));
+```
+'@
+    Write-Utf8File "$uidRepo/.docfx/api/types/Demo.Mvc.Filters.Diagnostics.UnrelatedFilter.md" @'
+---
+uid: Demo.Mvc.Filters.Diagnostics.UnrelatedFilter
+example:
+- *content
+---
+The following broken example intentionally fails compilation to verify out-of-scope MVC fences are not compiled.
+
+```csharp
+// Program.cs
+using Demo.Mvc.Filters.Diagnostics;
+
+var filter = new UnrelatedFilter();
+THIS_SYMBOL_DOES_NOT_EXIST_MVC(filter.Name);
+```
+'@
+    Write-Utf8File "$uidRepo/.docfx/api/types/Demo.Mvc.Filters.Diagnostics.SharedResult.md" @'
+---
+uid: Demo.Mvc.Filters.Diagnostics.SharedResult
+example:
+- *content
+---
+The following standalone program prints the result code from `Demo.Mvc.Filters.Diagnostics.SharedResult`.
+
+```csharp
+// Program.cs
+using System;
+using Demo.Mvc.Filters.Diagnostics;
+
+Console.WriteLine(new SharedResult().Code);
+```
+'@
+    Write-Utf8File "$uidRepo/.docfx/api/types/Demo.Extensions.Authentication.PipelineBuilder.md" @'
+---
+uid: Demo.Extensions.Authentication.PipelineBuilder
+example:
+- *content
+---
+The following standalone program creates a `PipelineBuilder`, registers a middleware step, and prints the configured count.
+
+```csharp
+// Program.cs
+using System;
+using Demo.Extensions.Authentication;
+
+var pipeline = new PipelineBuilder();
+pipeline.Steps.Add("Auth");
+Console.WriteLine(pipeline.Steps.Count);
+```
+'@
+    Write-Utf8File "$uidRepo/.docfx/api/types/Demo.Extensions.Authentication.ApplicationBuilderExtensions.md" @'
+---
+uid: Demo.Extensions.Authentication.ApplicationBuilderExtensions
+example:
+- *content
+---
+The following standalone program registers Basic authentication with `UseBasicAuthentication` and prints the configured step.
+
+```csharp
+// Program.cs
+using System;
+using Demo.Extensions.Authentication;
+
+var pipeline = new PipelineBuilder().UseBasicAuthentication();
+Console.WriteLine(string.Join(",", pipeline.Steps));
+```
+'@
+    Write-Utf8File "$uidRepo/.docfx/api/types/Demo.Extensions.Mvc.Formatters.Xml.MvcBuilderExtensions.md" @'
+---
+uid: Demo.Extensions.Mvc.Formatters.Xml.MvcBuilderExtensions
+example:
+- *content
+---
+The following standalone program configures indented XML formatting via `AddXmlSerializationFormatters` and prints the setting.
+
+```csharp
+// Program.cs
+using System;
+using Demo.Extensions.Mvc.Formatters.Xml;
+
+var builder = new FormatterBuilder().AddXmlSerializationFormatters(indent: true);
+Console.WriteLine($"Indent={builder.Indent}");
+```
+'@
+    Write-Utf8File "$uidRepo/.docfx/api/types/Demo.Extensions.Mvc.Formatters.Xml.UnrelatedMiddleware.md" @'
+---
+uid: Demo.Extensions.Mvc.Formatters.Xml.UnrelatedMiddleware
+example:
+- *content
+---
+The following broken example intentionally fails compilation to verify unrelated pipeline examples are not compiled.
+
+```csharp
+// Program.cs
+using Demo.Extensions.Mvc.Formatters.Xml;
+
+var m = new UnrelatedMiddleware();
+THIS_SYMBOL_DOES_NOT_EXIST_PIPELINE(m.Label);
+```
+'@
+    & $agentsApp.Executable @($agentsApp.ArgumentPrefix + @('--repo-root', $uidRepo)) | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'agents.cs failed on uid-scoped test repo.' }
+
+    # Initialize git so dirty-project and --changed-only behaviors are real.
+    Push-Location $uidRepo
+    try {
+        & git init -q 2>$null | Out-Null
+        & git config core.autocrlf false 2>$null | Out-Null
+        & git config core.safecrlf false 2>$null | Out-Null
+        & git -c user.email=t@e.com -c user.name=t add -A 2>$null | Out-Null
+        & git -c user.email=t@e.com -c user.name=t commit -q -m base 2>$null | Out-Null
+    } finally { Pop-Location }
+
+    # 13a. Targeted two-UID Cuemon-shaped scenario across two projects:
+    #      creates ONLY their 3 behavioral obligations (2 fences on TokenBuilder + 1 on ServerTimingFilter),
+    #      compiles ONLY those 3 samples (skipping all 3 intentionally broken unrelated examples!),
+    #      preserves shared API discovery & dependency builds, and scopes the assessment queue.
+    $twoUidLedger = Join-Path $uidLedgerDir 'two-uid-ledger.json'
+    $twoUidQueue = Join-Path $uidLedgerDir 'two-uid-queue.md'
+    $twoUidArgs = @(
+        '--operation', 'repair',
+        '--uid', 'Demo.Data.TokenBuilder',
+        '--uid', 'Demo.Mvc.Filters.Diagnostics.ServerTimingFilter'
+    )
+    $twoUidInit = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs ($twoUidArgs + @('--init-behavioral-ledger', $twoUidLedger, '--assessment-queue', $twoUidQueue) + $finalGateArgs)
+    if ($twoUidInit.ExitCode -ne 1 -or $twoUidInit.Report.summary.canClaimCompletion) {
+        throw "Unreviewed UID-scoped repair must fail completion: $($twoUidInit.Report.summary | ConvertTo-Json -Compress)"
+    }
+    Assert-CodeAbsent $twoUidInit.Report 'SAMPLE_COMPILE_FAILED' 'because unrelated broken examples must not be compiled under --uid'
+    Assert-CodePresent $twoUidInit.Report 'BEHAVIORAL_REVIEW_INCOMPLETE' 'for unreviewed two-UID ledger'
+    $s2 = $twoUidInit.Report.summary
+    if ($s2.operation -ne 'repair' -or -not $s2.behaviorReviewRequired -or $s2.runMode -ne 'scoped' -or
+        $s2.examplesInScope -ne 3 -or $s2.examplesUnreviewed -ne 3 -or $s2.samplesCompiled -ne 3 -or
+        (@($s2.selectedUids) -join ',') -ne 'Demo.Data.TokenBuilder,Demo.Mvc.Filters.Diagnostics.ServerTimingFilter') {
+        throw "Unexpected two-UID summary: $($s2 | ConvertTo-Json -Compress)"
+    }
+    if ($twoUidInit.Report.scope.scopeKind -ne 'uid' -or
+        $twoUidInit.Report.scope.sharedValidation.apiDiscovery -ne 'repository' -or
+        $twoUidInit.Report.scope.sharedValidation.dependencyBuild -ne 'repository' -or
+        $twoUidInit.Report.scope.sharedValidation.sampleCompilation -ne 'uid-scoped' -or
+        $twoUidInit.Report.scope.sharedValidation.behavioralReview -ne 'uid-scoped') {
+        throw "Shared vs repair scope not cleanly distinguished: $($twoUidInit.Report.scope | ConvertTo-Json -Depth 5 -Compress)"
+    }
+    $twoUidLedgerDoc = Get-Content -LiteralPath $twoUidLedger -Raw | ConvertFrom-Json
+    if ($twoUidLedgerDoc.scopeMode -ne 'scoped' -or $twoUidLedgerDoc.scopeKind -ne 'uid' -or
+        (@($twoUidLedgerDoc.selectedUids) -join ',') -ne 'Demo.Data.TokenBuilder,Demo.Mvc.Filters.Diagnostics.ServerTimingFilter' -or
+        @($twoUidLedgerDoc.examples).Count -ne 3) {
+        throw "Unexpected two-UID ledger structure: $($twoUidLedgerDoc | ConvertTo-Json -Depth 5 -Compress)"
+    }
+    $queueText = [IO.File]::ReadAllText($twoUidQueue)
+    if (-not $queueText.Contains('Operation: `repair`') -or -not $queueText.Contains('Demo.Data.TokenBuilder') -or
+        -not $queueText.Contains('Behavioral Review Obligations') -or $queueText.Contains('BrokenUnrelated') -or
+        -not $queueText.Contains('scoped-passed')) {
+        throw "Assessment queue did not reflect exact UID scope: $queueText"
+    }
+
+    # 13b. Individual example selection via uid#ordinal selects ONLY that fence.
+    $singleFenceLedger = Join-Path $uidLedgerDir 'single-fence.json'
+    $singleFenceRes = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs @(
+        '--operation', 'repair', '--uid', 'Demo.Data.TokenBuilder#2',
+        '--init-behavioral-ledger', $singleFenceLedger, '--validate-samples')
+    if ($singleFenceRes.Report.summary.examplesInScope -ne 1 -or $singleFenceRes.Report.summary.samplesCompiled -ne 1 -or
+        (@($singleFenceRes.Report.summary.selectedUids) -join ',') -ne 'Demo.Data.TokenBuilder#2') {
+        throw "uid#ordinal selection did not isolate fence #2: $($singleFenceRes.Report.summary | ConvertTo-Json -Compress)"
+    }
+    $sfDoc = Get-Content -LiteralPath $singleFenceLedger -Raw | ConvertFrom-Json
+    if (@($sfDoc.examples).Count -ne 1 -or $sfDoc.examples[0].exampleId -ne 'Demo.Data.TokenBuilder#2') {
+        throw "uid#ordinal ledger did not contain solely Demo.Data.TokenBuilder#2: $($sfDoc | ConvertTo-Json -Depth 5 -Compress)"
+    }
+
+    # 13c. Unknown and ambiguous UIDs fail clearly and NEVER expand repository-wide.
+    $badLedger = Join-Path $uidLedgerDir 'should-not-exist.json'
+    $unknownUid = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs @('--operation', 'repair', '--uid', 'Demo.Data.DoesNotExist', '--init-behavioral-ledger', $badLedger)
+    Assert-CodePresent $unknownUid.Report 'UID_SELECTOR_NOT_FOUND' 'for unknown UID'
+    if ($unknownUid.ExitCode -ne 1 -or $unknownUid.Report.summary.canClaimCompletion -or @($unknownUid.Report.scope.selectedProjects).Count -ne 0 -or (Test-Path -LiteralPath $badLedger)) {
+        throw "Unknown UID expanded scope or created a bogus ledger: $($unknownUid.Report.summary | ConvertTo-Json -Compress)"
+    }
+    $ambiguousUid = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs @('--operation', 'repair', '--uid', 'SharedResult')
+    Assert-CodePresent $ambiguousUid.Report 'UID_SELECTOR_AMBIGUOUS' 'for ambiguous short name matching two types'
+    if ($ambiguousUid.ExitCode -ne 1 -or $ambiguousUid.Report.summary.canClaimCompletion -or @($ambiguousUid.Report.scope.selectedProjects).Count -ne 0) {
+        throw "Ambiguous UID expanded scope: $($ambiguousUid.Report.summary | ConvertTo-Json -Compress)"
+    }
+    $badOrdinal = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs @('--operation', 'repair', '--uid', 'Demo.Data.TokenBuilder#99')
+    Assert-CodePresent $badOrdinal.Report 'UID_SELECTOR_NOT_FOUND' 'for out-of-range uid#ordinal'
+
+    # 13d. Eval #135 pipeline scenario: two extension-class UIDs across two namespaces create exactly 2 obligations.
+    $eval135Ledger = Join-Path $uidLedgerDir 'eval135-ledger.json'
+    $eval135Res = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs @(
+        '--operation', 'repair',
+        '--uid', 'Demo.Extensions.Authentication.ApplicationBuilderExtensions',
+        '--uid', 'Demo.Extensions.Mvc.Formatters.Xml.MvcBuilderExtensions',
+        '--init-behavioral-ledger', $eval135Ledger,
+        '--build-api-model', '--validate-samples')
+    Assert-CodeAbsent $eval135Res.Report 'SAMPLE_COMPILE_FAILED' 'in eval #135 UID-scoped scenario'
+    if ($eval135Res.Report.summary.examplesInScope -ne 2 -or $eval135Res.Report.summary.samplesCompiled -ne 2 -or $eval135Res.Report.summary.canClaimCompletion) {
+        throw "Eval #135 two-UID scenario produced wrong obligation/compile counts: $($eval135Res.Report.summary | ConvertTo-Json -Compress)"
+    }
+
+    # 13e. Explicitly selected unchanged examples stay in scope even with --changed-only,
+    #      AND modifying an authored documentation page never causes PROJECT_DIRTY_SKIPPED in non-dry-run verification!
+    $savedTokenText = [IO.File]::ReadAllText($tokenBuilderPage)
+    try {
+        Write-Utf8File $tokenBuilderPage ($savedTokenText.Replace('assembles comma-delimited records', 'builds comma-delimited records'))
+        $changedWithUid = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs ($twoUidArgs + @('--changed-only', '--behavioral-ledger', $twoUidLedger, '--validate-samples'))
+        if ($changedWithUid.Report.summary.examplesInScope -ne 3 -or $changedWithUid.Report.summary.samplesCompiled -ne 3) {
+            throw "Explicitly selected unchanged ServerTimingFilter was dropped under --changed-only: $($changedWithUid.Report.summary | ConvertTo-Json -Compress)"
+        }
+        if (@($changedWithUid.Report.warnings | Where-Object code -eq 'PROJECT_DIRTY_SKIPPED').Count -gt 0) {
+            throw 'UID-scoped verification emitted PROJECT_DIRTY_SKIPPED after doc edit.'
+        }
+
+        # Non-dry-run --project verification after doc edit must NOT skip the edited project.
+        $projAfterEdit = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs @('--project', 'Demo.Data')
+        if (@($projAfterEdit.Report.warnings | Where-Object code -eq 'PROJECT_DIRTY_SKIPPED').Count -gt 0 -or
+            @($projAfterEdit.Report.scope.selectedProjects).Count -ne 1) {
+            throw "Non-dry-run --project excluded edited project with PROJECT_DIRTY_SKIPPED: $($projAfterEdit.Report.warnings | ConvertTo-Json -Compress)"
+        }
+
+        # Dry-run --project selection MUST preserve the dirty-project safeguard!
+        $dryRunDirty = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs @('--dry-run', '--project', 'Demo.Data')
+        if (@($dryRunDirty.Report.warnings | Where-Object code -eq 'PROJECT_DIRTY_SKIPPED').Count -eq 0 -or
+            @($dryRunDirty.Report.scope.selectedProjects).Count -ne 0) {
+            throw "Dry-run --project lost PROJECT_DIRTY_SKIPPED safeguard: $($dryRunDirty.Report.warnings | ConvertTo-Json -Compress)"
+        }
+    } finally {
+        Write-Utf8File $tokenBuilderPage $savedTokenText
+    }
+
+    # 13f. Scope consistency between ledger initialization and reconciliation.
+    $mismatchOneUid = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs @('--operation', 'repair', '--uid', 'Demo.Data.TokenBuilder', '--behavioral-ledger', $twoUidLedger)
+    Assert-CodePresent $mismatchOneUid.Report 'BEHAVIORAL_LEDGER_SCOPE_MISMATCH' 'when reconciling 2-UID ledger against 1-UID scope'
+    $mismatchRepoWide = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs @('--operation', 'repair', '--behavioral-ledger', $twoUidLedger)
+    Assert-CodePresent $mismatchRepoWide.Report 'BEHAVIORAL_LEDGER_SCOPE_MISMATCH' 'when reconciling 2-UID ledger against repo-wide scope'
+
+    # 13g. Complete UID-scoped behavioral evidence passes with scoped-passed and canClaimCompletion=false (never repo-wide!).
+    $uidEvidenceLog = Join-Path $uidLedgerDir 'uid-run.log'
+    Write-Utf8File $uidEvidenceLog "Alice,30`nWidget,49.99`ndb;dur=12.5`n"
+    $completeTwoUidPath = Join-Path $uidLedgerDir 'two-uid-complete.json'
+    $completeTwoUid = Get-Content -LiteralPath $twoUidLedger -Raw | ConvertFrom-Json
+    foreach ($ex in $completeTwoUid.examples) {
+        $ex.documentedOperation = "$($ex.uid) primary operation"
+        $ex.consumerScenario = "Executes $($ex.exampleId) and verifies printed consumer output."
+        $ex.authoritativeEvidence = "src/ implementation for $($ex.uid)"
+        $ex.expectedObservation = "Emits the exact formatted consumer output for $($ex.exampleId)."
+        $ex.actualObservation = "Observed exact output line matching $($ex.exampleId) expectation."
+        $ex.observationEvidencePath = $uidEvidenceLog
+        $ex.executionCommand = 'dotnet run --file Program.cs'
+        $ex.disposition = 'verified-behavior'
+        $ex.transportStatus = @{ native = 'Verified'; docker = 'Verified' }
+    }
+    Save-LedgerJson $completeTwoUidPath $completeTwoUid
+
+    $twoUidPassed = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs ($twoUidArgs + @('--behavioral-ledger', $completeTwoUidPath) + $finalGateArgs)
+    if ($twoUidPassed.ExitCode -ne 0 -or $twoUidPassed.Report.errors.Count -ne 0) {
+        throw "Complete two-UID repair failed unexpectedly: $($twoUidPassed.Report.errors | ConvertTo-Json -Compress)"
+    }
+    $sp = $twoUidPassed.Report.summary
+    if ($sp.canClaimCompletion -or $sp.examplesInScope -ne 3 -or $sp.examplesReviewed -ne 3 -or
+        $sp.examplesBehaviorVerified -ne 3 -or $sp.examplesUnreviewed -ne 0 -or $sp.samplesCompiled -ne 3) {
+        throw "Unexpected two-UID passing summary: $($sp | ConvertTo-Json -Compress)"
+    }
+    if ($hasDocfxCli -and $sp.completionState -ne 'scoped-passed') {
+        throw "Expected scoped-passed for complete UID-scoped repair, got '$($sp.completionState)'."
+    }
+
+    # Stale claim on one selected UID blocks completion again.
+    try {
+        Write-Utf8File $tokenBuilderPage ($savedTokenText.Replace('assembles comma-delimited records', 'emits a changed claim'))
+        $uidStale = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs ($twoUidArgs + @('--behavioral-ledger', $completeTwoUidPath))
+        Assert-CodePresent $uidStale.Report 'BEHAVIORAL_EVIDENCE_STALE' 'when selected UID prose changes after review'
+        if ($uidStale.ExitCode -ne 1 -or $uidStale.Report.summary.completionState -ne 'scoped-failed') {
+            throw "Stale UID evidence must fail scoped completion: $($uidStale.Report.summary | ConvertTo-Json -Compress)"
+        }
+    } finally {
+        Write-Utf8File $tokenBuilderPage $savedTokenText
+    }
+
+    # Shared cross-reference validation remains intact under --uid scope.
+    try {
+        Write-Utf8File $tokenBuilderPage ($savedTokenText + "`nSee [Append](xref:Demo.Data.TokenBuilder.Append(System.String)).`n")
+        $xrefCheck = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs ($twoUidArgs + @('--behavioral-ledger', $completeTwoUidPath))
+        Assert-CodePresent $xrefCheck.Report 'XREF_MEMBER_LINK' 'shared cross-reference validation must stay active under --uid'
+    } finally {
+        Write-Utf8File $tokenBuilderPage $savedTokenText
+    }
+
+    # Namespace UID selection remains compatible.
+    $nsUidRes = Invoke-DocfxValidator -RepoRoot $uidRepo -ExtraArgs @('--uid', 'Demo.Extensions.Authentication', '--validate-samples')
+    if ($nsUidRes.ExitCode -ne 0 -or $nsUidRes.Report.summary.namespacePagesValidated -ne 1 -or $nsUidRes.Report.summary.samplesCompiled -ne 2) {
+        throw "Namespace UID selection failed: $($nsUidRes.Report.summary | ConvertTo-Json -Compress)"
+    }
+
+    # 13h. Run-actions --uid planning, generation, verification, manifest/sibling preservation, and invalid selector rejection.
+    $raPlanOut = (& $GeneratorPath -RepoRoot $uidRepo --run-action-plan --uid Demo.Data.TokenBuilder --uid Demo.Mvc.Filters.Diagnostics.ServerTimingFilter --json 2>$null) | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $raPlanOut.scopeMode -ne 'uid' -or $raPlanOut.summary.total -ne 3) {
+        throw "Run-actions --run-action-plan --uid did not scope to 3 examples: $($raPlanOut | ConvertTo-Json -Depth 5 -Compress)"
+    }
+
+    $null = & $GeneratorPath -RepoRoot $uidRepo --run-action-plan --uid Demo.DoesNotExist --json 2>$null
+    if ($LASTEXITCODE -ne 3) { throw "Expected exit 3 for unknown run-actions --uid; got $LASTEXITCODE" }
+    $null = & $GeneratorPath -RepoRoot $uidRepo --run-action-plan --uid SharedResult --json 2>$null
+    if ($LASTEXITCODE -ne 3) { throw "Expected exit 3 for ambiguous run-actions --uid; got $LASTEXITCODE" }
+
+    # Clean 3-example repo for run-actions --uid generation + verification + manifest/sibling preservation.
+    $raUidRepo = Join-Path $workRoot 'ra-uid-repo'
+    New-Item -ItemType Directory -Path "$raUidRepo/docs" -Force | Out-Null
+    Write-Utf8File "$raUidRepo/docfx.json" @'
+{
+  "build": {
+    "content": [{ "files": ["docs/*.md"] }],
+    "template": ["default", "modern"],
+    "dest": "_site"
+  }
+}
+'@
+    Write-Utf8File "$raUidRepo/docs/Alpha.md" @'
+---
+uid: Demo.Alpha
+example: *content
+---
+Alpha fences.
+
+```csharp
+using System;
+Console.WriteLine("alpha-1");
+```
+
+```csharp
+using System;
+Console.WriteLine("alpha-2");
+```
+'@
+    Write-Utf8File "$raUidRepo/docs/Beta.md" @'
+---
+uid: Demo.Beta
+example: *content
+---
+Beta fence.
+
+```csharp
+using System;
+Console.WriteLine("beta-1");
+```
+'@
+    $raMockEngine = Join-Path $workRoot 'ra-uid-mock-csrun.ps1'
+    Write-Utf8File $raMockEngine "param([string]`$ManifestJson)`n[Console]::WriteLine('ok')"
+
+    # Generate full repo first (3 entries in manifest).
+    $raFull = (& $GeneratorPath -RepoRoot $raUidRepo --summary-json 2>$null) | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $raFull.total -ne 3) { throw "Initial run-actions generation failed: $($raFull | ConvertTo-Json -Compress)" }
+    $betaHashBefore = Get-FileSha256 "$raUidRepo/docs/Beta.md"
+    $alphaTextBefore = [IO.File]::ReadAllText("$raUidRepo/docs/Alpha.md")
+    if (([regex]::Matches($alphaTextBefore, '<!-- docfx-run-actions:start -->')).Count -ne 2) {
+        throw 'Expected 2 run-action associations on Alpha.md after full generation.'
+    }
+
+    # Edit ONLY Alpha#1 and regenerate + verify ONLY --uid Demo.Alpha#1.
+    Write-Utf8File "$raUidRepo/docs/Alpha.md" ($alphaTextBefore.Replace('alpha-1', 'alpha-1-updated'))
+    $raScoped = (& $GeneratorPath -RepoRoot $raUidRepo --uid 'Demo.Alpha#1' --verify Native --engine-path $raMockEngine --summary-json 2>$null) | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $raScoped.scopeMode -ne 'uid' -or $raScoped.verifyScope -ne 'uid' -or
+        $raScoped.total -ne 1 -or $raScoped.verification.executed -ne 1 -or $raScoped.verified -ne 1 -or
+        (@($raScoped.selectedUids) -join ',') -ne 'Demo.Alpha#1') {
+        throw "Scoped run-actions --uid Demo.Alpha#1 summary mismatch: $($raScoped | ConvertTo-Json -Depth 5 -Compress)"
+    }
+    if ((Get-FileSha256 "$raUidRepo/docs/Beta.md") -cne $betaHashBefore) {
+        throw 'Out-of-scope Beta.md was modified during --uid Demo.Alpha#1 generation.'
+    }
+    $alphaTextAfter = [IO.File]::ReadAllText("$raUidRepo/docs/Alpha.md")
+    if (([regex]::Matches($alphaTextAfter, '<!-- docfx-run-actions:start -->')).Count -ne 2) {
+        throw 'Partial-page --uid Demo.Alpha#1 stripped sibling Demo.Alpha#2 association!'
+    }
+    $mergedManifestDoc = Get-Content -LiteralPath "$raUidRepo/run-actions.manifest.json" -Raw | ConvertFrom-Json
+    if (@($mergedManifestDoc.examples).Count -ne 3) {
+        throw "Scoped --uid generation dropped out-of-scope entries from run-actions.manifest.json (count=$(@($mergedManifestDoc.examples).Count))."
+    }
+
+    Write-Host 'UID-scoped repair, eval #135, dirty-project, and run-action UID regressions passed.'
     Write-Host 'All behavioral completion, reporting, and multi-TFM regressions passed.'
 } finally {
     if (Test-Path -LiteralPath $workRoot) {

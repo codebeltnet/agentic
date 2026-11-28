@@ -243,6 +243,16 @@ Run-Scenario 'Dry-run skips dirty candidate, falls through to clean, and reports
     if (-not $grp.selectedProject) { throw 'grp group should select the clean P2' }
     if ($grp.selectedProject -notlike '*P2*') { throw "grp selected dirty project: $($grp.selectedProject)" }
     Assert-Diagnostic -Report $r -Code 'DRY_RUN_GROUP_UNSELECTED' -Where 'warnings'
+
+    # Explicit --dry-run --project P1 must still protect pre-existing dirty changes via PROJECT_DIRTY_SKIPPED.
+    $dryExplicit = Invoke-Validator $ws @('--dry-run', '--project', 'P1')
+    Assert-Diagnostic -Report $dryExplicit -Code 'PROJECT_DIRTY_SKIPPED' -Where 'warnings'
+    if (@($dryExplicit.scope.selectedProjects).Count -ne 0) { throw 'dry-run --project should skip dirty P1' }
+
+    # Non-dry-run --project P1 verification must NOT skip P1 even when files are modified.
+    $nonDry = Invoke-Validator $ws @('--project', 'P1')
+    Assert-NoWarning -Report $nonDry -Code 'PROJECT_DIRTY_SKIPPED'
+    if (@($nonDry.scope.selectedProjects).Count -ne 1) { throw 'non-dry-run --project must select P1 for verification' }
 }
 
 # ----------------------------------------------------------------------
