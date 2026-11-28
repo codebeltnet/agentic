@@ -68,17 +68,20 @@ internal static class AgentsScript
 
         Context pressure is not a completion condition. If the session feels constrained while work remains, continue with a smaller deterministic batch, regenerate deterministic queue state such as `--assessment-queue`, `--project-manifest`, or the active dry-run manifest/review pair, or report a true tooling failure with the exact command, exit code, and output. When naming a queue-state regeneration command, resolve it to a concrete temp/session path instead of leaving `<temp-path>` as a placeholder. Do not stop with phrases like "given context constraints", "best done in a follow-up", "remaining work requires authoring", "this is a massive task", or "I will provide a focused summary". A context-sized handoff while work remains is `FAIL_CONTEXT_HANDOFF_WITH_REMAINING_WORK`; the remediation is to continue with a smaller deterministic batch.
 
-        Before completing documentation work, run the relevant verification commands, normally:
+        Before completing documentation work, run the relevant verification commands for the active operation and scope (using repeatable `--uid <uid-or-uid#ordinal>` for specific types/members/examples, repeatable `--project <hint>` for projects, or no scope flags for repository-wide runs):
 
         ```bash
         dotnet build
         dotnet test
-        dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root . --build-api-model --validate-samples --verify-docfx-build
+        # Ordinary non-repair validation only (never an alternative completion path for audit, repair, or repair-csrun):
+        dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root . --operation validate --build-api-model --validate-samples --verify-docfx-build --json
+        # Audit, repair, and repair-csrun (initialize --init-behavioral-ledger before edits, then reconcile with the exact same operation and scope):
+        dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root . --operation <audit|repair|repair-csrun> [<scope>] --behavioral-ledger <temp-ledger> --build-api-model --validate-samples --verify-docfx-build --json
         ```
 
         Codebelt repositories are normally strong-name signed with a `.snk` file in the repository root on the main author's codespace. Preserve and copy that root `.snk` file when building a temporary copy. If the repository or temp copy has no root `.snk`, run build and test verification with `-p:SkipSignAssembly=true`, for example `dotnet build -p:SkipSignAssembly=true` and `dotnet test -p:SkipSignAssembly=true`.
 
-        The final DocFX verification must run outside the working tree when possible. The `--verify-docfx-build` option copies the repository to a temp workspace, runs DocFX against the resolved `docfx.json` there, and removes the temp workspace afterward so generated API YAML, manifest files, and site output do not flood git status. Do not call the work complete until the final JSON reports `summary.fullVerificationRan: true`, `summary.canClaimCompletion: true`, `summary.remainingWorkItems: 0`, an empty `summary.remainingGates`, an empty `summary.remainingDiagnosticsByCode`, `summary.newlyIntroducedSkipMarkers: 0`, and `summary.interimArtifacts: 0`.
+        The final DocFX verification must run outside the working tree when possible. The `--verify-docfx-build` option copies the repository to a temp workspace, runs DocFX against the resolved `docfx.json` there, and removes the temp workspace afterward so generated API YAML, manifest files, and site output do not flood git status. Do not call repository-wide work complete until the final JSON reports `summary.fullVerificationRan: true`, `summary.canClaimCompletion: true`, `summary.remainingWorkItems: 0`, an empty `summary.remainingGates`, an empty `summary.remainingDiagnosticsByCode`, `summary.newlyIntroducedSkipMarkers: 0`, `summary.interimArtifacts: 0`, and zero outstanding behavioral obligations when `summary.behaviorReviewRequired` is true. A scoped (`--uid`, `--project`, `--dry-run`) run closes at `scoped-passed` / `dry-run-passed` with `summary.canClaimCompletion: false` and never implies repository-wide completion.
 
         If a command cannot be run, report the exact limitation or failure instead of claiming the documentation was verified.
         <!-- dotnet-docfx-digest:end -->
